@@ -1,12 +1,27 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@intexura-error-hub/domain": new URL(
+        "./packages/domain/src/index.ts",
+        import.meta.url,
+      ).pathname,
+      "@intexura-error-hub/protocol": new URL(
+        "./packages/protocol/src/index.ts",
+        import.meta.url,
+      ).pathname,
+    },
+  },
   test: {
     projects: [
       {
         test: {
           name: "@intexura-error-hub/server",
-          include: ["apps/server/test/**/*.test.ts"],
+          include: [
+            "apps/server/src/**/*.test.ts",
+            "apps/server/test/**/*.test.ts",
+          ],
         },
       },
       {

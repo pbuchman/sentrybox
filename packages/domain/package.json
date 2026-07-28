@@ -9,6 +9,12 @@
   "dependencies": {
     "@intexura-error-hub/protocol": "workspace:*"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
   "devDependencies": {
     "@types/node": "22.20.1"
   },

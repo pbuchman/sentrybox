@@ -14,11 +14,16 @@
     "pino": "10.3.1",
     "zod": "4.4.3"
   },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.20.1"
+  },
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build apps/server/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint apps/server",
     "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/server",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir apps/server/test/integration",
-    "build": "pnpm --dir ../.. exec tsc --build apps/server/tsconfig.json"
+    "build": "pnpm --dir ../.. exec tsc --build apps/server/tsconfig.json && pnpm run copy:storage-assets",
+    "copy:storage-assets": "mkdir -p dist/src/storage/migrations && cp src/storage/migrations/*.sql dist/src/storage/migrations/"
   }
 }
