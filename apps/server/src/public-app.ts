@@ -12,12 +12,18 @@ import { registerIngestRoute } from "./ingest/route.js";
 import { installSentryErrorHandler } from "./http/sentry-errors.js";
 
 export interface PublicIngestLimits {
+  readonly globalRateLimit: number;
   readonly sourceRateLimit: number;
+  readonly maxSourceKeys: number;
   readonly projectRateLimit: number;
   readonly rateWindowMs: number;
   readonly retryAfterSeconds: number;
   readonly maxConcurrentParses: number;
   readonly requestTimeoutMs: number;
+}
+
+export interface PublicOperationalMetric {
+  readonly type: "shadow_enqueue_failure";
 }
 
 export interface BuildOutboxInput {
@@ -32,12 +38,18 @@ export interface PublicAppOptions {
   readonly buildOutbox: (input: BuildOutboxInput) => OutboxDraft;
   readonly now?: () => Date;
   readonly isStorageReady?: () => boolean;
+  readonly onOperationalMetric?: (metric: PublicOperationalMetric) => void;
   readonly limits?: Partial<PublicIngestLimits>;
 }
 
+export const MAX_COMPRESSED_ENVELOPE_BYTES =
+  MAX_DECOMPRESSED_ENVELOPE_BYTES + 65_536;
+
 export function createPublicApp(options: PublicAppOptions): FastifyInstance {
   const limits: PublicIngestLimits = {
+    globalRateLimit: options.limits?.globalRateLimit ?? 5_000,
     sourceRateLimit: options.limits?.sourceRateLimit ?? 120,
+    maxSourceKeys: options.limits?.maxSourceKeys ?? 10_000,
     projectRateLimit: options.limits?.projectRateLimit ?? 1_000,
     rateWindowMs: options.limits?.rateWindowMs ?? 60_000,
     retryAfterSeconds: options.limits?.retryAfterSeconds ?? 60,
@@ -46,7 +58,7 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
   };
   const app = Fastify({
     logger: false,
-    bodyLimit: MAX_DECOMPRESSED_ENVELOPE_BYTES,
+    bodyLimit: MAX_COMPRESSED_ENVELOPE_BYTES,
     disableRequestLogging: true,
     requestTimeout: limits.requestTimeoutMs,
     connectionTimeout: limits.requestTimeoutMs,
@@ -57,13 +69,13 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
     "*",
     {
       parseAs: "buffer",
-      bodyLimit: MAX_DECOMPRESSED_ENVELOPE_BYTES,
+      bodyLimit: MAX_COMPRESSED_ENVELOPE_BYTES,
     },
     (_request, body, done) => {
       done(null, body);
     },
   );
-  installSentryErrorHandler(app);
+  installSentryErrorHandler(app, limits.retryAfterSeconds);
   registerIngestRoute(app, options, limits);
   app.get("/health/live", async () => ({ status: "ok" }));
   return app;

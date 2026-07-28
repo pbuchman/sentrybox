@@ -36,18 +36,65 @@ export function registerIngestRoute(
 ): void {
   const projects = new ProjectRepository(options.database);
   const issues = new IssueRepository(options.database);
+  const globalLimiter = new FixedWindowRateLimiter(
+    limits.globalRateLimit,
+    limits.rateWindowMs,
+    { maxKeys: 1 },
+  );
   const sourceLimiter = new FixedWindowRateLimiter(
     limits.sourceRateLimit,
     limits.rateWindowMs,
+    { maxKeys: limits.maxSourceKeys },
   );
   const projectLimiter = new FixedWindowRateLimiter(
     limits.projectRateLimit,
     limits.rateWindowMs,
   );
   const concurrency = new ConcurrencyGate(limits.maxConcurrentParses);
+  const requestTimes = new WeakMap<FastifyRequest, Date>();
+  const releases = new WeakMap<FastifyRequest, () => void>();
+  const earlyAdmission = async (request: FastifyRequest): Promise<void> => {
+    const now = (options.now ?? (() => new Date()))();
+    const globalDecision = globalLimiter.consume("ingest", now.getTime());
+    if (!globalDecision.allowed) {
+      throw rateLimitError(globalDecision, limits);
+    }
+    const sourceDecision = sourceLimiter.consume(request.ip, now.getTime());
+    if (!sourceDecision.allowed) {
+      throw rateLimitError(sourceDecision, limits);
+    }
+    const release = concurrency.tryAcquire();
+    if (release === null) {
+      throw new SentryHttpError(
+        429,
+        "Concurrent ingest limit exceeded.",
+        limits.retryAfterSeconds,
+      );
+    }
+    requestTimes.set(request, now);
+    releases.set(request, release);
+  };
+  const releaseRequest = (request: FastifyRequest): void => {
+    releases.get(request)?.();
+    releases.delete(request);
+    requestTimes.delete(request);
+  };
+  const routeHooks = {
+    onRequest: earlyAdmission,
+    onError: async (request: FastifyRequest): Promise<void> => {
+      releaseRequest(request);
+    },
+    onRequestAbort: async (request: FastifyRequest): Promise<void> => {
+      releaseRequest(request);
+    },
+    onResponse: async (request: FastifyRequest): Promise<void> => {
+      releaseRequest(request);
+    },
+  };
 
   app.options<IngestRequest>(
     "/api/:projectId/envelope/",
+    routeHooks,
     async (request, reply) => {
       const ingestKey = authenticateProjectSafely(request, projects, limits);
       if (ingestKey === null) {
@@ -73,23 +120,13 @@ export function registerIngestRoute(
 
   app.post<IngestRequest>(
     "/api/:projectId/envelope/",
+    routeHooks,
     async (request, reply) => {
-      const now = (options.now ?? (() => new Date()))();
-      const sourceDecision = sourceLimiter.consume(request.ip, now.getTime());
-      if (!sourceDecision.allowed) {
-        return sendSentryError(
-          reply,
-          new SentryHttpError(
-            429,
-            "Rate limit exceeded.",
-            Math.max(
-              sourceDecision.retryAfterSeconds,
-              limits.retryAfterSeconds,
-            ),
-          ),
-        );
+      const now = requestTimes.get(request);
+      if (now === undefined) {
+        throw new Error("ingest admission timestamp is unavailable");
       }
-      if (options.isStorageReady?.() === false) {
+      if (!isStorageReady(options)) {
         return sendSentryError(
           reply,
           new SentryHttpError(
@@ -107,23 +144,6 @@ export function registerIngestRoute(
           new SentryHttpError(400, "Invalid project credentials."),
         );
       }
-      const projectDecision = projectLimiter.consume(
-        String(ingestKey.projectId),
-        now.getTime(),
-      );
-      if (!projectDecision.allowed) {
-        return sendSentryError(
-          reply,
-          new SentryHttpError(
-            429,
-            "Rate limit exceeded.",
-            Math.max(
-              projectDecision.retryAfterSeconds,
-              limits.retryAfterSeconds,
-            ),
-          ),
-        );
-      }
       if (!applyCors(request, reply, ingestKey)) {
         return sendSentryError(
           reply,
@@ -137,61 +157,57 @@ export function registerIngestRoute(
         );
       }
 
-      const release = concurrency.tryAcquire();
-      if (release === null) {
+      const rawEnvelope = Buffer.from(request.body);
+      const decompressed = await decompressEnvelope(
+        Readable.from([rawEnvelope]),
+        headerValue(request.headers["content-encoding"]),
+      );
+      const envelope = parseEnvelope(decompressed);
+      const envelopeEventId = canonicalEventIdOrNull(envelope.eventId);
+      const prepared = prepareEvents(
+        envelope.items,
+        envelopeEventId,
+        ingestKey,
+        now.toISOString(),
+      );
+      const responseEventId = envelopeEventId ?? prepared[0]?.eventId ?? "";
+      const projectDecision = projectLimiter.consume(
+        String(ingestKey.projectId),
+        now.getTime(),
+      );
+      if (!projectDecision.allowed) {
+        return sendSentryError(reply, rateLimitError(projectDecision, limits));
+      }
+
+      try {
+        for (const preparedEvent of prepared) {
+          if (preparedEvent.event === null) continue;
+          const event = preparedEvent.event;
+          issues.recordOccurrence({
+            projectId: ingestKey.projectId,
+            event,
+            fingerprint: fingerprintEvent(preparedEvent.input),
+            buildOutbox: (transition) =>
+              options.buildOutbox({ ingestKey, event, transition }),
+          });
+        }
+      } catch {
         return sendSentryError(
           reply,
           new SentryHttpError(
-            429,
-            "Concurrent ingest limit exceeded.",
+            503,
+            "Ingest storage is temporarily unavailable.",
             limits.retryAfterSeconds,
           ),
         );
       }
 
-      const rawEnvelope = Buffer.from(request.body);
-      try {
-        const decompressed = await decompressEnvelope(
-          Readable.from([rawEnvelope]),
-          headerValue(request.headers["content-encoding"]),
-        );
-        const envelope = parseEnvelope(decompressed);
-        const prepared = prepareEvents(
-          envelope.items,
-          envelope.eventId,
-          ingestKey,
-          now.toISOString(),
-        );
-        const responseEventId = envelope.eventId ?? prepared[0]?.eventId ?? "";
-
+      const eventEnvironment = prepared[0]?.environment;
+      if (
+        eventEnvironment !== undefined &&
+        ingestKey.forwardingMode === "shadow"
+      ) {
         try {
-          for (const preparedEvent of prepared) {
-            if (preparedEvent.event === null) continue;
-            const event = preparedEvent.event;
-            issues.recordOccurrence({
-              projectId: ingestKey.projectId,
-              event,
-              fingerprint: fingerprintEvent(preparedEvent.input),
-              buildOutbox: (transition) =>
-                options.buildOutbox({ ingestKey, event, transition }),
-            });
-          }
-        } catch {
-          return sendSentryError(
-            reply,
-            new SentryHttpError(
-              503,
-              "Ingest storage is temporarily unavailable.",
-              limits.retryAfterSeconds,
-            ),
-          );
-        }
-
-        const eventEnvironment = prepared[0]?.environment;
-        if (
-          eventEnvironment !== undefined &&
-          ingestKey.forwardingMode === "shadow"
-        ) {
           options.shadowForwarder.enqueue({
             ingestKey,
             eventEnvironment,
@@ -199,13 +215,43 @@ export function registerIngestRoute(
             contentEncoding: headerValue(request.headers["content-encoding"]),
             sentryClient: requestSentryClient(request),
           });
+        } catch {
+          reportOperationalMetric(options, { type: "shadow_enqueue_failure" });
         }
-        return reply.code(200).send({ id: responseEventId });
-      } finally {
-        release();
       }
+      return reply.code(200).send({ id: responseEventId });
     },
   );
+}
+
+function rateLimitError(
+  decision: { readonly retryAfterSeconds: number },
+  limits: PublicIngestLimits,
+): SentryHttpError {
+  return new SentryHttpError(
+    429,
+    "Rate limit exceeded.",
+    Math.max(decision.retryAfterSeconds, limits.retryAfterSeconds),
+  );
+}
+
+function isStorageReady(options: PublicAppOptions): boolean {
+  try {
+    return options.isStorageReady?.() !== false;
+  } catch {
+    return false;
+  }
+}
+
+function reportOperationalMetric(
+  options: PublicAppOptions,
+  metric: { readonly type: "shadow_enqueue_failure" },
+): void {
+  try {
+    options.onOperationalMetric?.(metric);
+  } catch {
+    // Operational reporting must never change the SDK response after commit.
+  }
 }
 
 function authenticateProjectSafely(
@@ -245,9 +291,7 @@ function prepareEvents(
     if (item.type !== "event") continue;
     const input = parseEventPayload(item.payload);
     const payloadEventId =
-      typeof input.event_id === "string" && input.event_id.length > 0
-        ? input.event_id
-        : null;
+      input.event_id === undefined ? null : canonicalEventId(input.event_id);
     if (
       envelopeEventId !== null &&
       payloadEventId !== null &&
@@ -290,6 +334,17 @@ function prepareEvents(
     });
   }
   return prepared;
+}
+
+function canonicalEventIdOrNull(eventId: string | null): string | null {
+  return eventId === null ? null : canonicalEventId(eventId);
+}
+
+function canonicalEventId(eventId: unknown): string {
+  if (typeof eventId !== "string" || !/^[a-f0-9]{32}$/iu.test(eventId)) {
+    throw new SentryHttpError(400, "Event ID is invalid.");
+  }
+  return eventId.toLowerCase();
 }
 
 function isRejectedBinaryItem(item: {

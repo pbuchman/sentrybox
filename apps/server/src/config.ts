@@ -1,7 +1,9 @@
 export interface PublicServerConfig {
   readonly envFile: string;
   readonly requestTimeoutMs: number;
+  readonly globalRateLimit: number;
   readonly sourceRateLimit: number;
+  readonly maxSourceKeys: number;
   readonly projectRateLimit: number;
   readonly rateWindowMs: number;
   readonly retryAfterSeconds: number;
@@ -14,7 +16,9 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 const DEFAULTS = {
   requestTimeoutMs: 10_000,
+  globalRateLimit: 5_000,
   sourceRateLimit: 120,
+  maxSourceKeys: 10_000,
   projectRateLimit: 1_000,
   rateWindowMs: 60_000,
   retryAfterSeconds: 60,
@@ -34,10 +38,20 @@ export function loadPublicServerConfig(
       "ERROR_HUB_INGEST_REQUEST_TIMEOUT_MS",
       DEFAULTS.requestTimeoutMs,
     ),
+    globalRateLimit: positiveInteger(
+      environment,
+      "ERROR_HUB_INGEST_GLOBAL_RATE_LIMIT",
+      DEFAULTS.globalRateLimit,
+    ),
     sourceRateLimit: positiveInteger(
       environment,
       "ERROR_HUB_INGEST_SOURCE_RATE_LIMIT",
       DEFAULTS.sourceRateLimit,
+    ),
+    maxSourceKeys: positiveInteger(
+      environment,
+      "ERROR_HUB_INGEST_MAX_SOURCE_KEYS",
+      DEFAULTS.maxSourceKeys,
     ),
     projectRateLimit: positiveInteger(
       environment,

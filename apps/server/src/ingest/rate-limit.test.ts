@@ -24,6 +24,21 @@ describe("ingest abuse guards", () => {
     });
   });
 
+  it("keeps source-key cardinality bounded and performs bounded expiry cleanup", () => {
+    const limiter = new FixedWindowRateLimiter(1, 60_000, {
+      maxKeys: 2,
+      cleanupBudget: 1,
+    });
+
+    expect(limiter.consume("source:a", 1_000).allowed).toBe(true);
+    expect(limiter.consume("source:b", 2_000).allowed).toBe(true);
+    expect(limiter.consume("source:c", 3_000).allowed).toBe(false);
+    expect(limiter.cardinality).toBe(2);
+
+    expect(limiter.consume("source:c", 61_000).allowed).toBe(true);
+    expect(limiter.cardinality).toBe(2);
+  });
+
   it("releases a concurrency slot exactly once", () => {
     const gate = new ConcurrencyGate(1);
     const release = gate.tryAcquire();

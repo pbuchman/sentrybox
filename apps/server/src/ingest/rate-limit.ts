@@ -8,15 +8,31 @@ interface WindowCounter {
   expiresAt: number;
 }
 
+interface FixedWindowRateLimiterOptions {
+  readonly maxKeys?: number;
+  readonly cleanupBudget?: number;
+}
+
 export class FixedWindowRateLimiter {
   readonly #counters = new Map<string, WindowCounter>();
+  readonly #maxKeys: number;
+  readonly #cleanupBudget: number;
 
   public constructor(
     private readonly limit: number,
     private readonly windowMs: number,
+    options: FixedWindowRateLimiterOptions = {},
   ) {
     assertPositiveInteger(limit, "rate limit");
     assertPositiveInteger(windowMs, "rate window");
+    this.#maxKeys = options.maxKeys ?? 10_000;
+    this.#cleanupBudget = options.cleanupBudget ?? 16;
+    assertPositiveInteger(this.#maxKeys, "maximum rate-limit keys");
+    assertPositiveInteger(this.#cleanupBudget, "rate-limit cleanup budget");
+  }
+
+  public get cardinality(): number {
+    return this.#counters.size;
   }
 
   public consume(key: string, now: number): RateLimitDecision {
@@ -29,6 +45,12 @@ export class FixedWindowRateLimiter {
     this.removeExpired(now);
     const current = this.#counters.get(key);
     if (current === undefined) {
+      if (this.#counters.size >= this.#maxKeys) {
+        return {
+          allowed: false,
+          retryAfterSeconds: Math.ceil(this.windowMs / 1_000),
+        };
+      }
       this.#counters.set(key, { count: 1, expiresAt: now + this.windowMs });
       return {
         allowed: true,
@@ -47,10 +69,12 @@ export class FixedWindowRateLimiter {
   }
 
   private removeExpired(now: number): void {
+    let inspected = 0;
     for (const [key, counter] of this.#counters) {
-      if (counter.expiresAt <= now) {
-        this.#counters.delete(key);
-      }
+      if (inspected >= this.#cleanupBudget) break;
+      inspected += 1;
+      if (counter.expiresAt > now) break;
+      this.#counters.delete(key);
     }
   }
 }

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,6 +24,7 @@ const NODE_FIXTURE = readFileSync(
 );
 const FIXTURE_EVENT_ID = "11111111111111111111111111111111";
 const PUBLIC_KEY = "fixture-public-key";
+const PROD_KEY = "prod-public-key";
 const OTHER_KEY = "other-public-key";
 const RECEIVED_AT = "2026-07-28T12:00:00.000Z";
 const ALLOWED_ORIGIN = "https://app.intexuraos.cloud";
@@ -434,6 +436,65 @@ describe("public Sentry envelope ingest", () => {
     expect(count(fixture.database, "events")).toBe(0);
   });
 
+  it.each([
+    ["empty envelope ID", "", eventId(82)],
+    ["empty payload ID", eventId(82), ""],
+    ["short envelope ID", "abc", "abc"],
+    ["non-hex payload ID", "g".repeat(32), "g".repeat(32)],
+    ["oversized envelope ID", "a".repeat(33), "a".repeat(33)],
+    ["mismatched valid IDs", eventId(82), eventId(83)],
+  ])(
+    "rejects %s before every side effect",
+    async (_name, envelopeId, payloadId) => {
+      const fixture = createFixture({
+        forwardingMode: "shadow",
+        forwardingSecretRef: "LEGACY_FIXTURE_DSN",
+      });
+      const response = await postEnvelope(
+        fixture.app,
+        envelopeWithItems(envelopeId, [
+          {
+            type: "event",
+            payload: {
+              event_id: payloadId,
+              environment: "fixture",
+              level: "error",
+              message: "invalid event id",
+            },
+          },
+        ]),
+      );
+
+      expectSentryError(response, 400);
+      expect(count(fixture.database, "events")).toBe(0);
+      expect(count(fixture.database, "webhook_outbox")).toBe(0);
+      expect(fixture.forwarded).toEqual([]);
+    },
+  );
+
+  it("canonicalizes valid uppercase event IDs before equality and persistence", async () => {
+    const fixture = createFixture();
+    const lowercase = "abcdef0123456789abcdef0123456789";
+    const response = await postEnvelope(
+      fixture.app,
+      envelopeWithItems(lowercase.toUpperCase(), [
+        {
+          type: "event",
+          payload: {
+            event_id: lowercase,
+            environment: "fixture",
+            level: "error",
+            message: "canonical id",
+          },
+        },
+      ]),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: lowercase });
+    expect(fixture.events.getByProjectAndEventId(1, lowercase)).not.toBeNull();
+  });
+
   it("returns Sentry 413 for identity and gzip bodies above the decompressed limit", async () => {
     const fixture = createFixture();
     const identity = await postEnvelope(
@@ -449,6 +510,46 @@ describe("public Sentry envelope ingest", () => {
     expectSentryError(identity, 413);
     expectSentryError(gzip, 413);
     expect(count(fixture.database, "events")).toBe(0);
+  });
+
+  it("allows bounded gzip framing overhead while retaining the exact decompressed cap", async () => {
+    const itemHeader = Buffer.from(
+      `${JSON.stringify({ type: "unknown_item", length: 1_048_480 })}\n`,
+    );
+    const envelope = Buffer.concat([
+      Buffer.from("{}\n"),
+      itemHeader,
+      randomBytes(1_048_480),
+    ]);
+    const compressed = gzipSync(envelope, { level: 0 });
+    expect(envelope.byteLength).toBeLessThanOrEqual(
+      MAX_DECOMPRESSED_ENVELOPE_BYTES,
+    );
+    expect(compressed.byteLength).toBeGreaterThan(
+      MAX_DECOMPRESSED_ENVELOPE_BYTES,
+    );
+
+    const fixture = createFixture();
+    const response = await postEnvelope(fixture.app, compressed, {
+      "content-encoding": "gzip",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: "" });
+  });
+
+  it("never reflects an unsupported Content-Encoding value", async () => {
+    const supplied = "attacker-controlled-encoding-with-private-data";
+    const fixture = createFixture();
+    const response = await postEnvelope(fixture.app, NODE_FIXTURE, {
+      "content-encoding": supplied,
+    });
+
+    expectSentryError(response, 400);
+    expect(response.headers["x-sentry-error"]).toBe(
+      "Unsupported Content-Encoding.",
+    );
+    expect(response.body).not.toContain(supplied);
   });
 
   it("returns 429 with Retry-After when either source or project budget is exhausted", async () => {
@@ -521,6 +622,133 @@ describe("public Sentry envelope ingest", () => {
     );
   });
 
+  it.each([
+    {
+      name: "wrong environment",
+      invalidKey: PUBLIC_KEY,
+      invalidOrigin: undefined,
+      invalidBody: eventEnvelope({
+        event_id: eventId(84),
+        environment: "prod",
+        level: "error",
+        message: "wrong environment",
+      }),
+      validKey: PROD_KEY,
+      validEnvironment: "prod",
+    },
+    {
+      name: "disallowed origin",
+      invalidKey: PROD_KEY,
+      invalidOrigin: "https://attacker.example",
+      invalidBody: eventEnvelope({
+        event_id: eventId(85),
+        environment: "prod",
+        level: "error",
+        message: "origin",
+      }),
+      validKey: PUBLIC_KEY,
+      validEnvironment: "fixture",
+    },
+    {
+      name: "malformed envelope",
+      invalidKey: PUBLIC_KEY,
+      invalidOrigin: undefined,
+      invalidBody: Buffer.from("{malformed"),
+      validKey: PROD_KEY,
+      validEnvironment: "prod",
+    },
+    {
+      name: "binary envelope item",
+      invalidKey: PROD_KEY,
+      invalidOrigin: undefined,
+      invalidBody: binaryEnvelope(eventId(86), "prod"),
+      validKey: PUBLIC_KEY,
+      validEnvironment: "fixture",
+    },
+  ])(
+    "does not charge the shared project budget for $name",
+    async ({
+      invalidKey,
+      invalidOrigin,
+      invalidBody,
+      validKey,
+      validEnvironment,
+    }) => {
+      const fixture = createFixture({
+        limits: {
+          globalRateLimit: 20,
+          sourceRateLimit: 20,
+          projectRateLimit: 1,
+        },
+      });
+      const rejected = await postEnvelopeWithKey(
+        fixture.app,
+        invalidKey,
+        invalidBody,
+        invalidOrigin === undefined ? {} : { origin: invalidOrigin },
+      );
+      expectSentryError(rejected, 400);
+
+      const acceptedId = eventId(validEnvironment === "prod" ? 87 : 88);
+      const accepted = await postEnvelopeWithKey(
+        fixture.app,
+        validKey,
+        eventEnvelope({
+          event_id: acceptedId,
+          environment: validEnvironment,
+          level: "error",
+          message: "valid after rejected request",
+        }),
+      );
+      expect(accepted.statusCode).toBe(200);
+      expect(
+        fixture.events.getByProjectAndEventId(1, acceptedId),
+      ).not.toBeNull();
+    },
+  );
+
+  it("bounds OPTIONS and rejects a limited source before parsing an oversized body", async () => {
+    const fixture = createFixture({
+      limits: { globalRateLimit: 10, sourceRateLimit: 1, projectRateLimit: 10 },
+    });
+    const url = `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`;
+    const preflight = await fixture.app.inject({ method: "OPTIONS", url });
+    expect(preflight.statusCode).toBe(204);
+
+    const rejectedPreflight = await fixture.app.inject({
+      method: "OPTIONS",
+      url,
+    });
+    expectSentryError(rejectedPreflight, 429);
+
+    const oversized = await fixture.app.inject({
+      method: "POST",
+      url,
+      payload: Buffer.alloc(MAX_DECOMPRESSED_ENVELOPE_BYTES + 100_000),
+    });
+    expectSentryError(oversized, 429);
+  });
+
+  it("applies the global admission budget across distinct proxy sources", async () => {
+    const fixture = createFixture({
+      limits: { globalRateLimit: 1, sourceRateLimit: 10, projectRateLimit: 10 },
+    });
+    const url = `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`;
+    const first = await fixture.app.inject({
+      method: "OPTIONS",
+      url,
+      headers: { "x-forwarded-for": "198.51.100.10" },
+    });
+    const second = await fixture.app.inject({
+      method: "OPTIONS",
+      url,
+      headers: { "x-forwarded-for": "198.51.100.11" },
+    });
+
+    expect(first.statusCode).toBe(204);
+    expectSentryError(second, 429);
+  });
+
   it("keeps source budgets independent behind the trusted loopback proxy", async () => {
     const fixture = createFixture({
       limits: { sourceRateLimit: 1, projectRateLimit: 10 },
@@ -573,6 +801,62 @@ describe("public Sentry envelope ingest", () => {
     expect(fixture.forwarded).toEqual([]);
   });
 
+  it("maps a throwing storage-readiness probe to a bounded retryable 503", async () => {
+    const fixture = createFixture({
+      isStorageReady() {
+        throw new Error("private readiness failure");
+      },
+    });
+
+    const response = await postEnvelope(fixture.app, NODE_FIXTURE);
+
+    expectSentryError(response, 503);
+    expect(response.headers["retry-after"]).toBe("60");
+    expect(response.body).not.toContain("private readiness failure");
+  });
+
+  it("maps unexpected internal failures to a bounded retryable 500", async () => {
+    const fixture = createFixture({
+      now() {
+        throw new Error("private clock failure");
+      },
+    });
+
+    const response = await postEnvelope(fixture.app, NODE_FIXTURE);
+
+    expectSentryError(response, 500);
+    expect(response.headers["retry-after"]).toBe("60");
+    expect(response.headers["x-sentry-error"]).toBe("Internal ingest failure.");
+    expect(response.body).not.toContain("private clock failure");
+  });
+
+  it("releases early concurrency admission after an unexpected handler error", async () => {
+    let requestNumber = 0;
+    const fixture = createFixture({
+      limits: {
+        globalRateLimit: 10,
+        sourceRateLimit: 10,
+        projectRateLimit: 10,
+        maxConcurrentParses: 1,
+      },
+      now() {
+        requestNumber += 1;
+        if (requestNumber > 1) return new Date(RECEIVED_AT);
+        const invalidDate = new Date(RECEIVED_AT);
+        invalidDate.toISOString = () => {
+          throw new Error("private timestamp failure");
+        };
+        return invalidDate;
+      },
+    });
+
+    const failed = await postEnvelope(fixture.app, NODE_FIXTURE);
+    const accepted = await postEnvelope(fixture.app, NODE_FIXTURE);
+
+    expectSentryError(failed, 500);
+    expect(accepted.statusCode).toBe(200);
+  });
+
   it("returns a bounded 503 when project credential storage cannot be read", async () => {
     const fixture = createFixture();
     fixture.database.close();
@@ -606,6 +890,24 @@ describe("public Sentry envelope ingest", () => {
       fixture.events.getByProjectAndEventId(1, FIXTURE_EVENT_ID),
     ).not.toBeNull();
   });
+
+  it("keeps the SDK response successful when shadow enqueue throws after commit", async () => {
+    const fixture = createFixture({
+      forwardingMode: "shadow",
+      forwardingSecretRef: "LEGACY_FIXTURE_DSN",
+      shadowThrows: true,
+    });
+
+    const response = await postEnvelope(fixture.app, NODE_FIXTURE);
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      fixture.events.getByProjectAndEventId(1, FIXTURE_EVENT_ID),
+    ).not.toBeNull();
+    expect(fixture.operationalMetrics).toEqual([
+      { type: "shadow_enqueue_failure" },
+    ]);
+  });
 });
 
 interface FixtureOptions {
@@ -613,7 +915,9 @@ interface FixtureOptions {
   readonly forwardingMode?: "disabled" | "shadow";
   readonly forwardingSecretRef?: string | null;
   readonly shadowResult?: ReturnType<ShadowForwarder["enqueue"]>;
+  readonly shadowThrows?: boolean;
   readonly isStorageReady?: () => boolean;
+  readonly now?: () => Date;
   readonly limits?: PublicAppOptions["limits"];
 }
 
@@ -623,6 +927,7 @@ function createFixture(options: FixtureOptions = {}): {
   readonly events: EventRepository;
   readonly issues: IssueRepository;
   readonly forwarded: ShadowForwardRequest[];
+  readonly operationalMetrics: { readonly type: string }[];
 } {
   const database = openDatabase(":memory:");
   openDatabases.push(database);
@@ -655,6 +960,18 @@ function createFixture(options: FixtureOptions = {}): {
     enabledAt: null,
   });
   projects.setIngestKey({
+    projectId: 1,
+    environment: "prod",
+    publicKey: PROD_KEY,
+    allowedOrigins: [ALLOWED_ORIGIN],
+    forwardingMode: "disabled",
+    forwardingSecretRef: null,
+    webhookMode: "disabled",
+    webhookTargetUrl: null,
+    webhookSecretRef: null,
+    enabledAt: null,
+  });
+  projects.setIngestKey({
     projectId: 2,
     environment: "fixture",
     publicKey: OTHER_KEY,
@@ -671,9 +988,13 @@ function createFixture(options: FixtureOptions = {}): {
   const shadowForwarder: ShadowForwarder = {
     enqueue(request) {
       forwarded.push(request);
+      if (options.shadowThrows === true) {
+        throw new Error("private shadow queue failure");
+      }
       return options.shadowResult ?? "disabled";
     },
   };
+  const operationalMetrics: { readonly type: string }[] = [];
   const app = createPublicApp({
     database,
     shadowForwarder,
@@ -688,7 +1009,10 @@ function createFixture(options: FixtureOptions = {}): {
         body: Buffer.from('{"action":"triggered"}'),
       };
     },
-    now: () => new Date(RECEIVED_AT),
+    now: options.now ?? (() => new Date(RECEIVED_AT)),
+    onOperationalMetric(metric) {
+      operationalMetrics.push(metric);
+    },
     ...(options.isStorageReady === undefined
       ? {}
       : { isStorageReady: options.isStorageReady }),
@@ -702,7 +1026,22 @@ function createFixture(options: FixtureOptions = {}): {
     events: new EventRepository(database),
     issues: new IssueRepository(database),
     forwarded,
+    operationalMetrics,
   };
+}
+
+async function postEnvelopeWithKey(
+  app: FastifyInstance,
+  publicKey: string,
+  payload: Buffer,
+  headers: Readonly<Record<string, string>> = {},
+) {
+  return app.inject({
+    method: "POST",
+    url: `/api/1/envelope/?sentry_version=7&sentry_key=${publicKey}&sentry_client=fixture`,
+    headers,
+    payload,
+  });
 }
 
 async function postEnvelope(
@@ -745,6 +1084,23 @@ function envelopeWithItems(
     );
   }
   return Buffer.concat(chunks);
+}
+
+function binaryEnvelope(id: string, environment: string): Buffer {
+  const event = Buffer.from(
+    JSON.stringify({ event_id: id, environment, level: "error" }),
+  );
+  const binary = Buffer.from([0, 1, 2, 3]);
+  return Buffer.concat([
+    Buffer.from(`${JSON.stringify({ event_id: id })}\n`),
+    Buffer.from(`${JSON.stringify({ type: "event", length: event.length })}\n`),
+    event,
+    Buffer.from("\n"),
+    Buffer.from(
+      `${JSON.stringify({ type: "attachment", length: binary.length })}\n`,
+    ),
+    binary,
+  ]);
 }
 
 function eventId(number: number): string {

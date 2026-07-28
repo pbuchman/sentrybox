@@ -6,7 +6,7 @@ import type {
 } from "fastify";
 import { EnvelopeProtocolError } from "@intexura-error-hub/protocol";
 
-export type SentryErrorStatus = 400 | 413 | 429 | 503;
+export type SentryErrorStatus = 400 | 413 | 429 | 500 | 503;
 
 export class SentryHttpError extends Error {
   public readonly name = "SentryHttpError";
@@ -31,7 +31,10 @@ export function sendSentryError(
   return reply.code(error.statusCode).send({ detail: error.message });
 }
 
-export function installSentryErrorHandler(app: FastifyInstance): void {
+export function installSentryErrorHandler(
+  app: FastifyInstance,
+  retryAfterSeconds: number,
+): void {
   app.setErrorHandler(
     (
       error: FastifyError | Error,
@@ -57,22 +60,17 @@ export function installSentryErrorHandler(app: FastifyInstance): void {
           error.code === "DECOMPRESSION_RATIO_EXCEEDED";
         return sendSentryError(
           reply,
-          new SentryHttpError(tooLarge ? 413 : 400, error.message),
-        );
-      }
-      if (
-        error instanceof SyntaxError ||
-        error instanceof TypeError ||
-        error instanceof URIError
-      ) {
-        return sendSentryError(
-          reply,
-          new SentryHttpError(400, "Malformed Sentry envelope."),
+          new SentryHttpError(
+            tooLarge ? 413 : 400,
+            error.code === "UNSUPPORTED_CONTENT_ENCODING"
+              ? "Unsupported Content-Encoding."
+              : error.message,
+          ),
         );
       }
       return sendSentryError(
         reply,
-        new SentryHttpError(400, "Malformed Sentry envelope."),
+        new SentryHttpError(500, "Internal ingest failure.", retryAfterSeconds),
       );
     },
   );
