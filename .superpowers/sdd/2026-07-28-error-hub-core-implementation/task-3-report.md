@@ -56,3 +56,44 @@ Committed with `feat(protocol): normalize and redact error events`.
 ## Concerns
 
 - The mandatory repository rule file `.claude/CLAUDE.md` was absent at session start, so its referenced files could not be read. Work followed the available task brief and specification instead.
+
+## Fix round 1 — review hardening
+
+### Finding-to-test mapping
+
+1. Redaction bypasses: `redact.test.ts` now covers generic `auth`/`authentication`, Basic/Digest/Bearer forms, complete multi-cookie strings, and null-prototype records. `normalize.test.ts` checks a long original sensitive tag key and asserts every adversarial value is absent from the whole serialized result.
+2. URL fail-closed behavior: `normalize.test.ts` covers both a relative URL and malformed absolute URL with userinfo and sensitive query values. Both preserve the safe `page=2` parameter without retaining credentials or sensitive values.
+3. Hard JSON cap: a table test independently sends oversized multibyte `requestId`, `traceId`, and `taskId`; each serialized result is at most 512 KiB. Correlations are UTF-8 bounded before top-level and payload evidence use, and cap reduction ends in an explicit final hard fallback.
+4. Diagnostic shapes: an allowlist test verifies frames, breadcrumbs, contexts, extras, and request data discard unknown user fields and that contexts/extras are stored only in `payload`.
+5. Recursion metadata: a deep extra test asserts both the recursion marker and event `truncated: true` with `recursion_depth`.
+6. Exception chain evidence: a causal multi-entry test selects the first meaningful exception after an empty entry and records its remaining discarded meaningful chain count with `exception_chain`.
+7. Tag determinism: the tag test covers exact 100-entry retention, code-point deterministic ordering, and a truncated-key collision that retains the first sorted original key. It also covers original-key sensitive matching before key truncation.
+
+### RED and GREEN evidence
+
+- RED: the initial focused run failed 10 new adversarial tests across all seven findings (three independent oversized-correlation cases included). A final correlation regression then failed because the prior code manufactured `[REDACTED]` as a canonical ID; the new test drove its rejection.
+- GREEN: `pnpm --filter @intexura-error-hub/protocol test` passes 4 files / 46 tests.
+
+### Commands and results
+
+All commands used `PATH=/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:$PATH`.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --filter @intexura-error-hub/protocol test` | PASS — 4 files, 46 tests |
+| `pnpm format:check` | PASS |
+| `pnpm --filter @intexura-error-hub/protocol lint` | PASS |
+| `pnpm --filter @intexura-error-hub/protocol typecheck` | PASS |
+| `pnpm --filter @intexura-error-hub/protocol build` | PASS |
+| `git diff --check` | PASS |
+
+### Self-review
+
+- Secret matching now examines original keys before tag-key truncation, and all returned diagnostic records use null-prototype accumulators.
+- Recursive redaction returns explicit truncation metadata; no persistence-facing normalization output duplicates contexts or extras.
+- Every retained variable string passes UTF-8 bounds before the global cap. Correlation lookup remains source-limited and now rejects values changed by secret redaction rather than inventing an ID.
+- The change remains confined to protocol normalization/redaction/tests/report; it adds no grouping, storage, routes, or forwarding.
+
+### Commit
+
+Separate fix commit: `fix(protocol): harden normalized event boundaries`.

@@ -37,6 +37,40 @@ describe("redactValue", () => {
 
     expect(JSON.stringify(redactValue(nested))).not.toContain("hidden");
   });
+
+  it("redacts generic auth schemes and complete cookie expressions", () => {
+    const forbiddenValues = [
+      "Basic dXNlcjpwYXNzd29yZA==",
+      "Digest username=alice, response=secret-digest",
+      "Bearer auth-token",
+      "first=one; forbidden-cookie=two; third=three",
+    ];
+    const serialized = JSON.stringify(
+      redactValue({
+        auth: forbiddenValues[0],
+        authentication: forbiddenValues[1],
+        detail: `authorization: ${forbiddenValues[2]}`,
+        cookieDetail: `Cookie: ${forbiddenValues[3]}`,
+      }),
+    );
+
+    for (const forbidden of forbiddenValues) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(serialized).not.toContain("forbidden-cookie=two");
+  });
+
+  it("keeps prototype-sensitive keys as inert own properties", () => {
+    const result = redactValue({
+      __proto__: "safe-proto",
+      constructor: "safe-constructor",
+      prototype: "safe-prototype",
+    });
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(JSON.stringify(result)).toContain("safe-constructor");
+    expect(JSON.stringify(result)).toContain("safe-prototype");
+  });
 });
 
 function nest(value: string, depth: number): unknown {

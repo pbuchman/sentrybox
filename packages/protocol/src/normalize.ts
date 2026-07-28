@@ -10,7 +10,7 @@ import {
   MAX_TITLE_BYTES,
   truncateUtf8,
 } from "./limits.js";
-import { redactString, redactValue } from "./redact.js";
+import { isSensitiveKey, redactString, redactWithMetadata } from "./redact.js";
 
 export type ErrorLevel = "warn" | "error" | "fatal";
 
@@ -43,8 +43,9 @@ export interface NormalizedEventInput {
 export interface NormalizedException {
   readonly type: string | null;
   readonly value: string | null;
-  readonly mechanism: unknown;
-  readonly frames: readonly unknown[];
+  readonly mechanism: Readonly<Record<string, unknown>>;
+  readonly frames: readonly Readonly<Record<string, unknown>>[];
+  readonly discardedValues: number;
 }
 
 export interface NormalizedEvent {
@@ -55,10 +56,8 @@ export interface NormalizedEvent {
   readonly title: string;
   readonly message: string | null;
   readonly exception: NormalizedException | null;
-  readonly breadcrumbs: readonly unknown[];
+  readonly breadcrumbs: readonly Readonly<Record<string, unknown>>[];
   readonly tags: Readonly<Record<string, string>>;
-  readonly contexts: unknown;
-  readonly extras: unknown;
   readonly release: string | null;
   readonly environment: string | null;
   readonly serverName: string | null;
@@ -82,6 +81,41 @@ export type NormalizationResult =
       >["reason"];
     }
   | { readonly accepted: true; readonly event: NormalizedEvent };
+
+const MAX_DIAGNOSTIC_STRING_BYTES = MAX_TAG_VALUE_BYTES;
+const DUMMY_URL_ORIGIN = "https://error-hub.invalid";
+const REQUEST_HEADERS = new Set([
+  "content-type",
+  "host",
+  "method",
+  "request-id",
+  "traceparent",
+  "tracestate",
+  "user-agent",
+  "x-request-id",
+]);
+const EXTRA_KEYS = new Set([
+  "code",
+  "errorCode",
+  "error_code",
+  "logger",
+  "operation",
+  "requestId",
+  "request_id",
+  "reqId",
+  "req_id",
+  "service",
+  "sessionId",
+  "session_id",
+  "statusCode",
+  "status_code",
+  "taskId",
+  "task_id",
+  "traceId",
+  "trace_id",
+  "userId",
+  "user_id",
+]);
 
 export function admitEvent(input: NormalizedEventInput): Admission {
   switch (input.level) {
@@ -112,54 +146,54 @@ export function normalizeEvent(
   }
 
   const reasons = new Set<string>();
-  const rawTags = asRecord(input.tags);
-  const rawExtras = asRecord(input.extra);
-  const rawContexts = asRecord(input.contexts);
-  const message = readMessage(input.message);
-  const normalizedException = normalizeException(input.exception, reasons);
+  const tags = normalizeTags(asRecord(input.tags), reasons);
+  const exception = normalizeException(input.exception, reasons);
+  const message = normalizedString(
+    input.message,
+    MAX_MESSAGE_BYTES,
+    "message_bytes",
+    reasons,
+  );
   const title = bounded(
-    redactOptionalString(input.title) ??
+    normalizedString(input.title, MAX_TITLE_BYTES, "title_bytes", reasons) ??
       message ??
-      normalizedException?.value ??
-      normalizedException?.type ??
+      exception?.value ??
+      exception?.type ??
       "",
     MAX_TITLE_BYTES,
     "title_bytes",
     reasons,
   );
-  const normalizedMessage =
-    message === null
-      ? null
-      : bounded(message, MAX_MESSAGE_BYTES, "message_bytes", reasons);
-  const tags = normalizeTags(rawTags, reasons);
-  const breadcrumbs = normalizeCollection(
-    input.breadcrumbs,
-    MAX_BREADCRUMBS,
-    "breadcrumbs",
+  const breadcrumbs = normalizeBreadcrumbs(input.breadcrumbs, reasons);
+  const contexts = normalizeContexts(input.contexts, reasons);
+  const extras = normalizeExtras(input.extra, reasons);
+  const correlations = extractCorrelations(
+    asRecord(input.tags),
+    asRecord(input.extra),
+    asRecord(input.contexts),
     reasons,
   );
-  const contexts = redactValue(sanitizeContexts(rawContexts));
-  const extras = redactValue(rawExtras);
-  const correlations = extractCorrelations(rawTags, rawExtras, rawContexts);
-  const payload = {
-    contexts,
-    extras,
-    correlations: correlationEvidence(correlations),
-  };
 
   const event: MutableNormalizedEvent = {
-    id: boundedOptional(
-      redactOptionalString(input.event_id),
+    id: normalizedString(
+      input.event_id,
       MAX_TAG_VALUE_BYTES,
       "event_id_bytes",
       reasons,
     ),
-    occurredAt: bounded(
-      redactOptionalString(input.timestamp) ?? redactString(receivedAt),
-      MAX_TAG_VALUE_BYTES,
-      "timestamp_bytes",
-      reasons,
-    ),
+    occurredAt:
+      normalizedString(
+        input.timestamp,
+        MAX_TAG_VALUE_BYTES,
+        "timestamp_bytes",
+        reasons,
+      ) ??
+      bounded(
+        redactString(receivedAt),
+        MAX_TAG_VALUE_BYTES,
+        "timestamp_bytes",
+        reasons,
+      ),
     receivedAt: bounded(
       redactString(receivedAt),
       MAX_TAG_VALUE_BYTES,
@@ -168,38 +202,36 @@ export function normalizeEvent(
     ),
     level: admission.level,
     title,
-    message: normalizedMessage,
-    exception: normalizedException,
+    message,
+    exception,
     breadcrumbs,
     tags,
-    contexts,
-    extras,
-    release: boundedOptional(
-      redactOptionalString(input.release),
+    release: normalizedString(
+      input.release,
       MAX_TAG_VALUE_BYTES,
       "metadata_bytes",
       reasons,
     ),
-    environment: boundedOptional(
-      redactOptionalString(input.environment),
+    environment: normalizedString(
+      input.environment,
       MAX_TAG_VALUE_BYTES,
       "metadata_bytes",
       reasons,
     ),
-    serverName: boundedOptional(
-      redactOptionalString(input.server_name),
+    serverName: normalizedString(
+      input.server_name,
       MAX_TAG_VALUE_BYTES,
       "metadata_bytes",
       reasons,
     ),
-    platform: boundedOptional(
-      redactOptionalString(input.platform),
+    platform: normalizedString(
+      input.platform,
       MAX_TAG_VALUE_BYTES,
       "metadata_bytes",
       reasons,
     ),
-    logger: boundedOptional(
-      redactOptionalString(input.logger),
+    logger: normalizedString(
+      input.logger,
       MAX_TAG_VALUE_BYTES,
       "metadata_bytes",
       reasons,
@@ -207,7 +239,11 @@ export function normalizeEvent(
     requestId: correlations.requestId.value,
     traceId: correlations.traceId.value,
     taskId: correlations.taskId.value,
-    payload,
+    payload: {
+      contexts,
+      extras,
+      correlations: correlationEvidence(correlations),
+    },
     payloadBytes: 0,
     truncated: false,
     truncationReasons: [],
@@ -221,82 +257,192 @@ function normalizeException(
   value: unknown,
   reasons: Set<string>,
 ): NormalizedException | null {
-  const exception = asRecord(value);
-  const values = Array.isArray(exception.values) ? exception.values : [];
-  const first = asRecord(values[0]);
-  if (values.length === 0 || Object.keys(first).length === 0) {
+  const exceptionValues = asRecord(value).values;
+  const values: readonly unknown[] = Array.isArray(exceptionValues)
+    ? exceptionValues
+    : [];
+  const selectedIndex = values.findIndex((entry) =>
+    isMeaningfulException(entry),
+  );
+  if (selectedIndex === -1) {
     return null;
   }
-
-  const stacktrace = asRecord(first.stacktrace);
-  const frames = normalizeCollection(
-    stacktrace.frames,
-    MAX_EXCEPTION_FRAMES,
-    "exception_frames",
-    reasons,
-  );
+  const selected = asRecord(values[selectedIndex]);
+  const discardedValues = values
+    .slice(selectedIndex + 1)
+    .filter(isMeaningfulException).length;
+  if (discardedValues > 0) {
+    reasons.add("exception_chain");
+  }
+  const stacktrace = asRecord(selected.stacktrace);
   return {
-    type: boundedOptional(
-      redactOptionalString(first.type),
+    type: normalizedString(
+      selected.type,
       MAX_MESSAGE_BYTES,
       "exception_type_bytes",
       reasons,
     ),
-    value: boundedOptional(
-      redactOptionalString(first.value),
+    value: normalizedString(
+      selected.value,
       MAX_MESSAGE_BYTES,
       "exception_value_bytes",
       reasons,
     ),
-    mechanism: redactValue(first.mechanism),
-    frames,
+    mechanism: pickDiagnosticScalars(
+      asRecord(selected.mechanism),
+      ["type", "handled", "synthetic"],
+      reasons,
+    ),
+    frames: normalizeFrames(stacktrace.frames, reasons),
+    discardedValues,
   };
 }
 
-function normalizeCollection(
+function normalizeFrames(
   value: unknown,
-  limit: number,
-  reason: string,
   reasons: Set<string>,
-): readonly unknown[] {
+): readonly Readonly<Record<string, unknown>>[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  if (value.length > limit) {
-    reasons.add(reason);
+  if (value.length > MAX_EXCEPTION_FRAMES) {
+    reasons.add("exception_frames");
   }
-  return value.slice(0, limit).map((entry) => redactValue(entry));
+  return value.slice(0, MAX_EXCEPTION_FRAMES).map((frame) => {
+    const redacted = redactRecord(frame, reasons);
+    return pickDiagnosticScalars(
+      redacted,
+      [
+        "abs_path",
+        "colno",
+        "filename",
+        "function",
+        "in_app",
+        "lineno",
+        "module",
+        "package",
+      ],
+      reasons,
+    );
+  });
+}
+
+function normalizeBreadcrumbs(
+  value: unknown,
+  reasons: Set<string>,
+): readonly Readonly<Record<string, unknown>>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (value.length > MAX_BREADCRUMBS) {
+    reasons.add("breadcrumbs");
+  }
+  return value
+    .slice(0, MAX_BREADCRUMBS)
+    .map((breadcrumb) =>
+      pickDiagnosticScalars(
+        redactRecord(breadcrumb, reasons),
+        ["category", "level", "message", "timestamp", "type"],
+        reasons,
+      ),
+    );
+}
+
+function normalizeContexts(
+  value: unknown,
+  reasons: Set<string>,
+): Readonly<Record<string, unknown>> {
+  const sanitized = sanitizeContexts(asRecord(value));
+  const redacted = redactRecord(sanitized, reasons);
+  const result = nullRecord();
+  const request = asRecord(redacted.request);
+  if (Object.keys(request).length > 0) {
+    result.request = {
+      ...pickDiagnosticScalars(request, ["method", "url"], reasons),
+      headers: pickDiagnosticScalars(
+        asRecord(request.headers),
+        [...REQUEST_HEADERS],
+        reasons,
+      ),
+    };
+  }
+  const runtime = pickDiagnosticScalars(
+    asRecord(redacted.runtime),
+    ["name", "version"],
+    reasons,
+  );
+  if (Object.keys(runtime).length > 0) {
+    result.runtime = runtime;
+  }
+  const trace = pickDiagnosticScalars(
+    asRecord(redacted.trace),
+    ["span_id", "status", "trace_id"],
+    reasons,
+  );
+  if (Object.keys(trace).length > 0) {
+    result.trace = trace;
+  }
+  return result;
+}
+
+function normalizeExtras(
+  value: unknown,
+  reasons: Set<string>,
+): Readonly<Record<string, unknown>> {
+  const redaction = redactWithMetadata(value);
+  if (redaction.truncated) {
+    reasons.add("recursion_depth");
+  }
+  const extras = asRecord(redaction.value);
+  const result = nullRecord();
+  for (const key of [...EXTRA_KEYS].sort(compareCodePoints)) {
+    if (!(key in extras)) {
+      continue;
+    }
+    const scalar = normalizeScalar(
+      extras[key],
+      MAX_DIAGNOSTIC_STRING_BYTES,
+      "extras",
+      reasons,
+    );
+    if (scalar !== undefined) {
+      result[key] = scalar;
+    }
+  }
+  if (redaction.truncated) {
+    result.recursionTruncated = "[TRUNCATED: recursion_depth]";
+  }
+  return result;
 }
 
 function normalizeTags(
   value: Readonly<Record<string, unknown>>,
   reasons: Set<string>,
 ): Readonly<Record<string, string>> {
-  const result: Record<string, string> = {};
+  const result = nullRecord() as Record<string, string>;
   const entries = Object.entries(value).sort(([left], [right]) =>
-    left.localeCompare(right),
+    compareCodePoints(left, right),
   );
   if (entries.length > MAX_TAGS) {
     reasons.add("tags");
   }
-
-  for (const [key, rawValue] of entries.slice(0, MAX_TAGS)) {
+  for (const [key, rawValue] of entries) {
+    if (Object.keys(result).length >= MAX_TAGS) {
+      break;
+    }
     if (key === "contentPreview") {
       reasons.add("tags");
       continue;
     }
     const boundedKey = bounded(key, MAX_TAG_KEY_BYTES, "tags", reasons);
-    const redacted = redactValue({ [boundedKey]: readString(rawValue) ?? "" });
-    const sanitized = asRecord(redacted)[boundedKey];
-    if (typeof sanitized !== "string") {
+    if (Object.hasOwn(result, boundedKey)) {
+      reasons.add("tags");
       continue;
     }
-    result[boundedKey] = bounded(
-      sanitized,
-      MAX_TAG_VALUE_BYTES,
-      "tags",
-      reasons,
-    );
+    const raw = isSensitiveKey(key) ? "[REDACTED]" : rawValue;
+    const value =
+      normalizedString(raw, MAX_TAG_VALUE_BYTES, "tags", reasons) ?? "";
+    result[boundedKey] = value;
   }
   return result;
 }
@@ -305,58 +451,56 @@ function extractCorrelations(
   tags: Readonly<Record<string, unknown>>,
   extras: Readonly<Record<string, unknown>>,
   contexts: Readonly<Record<string, unknown>>,
+  reasons: Set<string>,
 ): Record<"requestId" | "traceId" | "taskId", CorrelationSelection> {
+  const sources = [
+    { source: "tags" as const, value: tags },
+    { source: "extras" as const, value: extras },
+    { source: "contexts" as const, value: contexts },
+  ];
   return {
     requestId: findCorrelation(
-      [
-        { source: "tags", value: tags },
-        { source: "extras", value: extras },
-        { source: "contexts", value: contexts },
-      ],
+      sources,
       ["requestId", "request_id", "reqId", "req_id"],
       ["request", "correlation"],
+      reasons,
     ),
     traceId: findCorrelation(
-      [
-        { source: "tags", value: tags },
-        { source: "extras", value: extras },
-        { source: "contexts", value: contexts },
-      ],
+      sources,
       ["traceId", "trace_id"],
       ["trace", "correlation"],
+      reasons,
     ),
     taskId: findCorrelation(
-      [
-        { source: "tags", value: tags },
-        { source: "extras", value: extras },
-        { source: "contexts", value: contexts },
-      ],
+      sources,
       ["taskId", "task_id"],
       ["task", "correlation"],
+      reasons,
     ),
   };
 }
 
 function findCorrelation(
-  sources: readonly {
-    readonly source: CorrelationSelection["source"];
-    readonly value: Readonly<Record<string, unknown>>;
-  }[],
+  sources: readonly CorrelationSource[],
   aliases: readonly string[],
   contextNames: readonly string[],
+  reasons: Set<string>,
 ): CorrelationSelection {
   for (const source of sources) {
-    const direct = readAliases(source.value, aliases);
+    const direct = readAliases(source.value, aliases, reasons);
     if (direct !== null) {
       return { source: source.source, ...direct };
     }
-    if (source.source !== "contexts") {
-      continue;
-    }
-    for (const contextName of contextNames) {
-      const nested = readAliases(asRecord(source.value[contextName]), aliases);
-      if (nested !== null) {
-        return { source: source.source, ...nested };
+    if (source.source === "contexts") {
+      for (const contextName of contextNames) {
+        const nested = readAliases(
+          asRecord(source.value[contextName]),
+          aliases,
+          reasons,
+        );
+        if (nested !== null) {
+          return { source: source.source, ...nested };
+        }
       }
     }
   }
@@ -366,13 +510,22 @@ function findCorrelation(
 function readAliases(
   source: Readonly<Record<string, unknown>>,
   aliases: readonly string[],
+  reasons: Set<string>,
 ): Pick<CorrelationSelection, "alias" | "value"> | null {
   for (const alias of aliases) {
-    const value = readString(source[alias]);
-    if (value === null || redactString(value) !== value) {
+    const rawValue = source[alias];
+    if (typeof rawValue !== "string" || redactString(rawValue) !== rawValue) {
       continue;
     }
-    return { alias, value };
+    return {
+      alias,
+      value: bounded(
+        rawValue,
+        MAX_TAG_VALUE_BYTES,
+        "correlation_bytes",
+        reasons,
+      ),
+    };
   }
   return null;
 }
@@ -392,88 +545,198 @@ function correlationEvidence(
   );
 }
 
-function sanitizeContexts(value: unknown): unknown {
-  const contexts = asRecord(value);
+function sanitizeContexts(
+  contexts: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
   const request = asRecord(contexts.request);
-  const headers = asRecord(request.headers);
   if (Object.keys(request).length === 0) {
     return contexts;
   }
-
-  const allowedHeaders = new Set([
-    "content-type",
-    "host",
-    "method",
-    "request-id",
-    "traceparent",
-    "tracestate",
-    "user-agent",
-    "x-request-id",
-  ]);
-  const safeHeaders = Object.fromEntries(
-    Object.entries(headers).filter(([key]) =>
-      allowedHeaders.has(key.toLowerCase()),
+  const headers = Object.fromEntries(
+    Object.entries(asRecord(request.headers)).filter(([key]) =>
+      REQUEST_HEADERS.has(key.toLowerCase()),
     ),
   );
-  const url = readString(request.url);
   return {
     ...contexts,
     request: {
-      ...request,
-      ...(url === null ? {} : { url: sanitizeRequestUrl(url) }),
-      headers: safeHeaders,
+      method: request.method,
+      url:
+        typeof request.url === "string"
+          ? sanitizeRequestUrl(request.url)
+          : undefined,
+      headers,
     },
   };
 }
 
 function sanitizeRequestUrl(value: string): string {
   try {
-    const url = new URL(value);
+    const url = new URL(value, DUMMY_URL_ORIGIN);
     url.username = "";
     url.password = "";
-    for (const [key, parameterValue] of url.searchParams) {
-      if (isSensitiveUrlParameter(key)) {
-        url.searchParams.set(key, "[REDACTED]");
-      } else {
-        url.searchParams.set(key, redactString(parameterValue));
-      }
-    }
-    return url.toString();
+    redactSearchParameters(url.searchParams);
+    return url.origin === DUMMY_URL_ORIGIN
+      ? `${url.pathname}${url.search}${url.hash}`
+      : url.toString();
   } catch {
-    return redactString(value);
+    return sanitizeMalformedUrl(value);
+  }
+}
+
+function sanitizeMalformedUrl(value: string): string {
+  const withoutUserInfo = value.replace(/(\/\/)[^/?#@]*@/u, "$1");
+  const parts = withoutUserInfo.split("#", 2);
+  const beforeHash = parts[0] ?? "";
+  const hash = parts[1] ?? "";
+  const questionMark = beforeHash.indexOf("?");
+  if (questionMark === -1) {
+    return redactString(withoutUserInfo);
+  }
+  const path = beforeHash.slice(0, questionMark);
+  const query = beforeHash
+    .slice(questionMark + 1)
+    .split("&")
+    .map((part) => {
+      const equals = part.indexOf("=");
+      const key = equals === -1 ? part : part.slice(0, equals);
+      const rawValue = equals === -1 ? "" : part.slice(equals + 1);
+      return isSensitiveUrlParameter(safeDecode(key))
+        ? `${key}=%5BREDACTED%5D`
+        : `${key}${equals === -1 ? "" : `=${redactString(rawValue)}`}`;
+    });
+  return `${path}?${query.join("&")}${hash === "" ? "" : `#${hash}`}`;
+}
+
+function redactSearchParameters(parameters: URLSearchParams): void {
+  for (const [key, value] of parameters) {
+    parameters.set(
+      key,
+      isSensitiveUrlParameter(key) ? "[REDACTED]" : redactString(value),
+    );
   }
 }
 
 function isSensitiveUrlParameter(key: string): boolean {
-  return /(?:authorization|credential|secret|password|token|api[_-]?key|access[_-]?key)/i.test(
-    key,
-  );
+  return isSensitiveKey(key);
+}
+
+function pickDiagnosticScalars(
+  source: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+  reasons: Set<string>,
+): Readonly<Record<string, unknown>> {
+  const result = nullRecord();
+  for (const key of keys) {
+    const value = normalizeScalar(
+      source[key],
+      MAX_DIAGNOSTIC_STRING_BYTES,
+      "diagnostic_bytes",
+      reasons,
+    );
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function normalizeScalar(
+  value: unknown,
+  limit: number,
+  reason: string,
+  reasons: Set<string>,
+): string | number | boolean | null | undefined {
+  if (typeof value === "string") {
+    return bounded(redactString(value), limit, reason, reasons);
+  }
+  return typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+    ? value
+    : undefined;
+}
+
+function redactRecord(
+  value: unknown,
+  reasons: Set<string>,
+): Record<string, unknown> {
+  const redaction = redactWithMetadata(value);
+  if (redaction.truncated) {
+    reasons.add("recursion_depth");
+  }
+  return asRecord(redaction.value);
+}
+
+function normalizedString(
+  value: unknown,
+  limit: number,
+  reason: string,
+  reasons: Set<string>,
+): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const redaction = redactWithMetadata(value);
+  if (redaction.truncated) {
+    reasons.add("recursion_depth");
+  }
+  return bounded(String(redaction.value), limit, reason, reasons);
 }
 
 function enforceNormalizedEventLimit(
   event: MutableNormalizedEvent,
   reasons: Set<string>,
 ): void {
-  const maxBytes = MAX_NORMALIZED_EVENT_BYTES - 1024;
+  const targetBytes = MAX_NORMALIZED_EVENT_BYTES - 1024;
+  const compact = [
+    () => {
+      event.payload = { contexts: {}, extras: {}, correlations: {} };
+    },
+    () => {
+      event.breadcrumbs = [];
+      event.exception =
+        event.exception === null ? null : { ...event.exception, frames: [] };
+      event.tags = nullRecord() as Record<string, string>;
+    },
+    () => {
+      event.requestId = null;
+      event.traceId = null;
+      event.taskId = null;
+      event.id = null;
+      event.message = null;
+      event.title = truncateUtf8(event.title, 256);
+      event.exception = null;
+    },
+  ];
   refreshMetadata(event, reasons);
-  if (byteLength(JSON.stringify(event)) <= maxBytes) {
+  if (byteLength(JSON.stringify(event)) <= targetBytes) {
     return;
   }
-
   reasons.add("normalized_json");
-  event.payload = { contexts: {}, extras: {} };
-  event.contexts = {};
-  event.extras = {};
-  refreshMetadata(event, reasons);
-  if (byteLength(JSON.stringify(event)) <= maxBytes) {
-    return;
+  for (const reduce of compact) {
+    reduce();
+    refreshMetadata(event, reasons);
+    if (byteLength(JSON.stringify(event)) <= targetBytes) {
+      return;
+    }
   }
-
-  event.breadcrumbs = [];
-  event.exception =
-    event.exception === null ? null : { ...event.exception, frames: [] };
-  event.tags = {};
+  event.occurredAt = truncateUtf8(event.occurredAt, 64);
+  event.receivedAt = truncateUtf8(event.receivedAt, 64);
+  event.release = null;
+  event.environment = null;
+  event.serverName = null;
+  event.platform = null;
+  event.logger = null;
   refreshMetadata(event, reasons);
+  if (byteLength(JSON.stringify(event)) > targetBytes) {
+    event.id = null;
+    event.occurredAt = "";
+    event.receivedAt = "";
+    event.title = "";
+    event.payload = nullRecord();
+    refreshMetadata(event, reasons);
+  }
 }
 
 function refreshMetadata(
@@ -486,31 +749,15 @@ function refreshMetadata(
 }
 
 function hasNonEmptyException(value: unknown): boolean {
-  const exception = asRecord(value);
+  const exceptionValues = asRecord(value).values;
   return (
-    Array.isArray(exception.values) &&
-    exception.values.some((entry) => Object.keys(asRecord(entry)).length > 0)
+    Array.isArray(exceptionValues) &&
+    exceptionValues.some(isMeaningfulException)
   );
 }
 
-function readMessage(value: unknown): string | null {
-  if (typeof value === "string") {
-    return redactString(value);
-  }
-  const message = asRecord(value);
-  return (
-    redactOptionalString(message.formatted) ??
-    redactOptionalString(message.message)
-  );
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function redactOptionalString(value: unknown): string | null {
-  const string = readString(value);
-  return string === null ? null : redactString(string);
+function isMeaningfulException(value: unknown): boolean {
+  return Object.keys(asRecord(value)).length > 0;
 }
 
 function bounded(
@@ -526,19 +773,36 @@ function bounded(
   return truncated;
 }
 
-function boundedOptional(
-  value: string | null,
-  limit: number,
-  reason: string,
-  reasons: Set<string>,
-): string | null {
-  return value === null ? null : bounded(value, limit, reason, reasons);
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
-    : {};
+    : nullRecord();
+}
+
+function nullRecord(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  const leftPoints = [...left];
+  const rightPoints = [...right];
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference =
+      leftPoints[index]!.codePointAt(0)! - rightPoints[index]!.codePointAt(0)!;
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 interface MutableNormalizedEvent {
@@ -549,10 +813,8 @@ interface MutableNormalizedEvent {
   title: string;
   message: string | null;
   exception: NormalizedException | null;
-  breadcrumbs: readonly unknown[];
+  breadcrumbs: readonly Readonly<Record<string, unknown>>[];
   tags: Readonly<Record<string, string>>;
-  contexts: unknown;
-  extras: unknown;
   release: string | null;
   environment: string | null;
   serverName: string | null;
@@ -571,4 +833,9 @@ interface CorrelationSelection {
   readonly source: "tags" | "extras" | "contexts" | null;
   readonly alias: string | null;
   readonly value: string | null;
+}
+
+interface CorrelationSource {
+  readonly source: Exclude<CorrelationSelection["source"], null>;
+  readonly value: Readonly<Record<string, unknown>>;
 }
