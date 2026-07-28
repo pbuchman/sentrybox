@@ -12,6 +12,8 @@ const ORIGINAL_001_SHA256 =
   "a24c930f9028bf0aa20b62e6e03edf2f4d0f502d422d8ee0643fe2781230b1e3";
 const ORIGINAL_002_SHA256 =
   "13f0e90064b78ef7727d139869f0bace45e54c499cee94c0c2bfbc9c7a4debb9";
+const ORIGINAL_003_SHA256 =
+  "7acf5bea95bc10e9ea33a028574d03b7b4463bea4a27750970a09f4b73ad6310";
 const APPLIED_AT = "2026-07-28T10:00:00.000Z";
 const directories: string[] = [];
 const databases: ErrorHubDatabase[] = [];
@@ -24,17 +26,15 @@ afterEach(() => {
 });
 
 describe("ordered database migration upgrade", () => {
-  it("keeps migration 001 byte-identical to the applied v1 artifact", () => {
-    const sql = readFileSync(
-      new URL("./migrations/001_initial.sql", import.meta.url),
-      "utf8",
+  it("keeps historical migrations byte-identical to their applied artifacts", () => {
+    expect(migrationChecksum("001_initial.sql")).toBe(ORIGINAL_001_SHA256);
+    expect(migrationChecksum("002_webhook_delivery.sql")).toBe(
+      ORIGINAL_002_SHA256,
     );
-    expect(createHash("sha256").update(sql).digest("hex")).toBe(
-      ORIGINAL_001_SHA256,
-    );
+    expect(migrationChecksum("003_due_frontier.sql")).toBe(ORIGINAL_003_SHA256);
   });
 
-  it("upgrades a populated v1 database through v3 without changing historical rows", async () => {
+  it("upgrades a populated v1 database through v4 without changing historical rows", async () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v1-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -56,7 +56,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:05:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
     expect(
       database
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -65,6 +65,7 @@ describe("ordered database migration upgrade", () => {
       { version: 1, name: "001_initial" },
       { version: 2, name: "002_webhook_delivery" },
       { version: 3, name: "003_due_frontier" },
+      { version: 4, name: "004_private_api_order" },
     ]);
     expect(historicalRows(database)).toEqual(before);
     const outbox = new OutboxRepository(database);
@@ -125,10 +126,10 @@ describe("ordered database migration upgrade", () => {
     expect(() => migrateDatabase(database, "2026-07-28T10:06:00.000Z")).toThrow(
       /002_webhook_delivery checksum/u,
     );
-    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
   });
 
-  it("upgrades populated v2 to v3 with an indexed bounded due frontier", () => {
+  it("upgrades populated v2 to v4 with indexed bounded dispatcher and private API frontiers", () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v2-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -158,7 +159,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:07:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
     expect(
       database
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -167,6 +168,7 @@ describe("ordered database migration upgrade", () => {
       { version: 1, name: "001_initial" },
       { version: 2, name: "002_webhook_delivery" },
       { version: 3, name: "003_due_frontier" },
+      { version: 4, name: "004_private_api_order" },
     ]);
     expect(
       database.prepare("SELECT * FROM webhook_outbox ORDER BY id").all(),
@@ -185,8 +187,95 @@ describe("ordered database migration upgrade", () => {
     expect(plan.map((step) => step.detail).join("\n")).toMatch(
       /SEARCH webhook_outbox USING INDEX idx_webhook_outbox_due_frontier \(next_attempt<\?\)/u,
     );
+    expectPrivateApiPlans(database);
+  });
+
+  it("upgrades populated v3 to v4 without changing rows and adds private API indexes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "error-hub-v3-upgrade-"));
+    directories.push(directory);
+    const database = openDatabase(join(directory, "error-hub.sqlite"));
+    databases.push(database);
+    database.exec(migrationSql("001_initial.sql"));
+    insertV1Rows(database);
+    database.exec(migrationSql("002_webhook_delivery.sql"));
+    database.exec(migrationSql("003_due_frontier.sql"));
+    database
+      .prepare(
+        `INSERT INTO schema_migrations(version, name, checksum, applied_at)
+         VALUES (1, '001_initial', ?, ?),
+                (2, '002_webhook_delivery', ?, ?),
+                (3, '003_due_frontier', ?, ?)`,
+      )
+      .run(
+        ORIGINAL_001_SHA256,
+        APPLIED_AT,
+        ORIGINAL_002_SHA256,
+        APPLIED_AT,
+        ORIGINAL_003_SHA256,
+        APPLIED_AT,
+      );
+    database.pragma("user_version = 3");
+    const before = historicalRows(database);
+
+    migrateDatabase(database, "2026-07-28T10:08:00.000Z");
+
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
+    expect(historicalRows(database)).toEqual(before);
+    expect(
+      database
+        .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([
+      { version: 1, name: "001_initial" },
+      { version: 2, name: "002_webhook_delivery" },
+      { version: 3, name: "003_due_frontier" },
+      { version: 4, name: "004_private_api_order" },
+    ]);
+    expectPrivateApiPlans(database);
   });
 });
+
+function migrationSql(name: string): string {
+  return readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8");
+}
+
+function migrationChecksum(name: string): string {
+  return createHash("sha256").update(migrationSql(name)).digest("hex");
+}
+
+function expectPrivateApiPlans(database: ErrorHubDatabase): void {
+  const exportPlan = database
+    .prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT id, occurred_at, event_id, payload_gzip
+       FROM events
+       ORDER BY occurred_at, event_id, id
+       LIMIT ?`,
+    )
+    .all(25) as { detail: string }[];
+  expect(exportPlan.map((step) => step.detail).join("\n")).toMatch(
+    /USING INDEX idx_events_export_order/u,
+  );
+  const issuePlan = database
+    .prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT i.id,
+              (SELECT COUNT(*)
+               FROM events AS count_event
+               WHERE count_event.issue_id = i.id) AS matching_count
+       FROM issues AS i INDEXED BY idx_issues_last_seen
+       WHERE EXISTS (
+         SELECT 1 FROM events AS matching_event
+         WHERE matching_event.issue_id = i.id
+       )
+       ORDER BY i.last_seen DESC, i.id DESC
+       LIMIT ?`,
+    )
+    .all(25) as { detail: string }[];
+  const issuePlanText = issuePlan.map((step) => step.detail).join("\n");
+  expect(issuePlanText).toMatch(/USING COVERING INDEX idx_issues_last_seen/u);
+  expect(issuePlanText).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/u);
+}
 
 function insertV1Rows(database: ErrorHubDatabase): void {
   database

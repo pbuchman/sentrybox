@@ -49,7 +49,7 @@ describe("SQLite database and migrations", () => {
     expect(pragmaScalar(first, "wal_autocheckpoint")).toBe(1_000);
     expect(
       first.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get(),
-    ).toEqual({ count: 3 });
+    ).toEqual({ count: 4 });
 
     first.close();
     openConnections.pop();
@@ -133,6 +133,7 @@ describe("SQLite database and migrations", () => {
       expect.arrayContaining([
         "idx_event_tags_lookup",
         "idx_events_issue_occurred",
+        "idx_events_export_order",
         "idx_events_project_environment_received",
         "idx_events_project_level_received",
         "idx_events_project_received",
@@ -141,6 +142,8 @@ describe("SQLite database and migrations", () => {
         "idx_issue_facets_lookup",
         "idx_issues_project_last_seen",
         "idx_issues_project_status_last_seen",
+        "idx_issues_last_seen",
+        "idx_issues_status_last_seen",
         "idx_outbox_dispatch",
         "idx_webhook_outbox_due_frontier",
         "idx_outbox_issue_created",

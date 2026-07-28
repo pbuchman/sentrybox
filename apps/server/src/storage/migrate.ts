@@ -24,6 +24,11 @@ const MIGRATIONS: readonly Migration[] = [
     name: "003_due_frontier",
     url: new URL("./migrations/003_due_frontier.sql", import.meta.url),
   },
+  {
+    version: 4,
+    name: "004_private_api_order",
+    url: new URL("./migrations/004_private_api_order.sql", import.meta.url),
+  },
 ];
 
 export function migrateDatabase(
