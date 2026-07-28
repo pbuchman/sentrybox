@@ -1,21 +1,15 @@
 import { createGunzip } from "node:zlib";
 
 import {
-  DEFAULT_DECOMPRESSION_LIMITS,
+  DEFAULT_MAX_DECOMPRESSION_RATIO,
   EnvelopeProtocolError,
-} from "./sentry-types.js";
-
-import type {
-  DecompressionLimitOverrides,
-  DecompressionLimits,
+  MAX_DECOMPRESSED_ENVELOPE_BYTES,
 } from "./sentry-types.js";
 
 export async function decompressEnvelope(
   input: NodeJS.ReadableStream,
   encoding: string | undefined,
-  overrides: DecompressionLimitOverrides = {},
 ): Promise<Uint8Array> {
-  const limits = resolveLimits(overrides);
   const normalizedEncoding = encoding?.trim().toLowerCase();
 
   if (
@@ -23,7 +17,7 @@ export async function decompressEnvelope(
     normalizedEncoding === "" ||
     normalizedEncoding === "identity"
   ) {
-    return collectBody(input, limits.maxOutputBytes);
+    return collectBody(input);
   }
   if (normalizedEncoding !== "gzip") {
     throw new EnvelopeProtocolError(
@@ -32,12 +26,11 @@ export async function decompressEnvelope(
     );
   }
 
-  return collectGzipBody(input, limits);
+  return collectGzipBody(input);
 }
 
 async function collectGzipBody(
   input: NodeJS.ReadableStream,
-  limits: DecompressionLimits,
 ): Promise<Uint8Array> {
   const gunzip = createGunzip();
   let compressedBytes = 0;
@@ -54,7 +47,7 @@ async function collectGzipBody(
     for await (const chunk of output) {
       const bytes = toUint8Array(chunk);
       outputBytes += bytes.byteLength;
-      if (outputBytes > limits.maxOutputBytes) {
+      if (outputBytes > MAX_DECOMPRESSED_ENVELOPE_BYTES) {
         throw new EnvelopeProtocolError(
           "DECOMPRESSED_BODY_TOO_LARGE",
           "Decompressed envelope body exceeds 1 MiB.",
@@ -62,7 +55,7 @@ async function collectGzipBody(
       }
       if (
         compressedBytes > 0 &&
-        outputBytes > compressedBytes * limits.maxCompressionRatio
+        outputBytes > compressedBytes * DEFAULT_MAX_DECOMPRESSION_RATIO
       ) {
         throw new EnvelopeProtocolError(
           "DECOMPRESSION_RATIO_EXCEEDED",
@@ -91,17 +84,14 @@ async function collectGzipBody(
   return concatenate(chunks, outputBytes);
 }
 
-async function collectBody(
-  input: NodeJS.ReadableStream,
-  maxOutputBytes: number,
-): Promise<Uint8Array> {
+async function collectBody(input: NodeJS.ReadableStream): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let outputBytes = 0;
   try {
     for await (const chunk of input) {
       const bytes = toUint8Array(chunk);
       outputBytes += bytes.byteLength;
-      if (outputBytes > maxOutputBytes) {
+      if (outputBytes > MAX_DECOMPRESSED_ENVELOPE_BYTES) {
         throw new EnvelopeProtocolError(
           "DECOMPRESSED_BODY_TOO_LARGE",
           "Envelope body exceeds 1 MiB.",
@@ -116,27 +106,6 @@ async function collectBody(
     throw error;
   }
   return concatenate(chunks, outputBytes);
-}
-
-function resolveLimits(
-  overrides: DecompressionLimitOverrides,
-): DecompressionLimits {
-  const limits: DecompressionLimits = {
-    ...DEFAULT_DECOMPRESSION_LIMITS,
-    ...overrides,
-  };
-  if (
-    !Number.isSafeInteger(limits.maxOutputBytes) ||
-    limits.maxOutputBytes <= 0 ||
-    !Number.isFinite(limits.maxCompressionRatio) ||
-    limits.maxCompressionRatio <= 0
-  ) {
-    throw new EnvelopeProtocolError(
-      "INVALID_DECOMPRESSION_LIMITS",
-      "Decompression limits must be positive.",
-    );
-  }
-  return limits;
 }
 
 function toUint8Array(chunk: Uint8Array | string): Uint8Array {

@@ -13,26 +13,11 @@ export interface ParsedEnvelope {
 export const MAX_DECOMPRESSED_ENVELOPE_BYTES = 1_048_576;
 export const DEFAULT_MAX_DECOMPRESSION_RATIO = 100;
 
-export const DEFAULT_DECOMPRESSION_LIMITS = {
-  maxOutputBytes: MAX_DECOMPRESSED_ENVELOPE_BYTES,
-  maxCompressionRatio: DEFAULT_MAX_DECOMPRESSION_RATIO,
-} as const;
-
-export interface DecompressionLimits {
-  readonly maxOutputBytes: number;
-  readonly maxCompressionRatio: number;
-}
-
-export type DecompressionLimitOverrides = Readonly<
-  Partial<DecompressionLimits>
->;
-
 export type EnvelopeProtocolErrorCode =
   | "AMBIGUOUS_PAYLOAD_FRAMING"
   | "DECOMPRESSED_BODY_TOO_LARGE"
   | "DECOMPRESSION_RATIO_EXCEEDED"
   | "DUPLICATE_HEADER_FIELD"
-  | "INVALID_DECOMPRESSION_LIMITS"
   | "INVALID_ENVELOPE_HEADER"
   | "INVALID_GZIP"
   | "INVALID_ITEM_HEADER"

@@ -4,7 +4,6 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_DECOMPRESSION_LIMITS,
   EnvelopeProtocolError,
   decompressEnvelope,
   parseEnvelope,
@@ -114,34 +113,50 @@ describe("decompressEnvelope", () => {
   });
 
   it("rejects a decompressed body larger than one MiB", async () => {
-    const body = new Uint8Array(1_048_577);
-    for (let offset = 0; offset < body.length; offset += 65_536) {
-      crypto.getRandomValues(
-        body.subarray(offset, Math.min(offset + 65_536, body.length)),
-      );
-    }
+    const compressedBody = oversizedGzipBody();
 
     await expect(
-      decompressEnvelope(streamOf(gzipSync(body)), "gzip"),
+      decompressEnvelope(streamOf(compressedBody), "gzip"),
     ).rejects.toMatchObject({
       code: "DECOMPRESSED_BODY_TOO_LARGE",
     });
   });
 
-  it("enforces an injectable decompression ratio while streaming", async () => {
-    const body = new TextEncoder().encode("a".repeat(256));
+  it("does not allow an extra runtime argument to raise the fixed one MiB cap", async () => {
+    const result = Reflect.apply(decompressEnvelope, undefined, [
+      streamOf(oversizedGzipBody()),
+      "gzip",
+      { maxOutputBytes: 2_000_000 },
+    ]) as Promise<Uint8Array>;
+
+    await expect(result).rejects.toMatchObject({
+      code: "DECOMPRESSED_BODY_TOO_LARGE",
+    });
+  });
+
+  it("enforces the default decompression ratio while streaming", async () => {
+    const body = new TextEncoder().encode("a".repeat(10_000));
 
     await expect(
-      decompressEnvelope(streamOf(gzipSync(body)), "gzip", {
-        maxCompressionRatio: 1,
-      }),
-    ).rejects.toMatchObject({ code: "DECOMPRESSION_RATIO_EXCEEDED" });
-    expect(DEFAULT_DECOMPRESSION_LIMITS.maxCompressionRatio).toBe(100);
+      decompressEnvelope(streamOf(gzipSync(body)), "gzip"),
+    ).rejects.toMatchObject({
+      code: "DECOMPRESSION_RATIO_EXCEEDED",
+    });
   });
 });
 
 function streamOf(body: Uint8Array): NodeJS.ReadableStream {
   return Readable.from([body]);
+}
+
+function oversizedGzipBody(): Uint8Array {
+  const body = new Uint8Array(1_048_577);
+  for (let offset = 0; offset < body.length; offset += 65_536) {
+    crypto.getRandomValues(
+      body.subarray(offset, Math.min(offset + 65_536, body.length)),
+    );
+  }
+  return gzipSync(body);
 }
 
 function expectProtocolError(action: () => void, code: string): void {
