@@ -11,6 +11,8 @@ import type { ShadowForwarder } from "./ingest/shadow-forwarder.js";
 import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
 import { registerIngestRoute } from "./ingest/route.js";
 import { installSentryErrorHandler } from "./http/sentry-errors.js";
+import type { ErrorHubMetrics } from "./metrics.js";
+import type { StorageSafetyState } from "./retention/storage-budget.js";
 
 export interface PublicIngestLimits {
   readonly globalRateLimit: number;
@@ -40,6 +42,9 @@ export interface PublicAppOptions {
   readonly buildOutbox: (input: BuildOutboxInput) => OutboxDraft;
   readonly now?: () => Date;
   readonly isStorageReady?: () => boolean;
+  readonly storageSafety?: StorageSafetyState;
+  readonly metrics?: ErrorHubMetrics;
+  readonly monotonicNow?: () => number;
   readonly onOperationalMetric?: (metric: PublicOperationalMetric) => void;
   readonly limits?: Partial<PublicIngestLimits>;
 }
@@ -78,6 +83,11 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
     },
   );
   installSentryErrorHandler(app, limits.retryAfterSeconds);
+  app.addHook("onResponse", async (request, reply) => {
+    if (request.method === "POST" && reply.statusCode >= 400) {
+      options.metrics?.recordIngest("rejected");
+    }
+  });
   registerIngestRoute(app, options, limits);
   app.get("/health/live", async () => ({ status: "ok" }));
   return app;

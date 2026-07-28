@@ -8,6 +8,8 @@ interface Migration {
   readonly url: URL;
 }
 
+export const CURRENT_MIGRATION_VERSION = 5;
+
 const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -28,6 +30,11 @@ const MIGRATIONS: readonly Migration[] = [
     version: 4,
     name: "004_private_api_order",
     url: new URL("./migrations/004_private_api_order.sql", import.meta.url),
+  },
+  {
+    version: CURRENT_MIGRATION_VERSION,
+    name: "005_retention_indexes",
+    url: new URL("./migrations/005_retention_indexes.sql", import.meta.url),
   },
 ];
 

@@ -13,6 +13,9 @@ import { registerSentryEventRoutes } from "./sentry-api/events.js";
 import { registerSentryIssueRoutes } from "./sentry-api/issues.js";
 import { registerSentryProjectRoutes } from "./sentry-api/projects.js";
 import { sentryNotFound } from "./sentry-api/model.js";
+import { HealthStatusService } from "./health/status.js";
+import { ErrorHubMetrics } from "./metrics.js";
+import { StorageSafetyState } from "./retention/storage-budget.js";
 
 export interface PrivateAppOptions {
   readonly database: ErrorHubDatabase;
@@ -21,12 +24,12 @@ export interface PrivateAppOptions {
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly publicIngestHosts: readonly string[];
+  readonly grafanaExploreUrl?: URL | null;
   readonly secrets?: Pick<SecretStore, "references" | "resolve">;
   readonly now?: () => Date;
   readonly createDeliveryId?: () => string;
-  readonly isReady?: () => boolean;
-  readonly getSystemStatus?: () => Readonly<Record<string, unknown>>;
-  readonly getMetrics?: () => string;
+  readonly metrics?: ErrorHubMetrics;
+  readonly storageSafety?: StorageSafetyState;
   readonly exportBatchSize?: number;
   readonly onExportBatch?: (size: number) => void;
 }
@@ -65,8 +68,14 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
     });
   });
   const now = options.now ?? (() => new Date());
+  const storageSafety = options.storageSafety ?? new StorageSafetyState();
+  const health = new HealthStatusService({
+    database: options.database,
+    safetyState: storageSafety,
+  });
+  const metrics = options.metrics ?? new ErrorHubMetrics();
   registerIssueRoutes(app, { database: options.database, now });
-  registerEventRoutes(app, options.database);
+  registerEventRoutes(app, options.database, options.grafanaExploreUrl ?? null);
   registerFacetRoutes(app, options.database);
   registerExportRoutes(app, {
     database: options.database,
@@ -82,13 +91,9 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
     now,
     createDeliveryId: options.createDeliveryId ?? randomUUID,
     ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
-    ...(options.isReady === undefined ? {} : { isReady: options.isReady }),
-    ...(options.getSystemStatus === undefined
-      ? {}
-      : { getSystemStatus: options.getSystemStatus }),
-    ...(options.getMetrics === undefined
-      ? {}
-      : { getMetrics: options.getMetrics }),
+    health,
+    metrics,
+    storageSafety,
   });
   const sentryOptions = {
     database: options.database,

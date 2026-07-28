@@ -19,6 +19,11 @@ import {
 } from "./dispatcher.js";
 import { nextRetryAt } from "./retry-policy.js";
 import { signWebhookBody } from "./signature.js";
+import { ErrorHubMetrics } from "../metrics.js";
+import {
+  DEFAULT_RETENTION_CONFIG,
+  StorageSafetyState,
+} from "../retention/storage-budget.js";
 
 const CREATED_AT = "2026-07-28T10:00:00.000Z";
 const PRIVATE_ORIGIN = new URL("https://error-hub.tail.example:8443");
@@ -292,6 +297,7 @@ describe("webhook lifecycle and dispatch", () => {
       });
     }
     const send = vi.fn<WebhookHttpClient["send"]>();
+    const metrics = new ErrorHubMetrics();
     const dispatcher = new WebhookDispatcher({
       outbox,
       http: { send },
@@ -300,6 +306,7 @@ describe("webhook lifecycle and dispatch", () => {
       leaseMs: 10_000,
       batchSize: 3,
       createLeaseId: () => "bounded-maintenance",
+      metrics,
     });
 
     await expect(dispatcher.dispatchDue()).resolves.toEqual({
@@ -322,6 +329,12 @@ describe("webhook lifecycle and dispatch", () => {
       { state: "dead_letter", count: 3 },
       { state: "pending", count: 4 },
     ]);
+    expect(
+      metrics.render({
+        database,
+        storage: new StorageSafetyState(DEFAULT_RETENTION_CONFIG),
+      }),
+    ).toContain('error_hub_dispatch_total{outcome="dead_letter"} 3');
   });
 
   it("dispatches a bounded batch from a large all-normal due backlog", async () => {
@@ -612,6 +625,76 @@ describe("webhook lifecycle and dispatch", () => {
         "2026-07-28T10:00:12.000Z",
       ),
     ).toBe(true);
+  });
+
+  it("counts stale lease completion for automatic and redrive CAS failures", async () => {
+    setKey("live");
+    record("stale-metric-auto", FINGERPRINT);
+    const metrics = new ErrorHubMetrics();
+    vi.spyOn(outbox, "completeDelivered").mockReturnValueOnce(false);
+    const automatic = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send() {
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date(CREATED_AT),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 1,
+      createLeaseId: () => "stale-auto",
+      metrics,
+    });
+    await automatic.dispatchDue();
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET state = 'delivered', next_attempt = NULL, delivered_at = ?,
+             attempts = attempts + 1, dispatch_lease_id = NULL,
+             dispatch_lease_until = NULL
+         WHERE state = 'pending'`,
+      )
+      .run(CREATED_AT);
+
+    const failed = record("stale-metric-redrive", {
+      ...FINGERPRINT,
+      digest: "9".repeat(64),
+    });
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET state = 'dead_letter', next_attempt = NULL, last_error = 'failed'
+         WHERE id = ?`,
+      )
+      .run(required(failed.outboxId));
+    outbox.requestRedrive({
+      outboxId: required(failed.outboxId),
+      deliveryId: "99999999-9999-4999-8999-999999999999",
+      requestedAt: CREATED_AT,
+      secrets: SECRETS,
+    });
+    vi.spyOn(outbox, "completeRedrive").mockReturnValueOnce(false);
+    const redrive = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send() {
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date(CREATED_AT),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 1,
+      createLeaseId: () => "stale-redrive",
+      metrics,
+    });
+    await redrive.dispatchDue();
+    const storage = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+
+    expect(metrics.render({ database, storage })).toContain(
+      'error_hub_dispatch_total{outcome="stale_lease"} 2',
+    );
   });
 
   it("rejects a wrong live URL or unconfigured secret before persistence", () => {

@@ -30,6 +30,11 @@ interface PreparedEvent {
   readonly environment: string;
 }
 
+interface PreparedEnvelope {
+  readonly events: readonly PreparedEvent[];
+  readonly discarded: number;
+}
+
 export function registerIngestRoute(
   app: FastifyInstance,
   options: PublicAppOptions,
@@ -151,19 +156,29 @@ export function registerIngestRoute(
       }
 
       const rawEnvelope = Buffer.from(request.body);
-      const decompressed = await decompressEnvelope(
-        Readable.from([rawEnvelope]),
-        headerValue(request.headers["content-encoding"]),
-      );
-      const envelope = parseEnvelope(decompressed);
-      const envelopeEventId = canonicalEventIdOrNull(envelope.eventId);
-      const prepared = prepareEvents(
-        envelope.items,
-        envelopeEventId,
-        ingestKey,
-        now.toISOString(),
-      );
-      const responseEventId = envelopeEventId ?? prepared[0]?.eventId ?? "";
+      const parseStarted = monotonicNow(options);
+      let envelopeEventId: string | null;
+      let prepared: PreparedEnvelope;
+      try {
+        const decompressed = await decompressEnvelope(
+          Readable.from([rawEnvelope]),
+          headerValue(request.headers["content-encoding"]),
+        );
+        const envelope = parseEnvelope(decompressed);
+        envelopeEventId = canonicalEventIdOrNull(envelope.eventId);
+        prepared = prepareEvents(
+          envelope.items,
+          envelopeEventId,
+          ingestKey,
+          now.toISOString(),
+        );
+      } finally {
+        options.metrics?.observeParseDuration(
+          Math.max(0, monotonicNow(options) - parseStarted) / 1_000,
+        );
+      }
+      const responseEventId =
+        envelopeEventId ?? prepared.events[0]?.eventId ?? "";
       const projectDecision = projectLimiter.consume(
         String(ingestKey.projectId),
         now.getTime(),
@@ -173,10 +188,10 @@ export function registerIngestRoute(
       }
 
       try {
-        for (const preparedEvent of prepared) {
+        for (const preparedEvent of prepared.events) {
           if (preparedEvent.event === null) continue;
           const event = preparedEvent.event;
-          issues.recordOccurrence({
+          const result = issues.recordOccurrence({
             projectId: ingestKey.projectId,
             event,
             fingerprint: fingerprintEvent(preparedEvent.input),
@@ -188,6 +203,11 @@ export function registerIngestRoute(
                 destination,
               }),
           });
+          options.metrics?.recordIngest("accepted");
+          options.metrics?.recordGrouping(result);
+        }
+        for (let index = 0; index < prepared.discarded; index += 1) {
+          options.metrics?.recordIngest("discarded");
         }
       } catch {
         return sendSentryError(
@@ -200,7 +220,7 @@ export function registerIngestRoute(
         );
       }
 
-      const eventEnvironment = prepared[0]?.environment;
+      const eventEnvironment = prepared.events[0]?.environment;
       if (
         eventEnvironment !== undefined &&
         ingestKey.forwardingMode === "shadow"
@@ -235,6 +255,9 @@ function rateLimitError(
 
 function isStorageReady(options: PublicAppOptions): boolean {
   try {
+    if (options.storageSafety !== undefined) {
+      return options.storageSafety.snapshot().acceptingIngest;
+    }
     return options.isStorageReady?.() !== false;
   } catch {
     return false;
@@ -277,8 +300,9 @@ function prepareEvents(
   envelopeEventId: string | null,
   ingestKey: VerifiedIngestKey,
   receivedAt: string,
-): readonly PreparedEvent[] {
+): PreparedEnvelope {
   const prepared: PreparedEvent[] = [];
+  let discarded = 0;
   for (const item of items) {
     if (isRejectedBinaryItem(item)) {
       throw new SentryHttpError(
@@ -286,7 +310,10 @@ function prepareEvents(
         "Binary envelope items are not supported.",
       );
     }
-    if (item.type !== "event") continue;
+    if (item.type !== "event") {
+      discarded += 1;
+      continue;
+    }
     const input = parseEventPayload(item.payload);
     const payloadEventId =
       input.event_id === undefined ? null : canonicalEventId(input.event_id);
@@ -315,6 +342,7 @@ function prepareEvents(
     const normalized = normalizeEvent(input, receivedAt);
     if (!normalized.accepted) {
       prepared.push({ input, event: null, eventId, environment });
+      discarded += 1;
       continue;
     }
     if (!Number.isFinite(Date.parse(normalized.event.occurredAt))) {
@@ -331,7 +359,15 @@ function prepareEvents(
       environment,
     });
   }
-  return prepared;
+  return { events: prepared, discarded };
+}
+
+function monotonicNow(options: PublicAppOptions): number {
+  const value = options.monotonicNow?.() ?? performance.now();
+  if (!Number.isFinite(value)) {
+    throw new TypeError("ingest monotonic clock must be finite");
+  }
+  return value;
 }
 
 function canonicalEventIdOrNull(eventId: string | null): string | null {

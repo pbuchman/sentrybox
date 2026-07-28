@@ -2,6 +2,11 @@ import { gunzipSync } from "node:zlib";
 import type { NormalizedEvent } from "@intexura-error-hub/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrivateApp } from "../private-app.js";
+import { ErrorHubMetrics } from "../metrics.js";
+import {
+  DEFAULT_RETENTION_CONFIG,
+  StorageSafetyState,
+} from "../retention/storage-budget.js";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { IssueRepository } from "../storage/issue-repository.js";
 import { migrateDatabase } from "../storage/migrate.js";
@@ -44,6 +49,21 @@ describe("private operator API", () => {
     exportBatches = [];
     clock = new Date(NOW);
     secretFailure = null;
+    const storageSafety = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    storageSafety.observeUsage(
+      {
+        databaseBytes: 100,
+        walBytes: 20,
+        shmBytes: 10,
+        temporaryBytes: 5,
+        dataDirectoryOtherBytes: 0,
+        totalBytes: 135,
+        freeBytes: 10 * 1024 ** 3,
+      },
+      0,
+      "2026-07-28T08:00:01.000Z",
+    );
+    storageSafety.markSuccess(new Date(NOW), { age: 0, budget: 0 });
     app = createPrivateApp({
       database,
       privateOrigin: new URL(PRIVATE_ORIGIN),
@@ -51,6 +71,9 @@ describe("private operator API", () => {
       allowedHosts: [PRIVATE_HOST],
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: [PUBLIC_HOST],
+      grafanaExploreUrl: new URL("https://grafana.test/explore"),
+      metrics: new ErrorHubMetrics(),
+      storageSafety,
       now: () => clock,
       createDeliveryId: () => "55555555-5555-4555-8555-555555555555",
       secrets: {
@@ -267,6 +290,12 @@ describe("private operator API", () => {
         occurredAt: "2026-07-28T09:00:00.000Z",
         receivedAt: "2026-07-28T09:00:01.000Z",
         release: null,
+        logLocator: expect.objectContaining({
+          confidence: "exact_identifier",
+          from: "2026-07-28T08:58:00.000Z",
+          to: "2026-07-28T09:02:00.000Z",
+          grafanaUrl: expect.stringContaining("https://grafana.test/explore"),
+        }),
         normalized: expect.objectContaining({ release: null }),
       }),
     );
@@ -810,15 +839,18 @@ describe("private operator API", () => {
     );
   });
 
-  it("exposes truthful baseline status, metrics, liveness, and readiness", async () => {
+  it("exposes operational status, fixed-cardinality metrics, liveness, and readiness", async () => {
     const status = await privateGet("/api/system/status");
     expect(status.statusCode).toBe(200);
     const statusBody = status.json();
     expect(statusBody).toEqual(
       expect.objectContaining({
         status: "ok",
-        database: { ready: true },
-        retention: { configured: false, lastRun: null },
+        database: { ready: true, migrationCurrent: true },
+        retention: expect.objectContaining({
+          knownSuccessful: true,
+          lastRun: NOW,
+        }),
         ingest: { accepting: true },
         outbox: expect.objectContaining({ deadLetter: 1 }),
       }),
@@ -830,9 +862,9 @@ describe("private operator API", () => {
     const metrics = await privateGet("/metrics");
     expect(metrics.statusCode).toBe(200);
     expect(metrics.headers["content-type"]).toContain("text/plain");
-    expect(metrics.body).toContain("error_hub_issues 2");
+    expect(metrics.body).toContain("error_hub_storage_physical_bytes 135");
     expect(metrics.body).toContain(
-      'error_hub_webhook_deliveries{state="dead_letter"} 1',
+      'error_hub_outbox_deliveries{state="dead_letter"} 1',
     );
 
     expect((await privateGet("/health/live")).json()).toEqual({ status: "ok" });

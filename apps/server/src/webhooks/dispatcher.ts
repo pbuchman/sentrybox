@@ -9,6 +9,7 @@ import {
 import { createStoredSentryEventAlertHeaders } from "./payload.js";
 import { classifyHttpStatus, nextRetryAt } from "./retry-policy.js";
 import { canonicalWebhookTargetUrl } from "./destination.js";
+import type { ErrorHubMetrics } from "../metrics.js";
 
 export interface WebhookAttempt {
   readonly deliveryId: string;
@@ -39,6 +40,7 @@ export interface WebhookDispatcherOptions {
   readonly leaseMs?: number;
   readonly batchSize?: number;
   readonly createLeaseId?: () => string;
+  readonly metrics?: Pick<ErrorHubMetrics, "recordDispatch">;
 }
 
 export interface DispatchSummary {
@@ -67,6 +69,7 @@ export class WebhookDispatcher {
   readonly #leaseMs: number;
   readonly #batchSize: number;
   readonly #createLeaseId: () => string;
+  readonly #metrics: Pick<ErrorHubMetrics, "recordDispatch"> | undefined;
   #automaticGetsOddSlot = true;
 
   public constructor(options: WebhookDispatcherOptions) {
@@ -86,6 +89,7 @@ export class WebhookDispatcher {
     }
     this.#batchSize = positiveInteger(options.batchSize ?? 25, "batch size");
     this.#createLeaseId = options.createLeaseId ?? randomUUID;
+    this.#metrics = options.metrics;
   }
 
   public async dispatchDue(): Promise<DispatchSummary> {
@@ -96,6 +100,7 @@ export class WebhookDispatcher {
       : Math.floor(this.#batchSize / 2);
     const redriveBudget = this.#batchSize - automaticBudget;
     const prepared = this.prepareAutomatic(automaticBudget);
+    this.recordTerminalized(prepared);
     const initialLease = this.createLeaseWindow();
     const rows: LeasedAutomatic[] = this.#outbox
       .claimPrepared(
@@ -112,6 +117,7 @@ export class WebhookDispatcher {
         redrives.push(...this.claimRedrives(initialLease, unused));
       } else if (redrives.length < redriveBudget) {
         const extra = this.prepareAutomatic(unused, prepared.cursor);
+        this.recordTerminalized(extra);
         const extraLease = this.createLeaseWindow();
         rows.push(
           ...this.#outbox
@@ -151,12 +157,18 @@ export class WebhookDispatcher {
     after: DueFrontierCursor | null = null,
   ): PreparedDueFrontier {
     return limit === 0
-      ? { inspected: 0, claimableIds: [], cursor: after }
+      ? { inspected: 0, terminalized: 0, claimableIds: [], cursor: after }
       : this.#outbox.prepareDue(
           canonicalDate(this.#now(), "maintenance timestamp").toISOString(),
           limit,
           after,
         );
+  }
+
+  private recordTerminalized(prepared: PreparedDueFrontier): void {
+    for (let index = 0; index < prepared.terminalized; index += 1) {
+      this.#metrics?.recordDispatch("dead_letter");
+    }
   }
 
   private claimRedrives(
@@ -194,18 +206,19 @@ export class WebhookDispatcher {
         signature: redrive.signature,
       });
     } catch {
-      return this.#outbox.completeRedrive(
-        redrive.id,
-        leaseId,
+      return this.completed(
         "dead_letter",
-        canonicalDate(
-          this.#now(),
-          "redrive completion timestamp",
-        ).toISOString(),
-        "invalid destination configuration",
-      )
-        ? "dead_letter"
-        : null;
+        this.#outbox.completeRedrive(
+          redrive.id,
+          leaseId,
+          "dead_letter",
+          canonicalDate(
+            this.#now(),
+            "redrive completion timestamp",
+          ).toISOString(),
+          "invalid destination configuration",
+        ),
+      );
     }
     let delivered = false;
     let error = "network failure";
@@ -228,15 +241,19 @@ export class WebhookDispatcher {
           : "network failure";
     }
     const result = delivered ? "delivered" : "dead_letter";
-    return this.#outbox.completeRedrive(
-      redrive.id,
-      leaseId,
+    return this.completed(
       result,
-      canonicalDate(this.#now(), "redrive completion timestamp").toISOString(),
-      delivered ? null : error,
-    )
-      ? result
-      : null;
+      this.#outbox.completeRedrive(
+        redrive.id,
+        leaseId,
+        result,
+        canonicalDate(
+          this.#now(),
+          "redrive completion timestamp",
+        ).toISOString(),
+        delivered ? null : error,
+      ),
+    );
   }
 
   private async deliver(
@@ -249,13 +266,14 @@ export class WebhookDispatcher {
       row.secretRef === null ||
       row.signature === null
     ) {
-      return this.#outbox.completeDeadLetter(
-        row.id,
-        leaseId,
-        "invalid destination configuration",
-      )
-        ? "dead_letter"
-        : null;
+      return this.completed(
+        "dead_letter",
+        this.#outbox.completeDeadLetter(
+          row.id,
+          leaseId,
+          "invalid destination configuration",
+        ),
+      );
     }
     const attemptNumber = row.attempts + 1;
     let targetUrl: URL;
@@ -266,13 +284,14 @@ export class WebhookDispatcher {
         signature: row.signature,
       });
     } catch {
-      return this.#outbox.completeDeadLetter(
-        row.id,
-        leaseId,
-        "invalid destination configuration",
-      )
-        ? "dead_letter"
-        : null;
+      return this.completed(
+        "dead_letter",
+        this.#outbox.completeDeadLetter(
+          row.id,
+          leaseId,
+          "invalid destination configuration",
+        ),
+      );
     }
     const attempt: WebhookAttempt = {
       deliveryId: row.deliveryId,
@@ -304,13 +323,14 @@ export class WebhookDispatcher {
     }
     const completedAt = canonicalDate(this.#now(), "completion timestamp");
     if (result === "delivered") {
-      return this.#outbox.completeDelivered(
-        row.id,
-        leaseId,
-        completedAt.toISOString(),
-      )
-        ? result
-        : null;
+      return this.completed(
+        result,
+        this.#outbox.completeDelivered(
+          row.id,
+          leaseId,
+          completedAt.toISOString(),
+        ),
+      );
     }
     if (result === "retry") {
       const retryAt = nextRetryAt(
@@ -319,14 +339,24 @@ export class WebhookDispatcher {
         attemptNumber,
       );
       if (retryAt !== null) {
-        return this.#outbox.completeRetry(row.id, leaseId, retryAt, error)
-          ? result
-          : null;
+        return this.completed(
+          result,
+          this.#outbox.completeRetry(row.id, leaseId, retryAt, error),
+        );
       }
     }
-    return this.#outbox.completeDeadLetter(row.id, leaseId, error)
-      ? "dead_letter"
-      : null;
+    return this.completed(
+      "dead_letter",
+      this.#outbox.completeDeadLetter(row.id, leaseId, error),
+    );
+  }
+
+  private completed(
+    result: DeliveryResult,
+    changed: boolean,
+  ): DeliveryResult | null {
+    this.#metrics?.recordDispatch(changed ? result : "stale_lease");
+    return changed ? result : null;
   }
 }
 

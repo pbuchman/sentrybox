@@ -101,6 +101,7 @@ export interface DueFrontierCursor {
 
 export interface PreparedDueFrontier {
   readonly inspected: number;
+  readonly terminalized: number;
   readonly claimableIds: readonly number[];
   readonly cursor: DueFrontierCursor | null;
 }
@@ -298,6 +299,7 @@ export class OutboxRepository {
              AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
         );
         const claimableIds: number[] = [];
+        let terminalized = 0;
         for (const candidate of candidates) {
           if (
             candidate.dispatch_lease_until !== null &&
@@ -314,18 +316,19 @@ export class OutboxRepository {
           if (error === null) {
             claimableIds.push(candidate.id);
           } else {
-            terminalize.run(
+            terminalized += terminalize.run(
               error,
               candidate.id,
               canonicalCheckedAt,
               cutoff,
               canonicalCheckedAt,
-            );
+            ).changes;
           }
         }
         const last = candidates.at(-1);
         return {
           inspected: candidates.length,
+          terminalized,
           claimableIds,
           cursor:
             last === undefined

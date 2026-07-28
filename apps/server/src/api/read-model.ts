@@ -15,6 +15,10 @@ import {
   notFound,
   type PrivateFilters,
 } from "./query.js";
+import {
+  buildLogLocator,
+  type LogLocatorOptions,
+} from "../logs/query-builder.js";
 
 interface IssueListRow {
   id: number;
@@ -224,7 +228,10 @@ export function getEventByLocator(
   return event;
 }
 
-export function eventResponse(event: StoredEvent) {
+export function eventResponse(
+  event: StoredEvent,
+  logLocatorOptions: LogLocatorOptions = {},
+) {
   return {
     id: event.rowId,
     eventId: event.eventId,
@@ -246,6 +253,7 @@ export function eventResponse(event: StoredEvent) {
     traceId: event.traceId,
     taskId: event.taskId,
     truncated: event.truncated,
+    logLocator: buildLogLocator(event, logLocatorOptions),
     normalized: event.payload,
   };
 }

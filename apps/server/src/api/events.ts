@@ -10,6 +10,7 @@ interface EventParams {
 export function registerEventRoutes(
   app: FastifyInstance,
   database: ErrorHubDatabase,
+  grafanaExploreUrl: URL | null = null,
 ): void {
   app.get<EventParams>("/api/events/:id", async (request) =>
     eventResponse(
@@ -17,6 +18,7 @@ export function registerEventRoutes(
         database,
         positiveId(request.params.id, "event locator"),
       ),
+      { grafanaExploreUrl },
     ),
   );
 }

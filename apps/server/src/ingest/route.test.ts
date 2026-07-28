@@ -11,6 +11,11 @@ import { migrateDatabase } from "../storage/migrate.js";
 import type { OutboxDraft } from "../storage/outbox-repository.js";
 import { ProjectRepository } from "../storage/project-repository.js";
 import { createPublicApp, type PublicAppOptions } from "../public-app.js";
+import { ErrorHubMetrics } from "../metrics.js";
+import {
+  DEFAULT_RETENTION_CONFIG,
+  StorageSafetyState,
+} from "../retention/storage-budget.js";
 import type {
   ShadowForwardRequest,
   ShadowForwarder,
@@ -790,8 +795,64 @@ describe("public Sentry envelope ingest", () => {
     expect(count(fixture.database, "webhook_outbox")).toBe(0);
   });
 
+  it("records accepted, unsupported discard, rejected, parse, and grouping outcomes with fixed labels", async () => {
+    const fixture = createFixture();
+    await postEnvelope(fixture.app, NODE_FIXTURE);
+    const unsupportedPayload = Buffer.from('{"reason":"network_error"}');
+    await postEnvelope(
+      fixture.app,
+      Buffer.concat([
+        Buffer.from("{}\n"),
+        Buffer.from(
+          `${JSON.stringify({ type: "client_report", length: unsupportedPayload.length })}\n`,
+        ),
+        unsupportedPayload,
+      ]),
+    );
+    await fixture.app.inject({
+      method: "POST",
+      url: "/api/999/envelope/?sentry_key=wrong",
+      payload: NODE_FIXTURE,
+    });
+    const storage = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    storage.observeUsage(
+      {
+        databaseBytes: 0,
+        walBytes: 0,
+        shmBytes: 0,
+        temporaryBytes: 0,
+        dataDirectoryOtherBytes: 0,
+        totalBytes: 0,
+        freeBytes: 1024 ** 3,
+      },
+      0,
+      null,
+    );
+    const rendered = fixture.metrics.render({
+      database: fixture.database,
+      storage,
+    });
+
+    expect(rendered).toContain(
+      'error_hub_ingest_events_total{outcome="accepted"} 1',
+    );
+    expect(rendered).toContain(
+      'error_hub_ingest_events_total{outcome="discarded"} 1',
+    );
+    expect(rendered).toContain(
+      'error_hub_ingest_events_total{outcome="rejected"} 1',
+    );
+    expect(rendered).toContain('error_hub_grouping_total{outcome="created"} 1');
+    expect(rendered).toContain("error_hub_parse_duration_seconds_count 2");
+  });
+
   it("returns 503 only when storage safety marks ingest unavailable", async () => {
-    const fixture = createFixture({ isStorageReady: () => false });
+    const storageSafety = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    storageSafety.markFailure(
+      "physical_storage_critical",
+      new Date(RECEIVED_AT),
+    );
+    const fixture = createFixture({ storageSafety });
 
     const response = await postEnvelope(fixture.app, NODE_FIXTURE);
 
@@ -917,6 +978,7 @@ interface FixtureOptions {
   readonly shadowResult?: ReturnType<ShadowForwarder["enqueue"]>;
   readonly shadowThrows?: boolean;
   readonly isStorageReady?: () => boolean;
+  readonly storageSafety?: StorageSafetyState;
   readonly now?: () => Date;
   readonly limits?: PublicAppOptions["limits"];
 }
@@ -928,6 +990,7 @@ function createFixture(options: FixtureOptions = {}): {
   readonly issues: IssueRepository;
   readonly forwarded: ShadowForwardRequest[];
   readonly operationalMetrics: { readonly type: string }[];
+  readonly metrics: ErrorHubMetrics;
 } {
   const database = openDatabase(":memory:");
   openDatabases.push(database);
@@ -995,6 +1058,7 @@ function createFixture(options: FixtureOptions = {}): {
     },
   };
   const operationalMetrics: { readonly type: string }[] = [];
+  const metrics = new ErrorHubMetrics();
   const app = createPublicApp({
     database,
     shadowForwarder,
@@ -1014,9 +1078,13 @@ function createFixture(options: FixtureOptions = {}): {
     onOperationalMetric(metric) {
       operationalMetrics.push(metric);
     },
+    metrics,
     ...(options.isStorageReady === undefined
       ? {}
       : { isStorageReady: options.isStorageReady }),
+    ...(options.storageSafety === undefined
+      ? {}
+      : { storageSafety: options.storageSafety }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
   });
   openApplications.push(app);
@@ -1028,6 +1096,7 @@ function createFixture(options: FixtureOptions = {}): {
     issues: new IssueRepository(database),
     forwarded,
     operationalMetrics,
+    metrics,
   };
 }
 
