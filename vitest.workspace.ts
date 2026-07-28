@@ -24,7 +24,10 @@ export default defineConfig({
       {
         test: {
           name: "@intexura-error-hub/protocol",
-          include: ["packages/protocol/test/**/*.test.ts"],
+          include: [
+            "packages/protocol/src/**/*.test.ts",
+            "packages/protocol/test/**/*.test.ts",
+          ],
         },
       },
     ],

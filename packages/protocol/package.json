@@ -15,5 +15,8 @@
     "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/protocol",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir packages/protocol/test/integration",
     "build": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1"
   }
 }
