@@ -179,9 +179,13 @@ export function decodeCursor(
     if (idType === "number") {
       if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0)
         throw new Error("id");
+      if (encodeCursor(timestamp, id) !== value)
+        throw new Error("canonical encoding");
       return { timestamp, id };
     }
     if (typeof id !== "string" || id.length === 0) throw new Error("id");
+    if (encodeCursor(timestamp, id) !== value)
+      throw new Error("canonical encoding");
     return { timestamp, id };
   } catch {
     throw badRequest("cursor is invalid");
@@ -295,7 +299,7 @@ function decodeNullableFacetQueryValue(value: string): string | null {
       throw badRequest("nullable facet value is invalid");
     return value;
   }
-  const match = value.match(/^~v1:s:([A-Za-z0-9_-]+)$/u);
+  const match = value.match(/^~v1:s:([A-Za-z0-9_-]*)$/u);
   if (match === null) throw badRequest("nullable facet value is invalid");
   const encoded = match[1];
   if (encoded === undefined)
@@ -305,7 +309,6 @@ function decodeNullableFacetQueryValue(value: string): string | null {
   if (
     bytes.toString("base64url") !== encoded ||
     !Buffer.from(decoded, "utf8").equals(bytes) ||
-    decoded.length === 0 ||
     decoded.length > MAX_FILTER_VALUE_LENGTH
   ) {
     throw badRequest("nullable facet value is invalid");

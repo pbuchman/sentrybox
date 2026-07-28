@@ -18,6 +18,7 @@ const PRIVATE_ORIGIN = `https://${PRIVATE_HOST}`;
 const PUBLIC_HOST = "errors.test";
 const NOW = "2026-07-28T12:00:00.000Z";
 const NULL_FACET_QUERY = "~v1:n";
+const EMPTY_FACET_QUERY = "~v1:s:";
 const LITERAL_UNKNOWN_QUERY = "~v1:s:X191bmtub3duX18";
 const LITERAL_TAG_QUERY = "~v1:s:fnYxOm4";
 
@@ -336,7 +337,7 @@ describe("private operator API", () => {
     ).toBe(eventId(3));
   });
 
-  it("keeps null and literal nullable facet values collision-free through facets, filters, counts, and exports", async () => {
+  it("keeps null, empty, and literal nullable facet values collision-free through facets, filters, counts, and exports", async () => {
     const maximumUnicodeValue = "ą".repeat(1_024);
     expect(
       parseFilters({
@@ -344,12 +345,14 @@ describe("private operator API", () => {
       }).release,
     ).toEqual([maximumUnicodeValue]);
     const issues = new IssueRepository(database);
+    let nullableIssueId: number | null = null;
     for (const [sequence, release, service] of [
       [20, null, null],
       [21, "__unknown__", "__unknown__"],
       [22, "~v1:n", "~v1:n"],
+      [23, "", ""],
     ] as const) {
-      issues.recordOccurrence({
+      const occurrence = issues.recordOccurrence({
         ...occurrenceInput(
           {
             ...normalizedEvent(
@@ -366,6 +369,7 @@ describe("private operator API", () => {
           `${String(sequence).padStart(8, "0")}-3333-4333-8333-333333333333`,
         ),
       });
+      nullableIssueId ??= occurrence.issueId;
     }
     const response = await privateGet("/api/facets");
     expect(response.statusCode).toBe(200);
@@ -405,6 +409,12 @@ describe("private operator API", () => {
             label: "~v1:n",
             count: 1,
           },
+          {
+            value: "",
+            queryValue: EMPTY_FACET_QUERY,
+            label: "",
+            count: 1,
+          },
         ]),
         service: expect.arrayContaining([
           expect.objectContaining({
@@ -422,15 +432,49 @@ describe("private operator API", () => {
             queryValue: LITERAL_TAG_QUERY,
             count: 1,
           }),
+          expect.objectContaining({
+            value: "",
+            queryValue: EMPTY_FACET_QUERY,
+            count: 1,
+          }),
         ]),
         environment: expect.arrayContaining([
-          expect.objectContaining({ value: "prod", count: 6 }),
+          expect.objectContaining({ value: "prod", count: 7 }),
         ]),
       }),
     );
 
+    const issueFacets = (
+      await privateGet(`/api/issues/${String(nullableIssueId)}`)
+    ).json<{
+      facets: {
+        release: Array<{ value: string | null; queryValue: string }>;
+        service: Array<{ value: string | null; queryValue: string }>;
+      };
+    }>().facets;
+    for (const facet of [issueFacets.release, issueFacets.service]) {
+      expect(facet).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            value: null,
+            queryValue: NULL_FACET_QUERY,
+          }),
+          expect.objectContaining({ value: "", queryValue: EMPTY_FACET_QUERY }),
+          expect.objectContaining({
+            value: "__unknown__",
+            queryValue: LITERAL_UNKNOWN_QUERY,
+          }),
+          expect.objectContaining({
+            value: "~v1:n",
+            queryValue: LITERAL_TAG_QUERY,
+          }),
+        ]),
+      );
+    }
+
     for (const [queryValue, expected] of [
       [NULL_FACET_QUERY, { release: null, serverName: null }],
+      [EMPTY_FACET_QUERY, { release: "", serverName: "" }],
       [
         LITERAL_UNKNOWN_QUERY,
         { release: "__unknown__", serverName: "__unknown__" },
@@ -591,6 +635,41 @@ describe("private operator API", () => {
   });
 
   it("classifies retry validation, missing/conflict, and internal failures without leaking dependency data", async () => {
+    const appWithoutSecrets = createPrivateApp({
+      database,
+      privateOrigin: new URL(PRIVATE_ORIGIN),
+      organizationSlug: "intexuraos",
+      allowedHosts: [PRIVATE_HOST],
+      allowedOrigins: [PRIVATE_ORIGIN],
+      publicIngestHosts: [PUBLIC_HOST],
+    });
+    const malformedWithoutSecrets = await appWithoutSecrets.inject({
+      method: "POST",
+      url: "/api/webhook-deliveries/not-an-id/retry",
+      headers: {
+        host: PRIVATE_HOST,
+        origin: PRIVATE_ORIGIN,
+        "content-type": "application/json",
+      },
+      payload: {},
+    });
+    expect(malformedWithoutSecrets.statusCode).toBe(400);
+    expect(malformedWithoutSecrets.json()).toEqual({
+      error: { code: "invalid_request", message: "delivery id is invalid" },
+    });
+    const validWithoutSecrets = await appWithoutSecrets.inject({
+      method: "POST",
+      url: `/api/webhook-deliveries/${String(deadLetterId)}/retry`,
+      headers: {
+        host: PRIVATE_HOST,
+        origin: PRIVATE_ORIGIN,
+        "content-type": "application/json",
+      },
+      payload: {},
+    });
+    await appWithoutSecrets.close();
+    expect(validWithoutSecrets.statusCode).toBe(409);
+
     const malformed = await privateMutation(
       "POST",
       "/api/webhook-deliveries/not-an-id/retry",
@@ -805,6 +884,36 @@ describe("private operator API", () => {
     expect(encodeCursor(canonicalTimestamp, firstIssueId)).toBe(
       canonicalCursor,
     );
+    for (const json of [
+      `{"t":"${canonicalTimestamp}","v":1,"i":${String(firstIssueId)}}`,
+      `{ "v":1,"t":"${canonicalTimestamp}","i":${String(firstIssueId)} }`,
+      `{"v":1,"t":"${canonicalTimestamp}","i":1e0}`,
+      `{"v":1,"t":"${canonicalTimestamp}","i":0,"i":${String(firstIssueId)}}`,
+      `{"v":1,"t":"2026-07-28T11:00:00.000\\u005a","i":${String(firstIssueId)}}`,
+      `{"v":1,"t":"${canonicalTimestamp}","i":${String(firstIssueId)},"extra":{}}`,
+    ]) {
+      const nonCanonicalCursor = Buffer.from(json, "utf8").toString(
+        "base64url",
+      );
+      expect(
+        (
+          await privateGet(
+            `/api/issues?cursor=${encodeURIComponent(nonCanonicalCursor)}`,
+          )
+        ).statusCode,
+      ).toBe(400);
+    }
+    const nonCanonicalEventCursor = Buffer.from(
+      `{"t":"${canonicalTimestamp}","v":1,"i":"${eventId(1)}"}`,
+      "utf8",
+    ).toString("base64url");
+    expect(
+      (
+        await privateGet(
+          `/api/issues/${String(firstIssueId)}/events?cursor=${encodeURIComponent(nonCanonicalEventCursor)}`,
+        )
+      ).statusCode,
+    ).toBe(400);
   });
 
   async function privateGet(url: string) {

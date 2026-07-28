@@ -71,20 +71,22 @@ export function listIssues(
   readonly items: readonly IssueListItem[];
   readonly nextCursor: string | null;
 } {
-  const countPredicate = eventFilterPredicate(filters, {
+  const status = filters.status[0] ?? null;
+  const eventFilters =
+    status === null ? filters : { ...filters, status: [] as const };
+  const countPredicate = eventFilterPredicate(eventFilters, {
     event: "count_event",
     issue: "i",
     project: "p",
   });
-  const existencePredicate = eventFilterPredicate(filters, {
+  const existencePredicate = eventFilterPredicate(eventFilters, {
     event: "matching_event",
     issue: "i",
     project: "p",
   });
   const issueIndex =
-    filters.status.length === 0
-      ? "idx_issues_last_seen"
-      : "idx_issues_status_last_seen";
+    status === null ? "idx_issues_last_seen" : "idx_issues_status_last_seen";
+  const statusSql = status === null ? "" : "AND i.status = ?";
   const cursorSql =
     cursor === null
       ? ""
@@ -93,6 +95,7 @@ export function listIssues(
     ...countPredicate.parameters,
     ...existencePredicate.parameters,
   ];
+  if (status !== null) parameters.push(status);
   if (cursor !== null)
     parameters.push(cursor.timestamp, cursor.timestamp, cursor.id);
   parameters.push(limit + 1);
@@ -114,7 +117,7 @@ export function listIssues(
          FROM events AS matching_event
          WHERE matching_event.issue_id = i.id
            AND ${existencePredicate.sql}
-       ) ${cursorSql}
+       ) ${statusSql} ${cursorSql}
        ORDER BY i.last_seen DESC, i.id DESC
        LIMIT ?`,
     )

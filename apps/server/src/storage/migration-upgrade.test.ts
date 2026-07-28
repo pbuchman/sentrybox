@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listIssues } from "../api/read-model.js";
+import { parseFilters } from "../api/query.js";
 import { openDatabase, type ErrorHubDatabase } from "./database.js";
 import { migrateDatabase } from "./migrate.js";
 import { OutboxRepository } from "./outbox-repository.js";
@@ -259,40 +261,63 @@ function expectPrivateApiPlans(database: ErrorHubDatabase): void {
   for (const shape of [
     {
       index: "idx_issues_last_seen",
-      predicate: "",
-      parameters: [] as string[],
+      status: [] as string[],
+      parameters: [26] as unknown[],
     },
     {
       index: "idx_issues_status_last_seen",
-      predicate: "AND i.status IN (?)",
-      parameters: ["unresolved"],
+      status: ["unresolved"],
+      parameters: ["unresolved", 26],
     },
     {
       index: "idx_issues_last_seen",
-      predicate: "",
-      parameters: [] as string[],
+      status: ["unresolved", "resolved"],
+      parameters: [26] as unknown[],
     },
   ]) {
-    const issuePlan = database
-      .prepare(
-        `EXPLAIN QUERY PLAN
-         SELECT i.id,
-                (SELECT COUNT(*)
-                 FROM events AS count_event
-                 WHERE count_event.issue_id = i.id) AS matching_count
-         FROM issues AS i INDEXED BY ${shape.index}
-         WHERE EXISTS (
-           SELECT 1 FROM events AS matching_event
-           WHERE matching_event.issue_id = i.id
-         ) ${shape.predicate}
-         ORDER BY i.last_seen DESC, i.id DESC
-         LIMIT ?`,
-      )
-      .all(...shape.parameters, 25) as { detail: string }[];
-    const issuePlanText = issuePlan.map((step) => step.detail).join("\n");
-    expect(issuePlanText).toContain(`USING COVERING INDEX ${shape.index}`);
+    const productionQuery = captureProductionIssueList(database, shape.status);
+    expect(productionQuery.parameters).toEqual(shape.parameters);
+    if (shape.status.length === 1) {
+      expect(productionQuery.sql).toMatch(
+        /\)\s+AND i\.status = \?\s+ORDER BY i\.last_seen DESC/u,
+      );
+    }
+    const issuePlanText = productionQuery.plan
+      .map((step) => step.detail)
+      .join("\n");
+    expect(issuePlanText).toContain(`USING INDEX ${shape.index}`);
     expect(issuePlanText).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/u);
   }
+}
+
+function captureProductionIssueList(
+  database: ErrorHubDatabase,
+  status: readonly string[],
+): {
+  readonly sql: string;
+  readonly parameters: readonly unknown[];
+  readonly plan: { readonly detail: string }[];
+} {
+  let capturedSql: string | null = null;
+  let capturedParameters: readonly unknown[] = [];
+  const capturingDatabase = {
+    prepare(sql: string) {
+      const statement = database.prepare(sql);
+      return {
+        all(...parameters: unknown[]) {
+          capturedSql = sql;
+          capturedParameters = parameters;
+          return statement.all(...parameters);
+        },
+      };
+    },
+  } as unknown as ErrorHubDatabase;
+  listIssues(capturingDatabase, parseFilters({ status }), 25, null);
+  if (capturedSql === null) throw new Error("issue list SQL was not captured");
+  const plan = database
+    .prepare(`EXPLAIN QUERY PLAN ${capturedSql}`)
+    .all(...capturedParameters) as { detail: string }[];
+  return { sql: capturedSql, parameters: capturedParameters, plan };
 }
 
 function insertV1Rows(database: ErrorHubDatabase): void {

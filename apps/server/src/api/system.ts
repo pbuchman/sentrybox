@@ -34,9 +34,9 @@ export function registerSystemRoutes(
   app.post<DeliveryParams>(
     "/api/webhook-deliveries/:id/retry",
     async (request, reply) => {
+      const outboxId = positiveId(request.params.id, "delivery id");
       if (options.secrets === undefined)
         throw conflict("Webhook secrets are unavailable");
-      const outboxId = positiveId(request.params.id, "delivery id");
       const deliveryId = options.createDeliveryId();
       const requestedAt = canonicalNow(options.now);
       try {

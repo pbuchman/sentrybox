@@ -269,6 +269,57 @@ describe("pinned official Sentry MCP compatibility", () => {
     }
   });
 
+  it("terminates the spawned MCP child when client initialization fails", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "error-hub-mcp-failure-"));
+    const reportPath = join(directory, "denied.ndjson");
+    writeFileSync(reportPath, "", "utf8");
+    const transport = new PidCapturingStdioClientTransport({
+      command: process.execPath,
+      args: [
+        "--import",
+        networkGuardFixture(),
+        sentryMcpBinary(),
+        "--host=127.0.0.1:8",
+        "--insecure-http",
+        "--access-token=syntactic-token",
+        "--skills=inspect",
+        "--disable-skills=seer",
+      ],
+      env: minimalChildEnvironment("127.0.0.1:8", reportPath),
+      stderr: "pipe",
+    });
+    const childClosed = transportClosePromise(transport);
+    const client = new Client({
+      name: "error-hub-failed-initialization",
+      version: "1.0.0",
+    });
+    let processExited = false;
+    let closeObserved = false;
+    try {
+      await expect(
+        client.connect(transport, {
+          signal: AbortSignal.abort(new Error("forced initialization failure")),
+        }),
+      ).rejects.toThrow("forced initialization failure");
+      expect(transport.spawnedPid).toBeTypeOf("number");
+    } finally {
+      await client.close().catch(() => undefined);
+      await transport.close().catch(() => undefined);
+      closeObserved = await promiseSettledWithin(childClosed, 2_000);
+      processExited = await capturedProcessExited(transport.spawnedPid);
+      if (!processExited && transport.spawnedPid !== null) {
+        terminateProcess(transport.spawnedPid);
+        await waitForProcessExit(transport.spawnedPid);
+      }
+      const deniedAttempts = readNetworkReport(reportPath);
+      rmSync(directory, { force: true, recursive: true });
+      expect(closeObserved).toBe(true);
+      expect(processExited).toBe(true);
+      expect(transport.pid).toBeNull();
+      expect(deniedAttempts).toEqual([]);
+    }
+  }, 30_000);
+
   it("runs get_issue_details and search_issue_events through execute_sentry_tool without external services", async () => {
     const restoreEnvironment = poisonAmbientMcpEnvironment();
     const directory = mkdtempSync(join(tmpdir(), "error-hub-mcp-probe-"));
@@ -282,7 +333,8 @@ describe("pinned official Sentry MCP compatibility", () => {
     let database: ErrorHubDatabase | null = null;
     let app: ReturnType<typeof createPrivateApp> | null = null;
     let client: Client | null = null;
-    let transport: StdioClientTransport | null = null;
+    let transport: PidCapturingStdioClientTransport | null = null;
+    let childClosed: Promise<void> | null = null;
     let childPid: number | null = null;
     try {
       const port = await reservePort();
@@ -308,7 +360,7 @@ describe("pinned official Sentry MCP compatibility", () => {
         });
       });
       await activeApp.listen({ host: "127.0.0.1", port });
-      transport = new StdioClientTransport({
+      transport = new PidCapturingStdioClientTransport({
         command: process.execPath,
         args: [
           "--import",
@@ -323,12 +375,13 @@ describe("pinned official Sentry MCP compatibility", () => {
         env: minimalChildEnvironment(host, reportPath),
         stderr: "pipe",
       });
+      childClosed = transportClosePromise(transport);
       client = new Client({
         name: "error-hub-compatibility",
         version: "1.0.0",
       });
       await client.connect(transport);
-      childPid = transport.pid;
+      childPid = transport.spawnedPid;
       expect(childPid).toBeTypeOf("number");
       const tools = await client.listTools();
       const names = tools.tools.map((tool) => tool.name);
@@ -414,8 +467,16 @@ describe("pinned official Sentry MCP compatibility", () => {
     } finally {
       await client?.close().catch(() => undefined);
       await transport?.close().catch(() => undefined);
-      const processExited =
-        childPid === null ? true : await waitForProcessExit(childPid);
+      childPid ??= transport?.spawnedPid ?? null;
+      const closeObserved =
+        childClosed === null
+          ? false
+          : await promiseSettledWithin(childClosed, 2_000);
+      const processExited = await capturedProcessExited(childPid);
+      if (!processExited && childPid !== null) {
+        terminateProcess(childPid);
+        await waitForProcessExit(childPid);
+      }
       const transportPid = transport?.pid ?? null;
       const deniedAttempts = readNetworkReport(reportPath);
       try {
@@ -428,12 +489,25 @@ describe("pinned official Sentry MCP compatibility", () => {
           rmSync(directory, { force: true, recursive: true });
         }
       }
+      expect(childPid).toBeTypeOf("number");
+      expect(closeObserved).toBe(true);
       expect(processExited).toBe(true);
       expect(transportPid).toBeNull();
       expect(deniedAttempts).toEqual([]);
     }
   }, 30_000);
 });
+
+class PidCapturingStdioClientTransport extends StdioClientTransport {
+  public spawnedPid: number | null = null;
+
+  public override async start(): Promise<void> {
+    await super.start();
+    const pid = this.pid;
+    if (pid === null) throw new Error("MCP child PID unavailable after spawn");
+    this.spawnedPid = pid;
+  }
+}
 
 function seedEvidence(database: ErrorHubDatabase): number {
   const projects = new ProjectRepository(database);
@@ -629,6 +703,47 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return !processRunning(pid);
+}
+
+async function capturedProcessExited(pid: number | null): Promise<boolean> {
+  return pid === null ? false : waitForProcessExit(pid);
+}
+
+function transportClosePromise(transport: StdioClientTransport): Promise<void> {
+  return new Promise((resolve) => {
+    transport.onclose = resolve;
+  });
+}
+
+async function promiseSettledWithin(
+  promise: Promise<void>,
+  milliseconds: number,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function terminateProcess(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if (
+      typeof error !== "object" ||
+      error === null ||
+      (error as { code?: unknown }).code !== "ESRCH"
+    ) {
+      throw error;
+    }
+  }
 }
 
 function processRunning(pid: number): boolean {
