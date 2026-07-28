@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS webhook_outbox (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 9007199254740991),
   next_attempt TEXT,
   last_error TEXT,
+  dispatch_lease_id TEXT,
+  dispatch_lease_until TEXT,
   created_at TEXT NOT NULL,
   delivered_at TEXT,
   UNIQUE (issue_id, generation),
@@ -161,6 +163,14 @@ CREATE TABLE IF NOT EXISTS webhook_outbox (
     (state IN ('pending', 'retry') AND next_attempt IS NOT NULL AND delivered_at IS NULL) OR
     (state = 'delivered' AND next_attempt IS NULL AND delivered_at IS NOT NULL) OR
     (state IN ('dead_letter', 'suppressed') AND next_attempt IS NULL AND delivered_at IS NULL)
+  ),
+  CHECK (
+    (dispatch_lease_id IS NULL AND dispatch_lease_until IS NULL) OR
+    (
+      dispatch_lease_id IS NOT NULL AND length(dispatch_lease_id) > 0 AND
+      dispatch_lease_until IS NOT NULL AND
+      state IN ('pending', 'retry')
+    )
   )
 ) STRICT;
 

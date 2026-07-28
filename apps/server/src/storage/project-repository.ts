@@ -126,6 +126,43 @@ export class ProjectRepository {
       );
   }
 
+  public enableWebhookDestination(input: {
+    readonly projectId: number;
+    readonly environment: string;
+    readonly targetUrl: string;
+    readonly secretRef: string;
+    readonly enabledAt: string;
+  }): void {
+    assertPositiveInteger(input.projectId, "project id");
+    assertNonEmpty(input.environment, "ingest environment");
+    assertNonEmpty(input.targetUrl, "webhook target URL");
+    assertNonEmpty(input.secretRef, "webhook secret reference");
+    assertTimestamp(input.enabledAt, "webhook enabled timestamp");
+    const result = this.database
+      .prepare(
+        `UPDATE project_ingest_keys
+         SET webhook_mode = 'live', webhook_target_url = ?,
+             webhook_secret_ref = ?,
+             enabled_at = CASE
+               WHEN webhook_mode = 'disabled' THEN ?
+               ELSE enabled_at
+             END,
+             updated_at = ?
+         WHERE project_id = ? AND environment = ?`,
+      )
+      .run(
+        input.targetUrl,
+        input.secretRef,
+        input.enabledAt,
+        input.enabledAt,
+        input.projectId,
+        input.environment,
+      );
+    if (result.changes !== 1) {
+      throw new Error("ingest key does not exist for webhook destination");
+    }
+  }
+
   /**
    * Looks up all keys for the trusted numeric project and compares every hash.
    * The loop deliberately does not short-circuit on a match.
