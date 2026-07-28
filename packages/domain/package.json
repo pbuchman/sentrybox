@@ -9,6 +9,9 @@
   "dependencies": {
     "@intexura-error-hub/protocol": "workspace:*"
   },
+  "devDependencies": {
+    "@types/node": "22.20.1"
+  },
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build packages/domain/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint packages/domain",

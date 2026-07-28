@@ -9,6 +9,12 @@
   "dependencies": {
     "zod": "4.4.3"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint packages/protocol",

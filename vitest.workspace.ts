@@ -18,7 +18,10 @@ export default defineConfig({
       {
         test: {
           name: "@intexura-error-hub/domain",
-          include: ["packages/domain/test/**/*.test.ts"],
+          include: [
+            "packages/domain/src/**/*.test.ts",
+            "packages/domain/test/**/*.test.ts",
+          ],
         },
       },
       {
