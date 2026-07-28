@@ -281,6 +281,104 @@ describe("fingerprintEvent", () => {
     expect(payments.digest).not.toBe(orders.digest);
   });
 
+  it("normalizes the same source file across absolute build roots", () => {
+    const appRoot = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "/app/src/orders/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const srvRoot = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "/srv/src/orders/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(appRoot.digest).toBe(srvRoot.digest);
+  });
+
+  it("retains deep unanchored absolute paths instead of collapsing them", () => {
+    const firstPath = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "/build-a/feature/payments/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const secondPath = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "/build-b/feature/payments/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(firstPath.digest).not.toBe(secondPath.digest);
+  });
+
   it("normalizes volatile warning-template identifiers while preserving semantic numbers", () => {
     const first = fingerprintEvent({
       logger: "worker",

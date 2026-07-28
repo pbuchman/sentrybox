@@ -188,14 +188,15 @@ function normalizeFilename(value: string): string {
   const isAbsolute =
     withoutScheme.startsWith("/") || /^[a-z]:\//iu.test(withoutScheme);
   const segments = withoutScheme.split("/").filter(Boolean);
-  const stablePathIndex = segments.findIndex((segment) =>
-    ["app", "apps", "lib", "packages", "src"].includes(segment),
+  const stablePathIndex = segments.findLastIndex(
+    (segment, index) =>
+      index > 0 && ["app", "apps", "lib", "packages", "src"].includes(segment),
   );
   const filename = !isAbsolute
     ? withoutScheme
     : stablePathIndex >= 0
       ? segments.slice(stablePathIndex).join("/")
-      : segments.slice(-2).join("/");
+      : withoutScheme;
   return normalizeMessageTemplate(filename);
 }
 
