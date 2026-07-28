@@ -54,6 +54,7 @@ export class WebhookDispatcher {
   readonly #leaseMs: number;
   readonly #batchSize: number;
   readonly #createLeaseId: () => string;
+  #automaticGetsOddSlot = true;
 
   public constructor(options: WebhookDispatcherOptions) {
     this.#outbox = options.outbox;
@@ -75,23 +76,49 @@ export class WebhookDispatcher {
   }
 
   public async dispatchDue(): Promise<DispatchSummary> {
+    const maintainedAt = canonicalDate(this.#now(), "maintenance timestamp");
+    const maintained = this.#outbox.maintainDue(
+      maintainedAt.toISOString(),
+      this.#batchSize,
+    );
+    const remaining = this.#batchSize - maintained;
+    if (remaining === 0) return emptySummary();
+
     const claimedAt = canonicalDate(this.#now(), "dispatch timestamp");
     const leaseId = nonEmpty(this.#createLeaseId(), "lease id");
     const leaseUntil = new Date(
       claimedAt.getTime() + this.#leaseMs,
     ).toISOString();
-    const rows = this.#outbox.claimDue(
-      claimedAt.toISOString(),
-      leaseUntil,
-      leaseId,
-      this.#batchSize,
-    );
-    const redrives = this.#outbox.claimPendingRedrives(
-      claimedAt.toISOString(),
-      leaseUntil,
-      leaseId,
-      this.#batchSize,
-    );
+    const claimTimestamp = claimedAt.toISOString();
+    const automaticGetsOddSlot = this.#automaticGetsOddSlot;
+    this.#automaticGetsOddSlot = !this.#automaticGetsOddSlot;
+    const automaticBudget = automaticGetsOddSlot
+      ? Math.ceil(remaining / 2)
+      : Math.floor(remaining / 2);
+    const redriveBudget = remaining - automaticBudget;
+    const rows = [
+      ...this.claimAutomatic(
+        claimTimestamp,
+        leaseUntil,
+        leaseId,
+        automaticBudget,
+      ),
+    ];
+    const redrives = [
+      ...this.claimRedrives(claimTimestamp, leaseUntil, leaseId, redriveBudget),
+    ];
+    const unused = remaining - rows.length - redrives.length;
+    if (unused > 0) {
+      if (rows.length < automaticBudget) {
+        redrives.push(
+          ...this.claimRedrives(claimTimestamp, leaseUntil, leaseId, unused),
+        );
+      } else if (redrives.length < redriveBudget) {
+        rows.push(
+          ...this.claimAutomatic(claimTimestamp, leaseUntil, leaseId, unused),
+        );
+      }
+    }
     const summary = {
       claimed: rows.length + redrives.length,
       delivered: 0,
@@ -109,6 +136,33 @@ export class WebhookDispatcher {
       else summary.deadLettered += 1;
     }
     return summary;
+  }
+
+  private claimAutomatic(
+    claimedAt: string,
+    leaseUntil: string,
+    leaseId: string,
+    limit: number,
+  ): readonly StoredOutboxRow[] {
+    return limit === 0
+      ? []
+      : this.#outbox.claimDue(claimedAt, leaseUntil, leaseId, limit);
+  }
+
+  private claimRedrives(
+    claimedAt: string,
+    leaseUntil: string,
+    leaseId: string,
+    limit: number,
+  ): readonly ClaimedWebhookRedrive[] {
+    return limit === 0
+      ? []
+      : this.#outbox.claimPendingRedrives(
+          claimedAt,
+          leaseUntil,
+          leaseId,
+          limit,
+        );
   }
 
   private async deliverRedrive(
@@ -314,4 +368,13 @@ function positiveInteger(value: number, field: string): number {
 function nonEmpty(value: string, field: string): string {
   if (value.length === 0) throw new TypeError(`${field} must not be empty`);
   return value;
+}
+
+function emptySummary(): DispatchSummary {
+  return {
+    claimed: 0,
+    delivered: 0,
+    retried: 0,
+    deadLettered: 0,
+  };
 }

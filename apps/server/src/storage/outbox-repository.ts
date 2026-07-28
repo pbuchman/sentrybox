@@ -207,9 +207,71 @@ export class OutboxRepository {
   }
 
   /**
-   * Atomically leases due work. A crashed process leaves the row retryable as
-   * soon as the bounded lease expires, while concurrent dispatcher ticks cannot
-   * observe the same row.
+   * Terminalizes due rows that can never be sent automatically. The caller's
+   * limit is a maintenance budget, so a long outage cannot turn one dispatcher
+   * tick into an unbounded write transaction.
+   */
+  public maintainDue(maintainedAt: string, limit: number): number {
+    const canonicalMaintainedAt = timestamp(
+      maintainedAt,
+      "maintenance timestamp",
+    );
+    positiveInteger(limit, "maintenance limit");
+    return this.database
+      .transaction(() => {
+        const cutoff = new Date(
+          Date.parse(canonicalMaintainedAt) - 7 * 24 * 60 * 60_000,
+        ).toISOString();
+        const candidates = this.database
+          .prepare(
+            `SELECT id,
+                    CASE WHEN created_at < ?
+                      THEN 'automatic retry window expired'
+                      ELSE 'delivery attempt limit exhausted'
+                    END AS error
+             FROM webhook_outbox
+             WHERE state IN ('pending', 'retry')
+               AND next_attempt <= ?
+               AND (created_at < ? OR attempts >= 9007199254740991)
+               AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)
+             ORDER BY next_attempt, id
+             LIMIT ?`,
+          )
+          .all(
+            cutoff,
+            canonicalMaintainedAt,
+            cutoff,
+            canonicalMaintainedAt,
+            limit,
+          ) as { id: number; error: string }[];
+        const terminalize = this.database.prepare(
+          `UPDATE webhook_outbox
+           SET state = 'dead_letter', next_attempt = NULL, last_error = ?,
+               dispatch_lease_id = NULL, dispatch_lease_until = NULL
+           WHERE id = ? AND state IN ('pending', 'retry')
+             AND next_attempt <= ?
+             AND (created_at < ? OR attempts >= 9007199254740991)
+             AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
+        );
+        let maintained = 0;
+        for (const candidate of candidates) {
+          maintained += terminalize.run(
+            candidate.error,
+            candidate.id,
+            canonicalMaintainedAt,
+            cutoff,
+            canonicalMaintainedAt,
+          ).changes;
+        }
+        return maintained;
+      })
+      .immediate();
+  }
+
+  /**
+   * Atomically leases deliverable due work. A crashed process leaves the row
+   * retryable as soon as the bounded lease expires, while concurrent dispatcher
+   * ticks cannot observe the same row.
    */
   public claimDue(
     claimedAt: string,
@@ -229,39 +291,18 @@ export class OutboxRepository {
         const cutoff = new Date(
           Date.parse(canonicalClaimedAt) - 7 * 24 * 60 * 60_000,
         ).toISOString();
-        this.database
-          .prepare(
-            `UPDATE webhook_outbox
-             SET state = 'dead_letter', next_attempt = NULL,
-                 last_error = 'automatic retry window expired',
-                 dispatch_lease_id = NULL, dispatch_lease_until = NULL
-             WHERE state IN ('pending', 'retry')
-               AND next_attempt <= ? AND created_at < ?
-               AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
-          )
-          .run(canonicalClaimedAt, cutoff, canonicalClaimedAt);
-        this.database
-          .prepare(
-            `UPDATE webhook_outbox
-             SET state = 'dead_letter', next_attempt = NULL,
-                 last_error = 'delivery attempt limit exhausted',
-                 dispatch_lease_id = NULL, dispatch_lease_until = NULL
-             WHERE state IN ('pending', 'retry')
-               AND next_attempt <= ? AND attempts >= 9007199254740991
-               AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
-          )
-          .run(canonicalClaimedAt, canonicalClaimedAt);
         const candidates = this.database
           .prepare(
             `SELECT id
              FROM webhook_outbox
              WHERE state IN ('pending', 'retry')
                AND next_attempt <= ?
+               AND created_at >= ? AND attempts < 9007199254740991
                AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)
              ORDER BY next_attempt, id
              LIMIT ?`,
           )
-          .all(canonicalClaimedAt, canonicalClaimedAt, limit) as {
+          .all(canonicalClaimedAt, cutoff, canonicalClaimedAt, limit) as {
           id: number;
         }[];
         if (candidates.length === 0) return [];
@@ -270,6 +311,7 @@ export class OutboxRepository {
            SET dispatch_lease_id = ?, dispatch_lease_until = ?
            WHERE id = ? AND state IN ('pending', 'retry')
              AND next_attempt <= ?
+             AND created_at >= ? AND attempts < 9007199254740991
              AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
         );
         const claimed: StoredOutboxRow[] = [];
@@ -279,6 +321,7 @@ export class OutboxRepository {
             canonicalLeaseUntil,
             candidate.id,
             canonicalClaimedAt,
+            cutoff,
             canonicalClaimedAt,
           );
           if (result.changes !== 1) continue;

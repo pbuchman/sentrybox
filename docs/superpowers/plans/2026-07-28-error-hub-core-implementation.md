@@ -268,7 +268,7 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 
 - [ ] Write failing query-builder tests for exact trace/request/task IDs, service/environment/time fallback, escaped LogQL values, browser-only events, and the ±2 minute boundary.
 - [ ] Return a typed correlation result with `confidence: "exact_identifier" | "time_message_fallback" | "not_applicable"`; the UI must never label fallback as exact.
-- [ ] Write failing retention tests using a tiny injected budget for 30-day expiry, 4 GiB/3.6 GiB logical thresholds, the 4.75 GiB physical stop, bounded batches, retained count/first-last/facet recomputation, orphan issue cleanup, outbox cleanup, checkpoint, and incremental vacuum.
+- [ ] Write failing retention tests using a tiny injected budget for 30-day expiry, 4 GiB/3.6 GiB logical thresholds, the 4.75 GiB physical stop, bounded batches, retained count/first-last/facet recomputation, orphan issue cleanup, outbox cleanup, terminal `webhook_redrives` cleanup independent of the original outbox state, checkpoint, and incremental vacuum.
 - [ ] Make ingest readiness depend on the storage safety state; retention failures must not silently delete newer data or fill the filesystem.
 - [ ] Expose private health and Prometheus data for accepted/discarded/rejected events, parse latency, issue grouping, database bytes, oldest event, retention runs, and outbox states.
 - [ ] Run `pnpm --filter @intexura-error-hub/server test -- retention logs health`; expect deterministic behavior without inspecting the developer machine disk.

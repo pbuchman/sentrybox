@@ -283,6 +283,183 @@ describe("webhook lifecycle and dispatch", () => {
     });
   });
 
+  it("bounds stale maintenance by the per-tick batch budget without sending", async () => {
+    setKey("live");
+    for (let index = 1; index <= 7; index += 1) {
+      record(`stale-${String(index)}`, {
+        ...FINGERPRINT,
+        digest: index.toString(16).padStart(64, "0"),
+      });
+    }
+    const send = vi.fn<WebhookHttpClient["send"]>();
+    const dispatcher = new WebhookDispatcher({
+      outbox,
+      http: { send },
+      now: () => new Date("2026-08-04T10:00:00.001Z"),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 3,
+      createLeaseId: () => "bounded-maintenance",
+    });
+
+    await expect(dispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 0,
+      delivered: 0,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      database
+        .prepare(
+          `SELECT state, COUNT(*) AS count
+           FROM webhook_outbox
+           GROUP BY state
+           ORDER BY state`,
+        )
+        .all(),
+    ).toEqual([
+      { state: "dead_letter", count: 3 },
+      { state: "pending", count: 4 },
+    ]);
+  });
+
+  it("starts the delivery lease after bounded maintenance finishes", async () => {
+    setKey("live");
+    record("stale-before-claim", FINGERPRINT);
+    const fresh = record(
+      "fresh-after-maintenance",
+      { ...FINGERPRINT, digest: "2".repeat(64) },
+      {
+        occurredAt: "2026-08-04T10:00:00.000Z",
+        receivedAt: "2026-08-04T10:00:00.000Z",
+      },
+    );
+    const timestamps = [
+      "2026-08-04T10:00:00.001Z",
+      "2026-08-04T10:00:05.000Z",
+      "2026-08-04T10:00:05.000Z",
+    ];
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const dispatcher = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send() {
+          await blocked;
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date(required(timestamps.shift())),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 2,
+      createLeaseId: () => "post-maintenance-lease",
+    });
+
+    const tick = dispatcher.dispatchDue();
+    await vi.waitFor(() =>
+      expect(outbox.getById(required(fresh.outboxId))).toMatchObject({
+        dispatchLeaseId: "post-maintenance-lease",
+        dispatchLeaseUntil: "2026-08-04T10:00:15.000Z",
+      }),
+    );
+    release?.();
+    await expect(tick).resolves.toMatchObject({ claimed: 1, delivered: 1 });
+  });
+
+  it("shares one batch limit fairly between automatic deliveries and redrives", async () => {
+    setKey("live");
+    const automatic = record("automatic-1", FINGERPRINT);
+    record("automatic-2", {
+      ...FINGERPRINT,
+      digest: "3".repeat(64),
+    });
+    const failedOne = record("failed-1", {
+      ...FINGERPRINT,
+      digest: "4".repeat(64),
+    });
+    const failedTwo = record("failed-2", {
+      ...FINGERPRINT,
+      digest: "5".repeat(64),
+    });
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET state = 'dead_letter', next_attempt = NULL, last_error = 'failed'
+         WHERE id IN (?, ?)`,
+      )
+      .run(required(failedOne.outboxId), required(failedTwo.outboxId));
+    outbox.requestRedrive({
+      outboxId: required(failedOne.outboxId),
+      deliveryId: "11111111-1111-4111-8111-111111111111",
+      requestedAt: CREATED_AT,
+      secrets: SECRETS,
+    });
+    outbox.requestRedrive({
+      outboxId: required(failedTwo.outboxId),
+      deliveryId: "22222222-2222-4222-8222-222222222222",
+      requestedAt: CREATED_AT,
+      secrets: SECRETS,
+    });
+    const requests: WebhookHttpRequest[] = [];
+    const dispatcher = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send(request) {
+          requests.push(request);
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date(CREATED_AT),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 1,
+      createLeaseId: () => "shared-batch",
+    });
+
+    await expect(dispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 1,
+      delivered: 1,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(outbox.getById(required(automatic.outboxId))?.state).toBe(
+      "delivered",
+    );
+    expect(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM webhook_redrives WHERE state = 'delivered'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+
+    await expect(dispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 1,
+      delivered: 1,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(requests).toHaveLength(2);
+    expect(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM webhook_outbox WHERE state = 'delivered'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM webhook_redrives WHERE state = 'delivered'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+  });
+
   it("does not let an expired lease completion overwrite a newer claim", () => {
     setKey("live");
     const created = record("stale-lease", FINGERPRINT);
