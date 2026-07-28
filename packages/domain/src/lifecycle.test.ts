@@ -75,4 +75,45 @@ describe("issue lifecycle", () => {
       webhookRequired: true,
     });
   });
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])(
+    "rejects invalid generation %s at every lifecycle decision boundary",
+    (generation) => {
+      const invalidUnresolved = {
+        status: "unresolved" as const,
+        generation,
+        resolvedAt: null,
+      } as UnresolvedIssueSnapshot;
+      const invalidResolved = {
+        status: "resolved" as const,
+        generation,
+        resolvedAt: "2026-07-28T10:00:00.000Z",
+      } as ResolvedIssueSnapshot;
+
+      expect(() => decideOccurrence(invalidUnresolved)).toThrow();
+      expect(() => decideOccurrence(invalidResolved)).toThrow();
+      expect(() =>
+        decideResolve(invalidUnresolved, "2026-07-28T11:00:00.000Z"),
+      ).toThrow();
+      expect(() => decideManualReopen(invalidResolved)).toThrow();
+      expect(() => decideDelete(invalidResolved)).toThrow();
+    },
+  );
+
+  it("rejects regression when incrementing would exceed the safe integer range", () => {
+    const maximumGeneration: ResolvedIssueSnapshot = {
+      status: "resolved",
+      generation: Number.MAX_SAFE_INTEGER,
+      resolvedAt: "2026-07-28T10:00:00.000Z",
+    };
+
+    expect(() => decideOccurrence(maximumGeneration)).toThrow();
+  });
 });

@@ -16,7 +16,9 @@ export function fingerprintEvent(
   const explicitFingerprint = nonDefaultExplicitFingerprint(event.fingerprint);
   const exception = selectedException(event.exception);
   const service =
-    text(event.server_name) ?? text(tag(event.tags, "service")) ?? "";
+    meaningfulText(event.server_name) ??
+    meaningfulText(tag(event.tags, "service")) ??
+    "";
 
   if (explicitFingerprint !== null) {
     return fingerprint(
@@ -104,17 +106,13 @@ function nonDefaultExplicitFingerprint(
   if (!Array.isArray(value)) {
     return null;
   }
-  const values = value.filter(
-    (entry): entry is string => typeof entry === "string",
+  const meaningful = value.filter(
+    (entry): entry is string =>
+      typeof entry === "string" &&
+      entry.trim().length > 0 &&
+      !isSdkDefaultFingerprint(entry),
   );
-  const meaningful = values.filter((entry) => entry.trim().length > 0);
-  if (
-    meaningful.length === 0 ||
-    meaningful.every((entry) => isSdkDefaultFingerprint(entry))
-  ) {
-    return null;
-  }
-  return values;
+  return meaningful.length > 0 ? meaningful : null;
 }
 
 function isSdkDefaultFingerprint(value: string): boolean {
@@ -154,7 +152,7 @@ function applicationFrames(frames: readonly unknown[]): readonly {
   functionName: string;
 }[] {
   return frames
-    .filter((frame) => record(frame).in_app === true)
+    .filter(isRelevantApplicationFrame)
     .slice(-5)
     .map((frame) => {
       const value = record(frame);
@@ -168,15 +166,36 @@ function applicationFrames(frames: readonly unknown[]): readonly {
     });
 }
 
+function isRelevantApplicationFrame(frame: unknown): boolean {
+  const value = record(frame);
+  return value.in_app !== false && !isKnownVendorFrame(value);
+}
+
+function isKnownVendorFrame(value: Readonly<Record<string, unknown>>): boolean {
+  return [value.module, value.filename, value.abs_path, value.package].some(
+    (candidate) =>
+      typeof candidate === "string" &&
+      /(?:^|[/.\\])(?:node_modules|vendor|third_party|external|\.pnpm)(?:[/.\\]|$)/iu.test(
+        candidate,
+      ),
+  );
+}
+
 function normalizeFilename(value: string): string {
   const withoutQuery = value.split(/[?#]/u, 1)[0] ?? "";
   const path = withoutQuery.replaceAll("\\", "/");
   const withoutScheme = path.replace(/^[a-z][a-z\d+.-]*:\/+/iu, "/");
   const isAbsolute =
     withoutScheme.startsWith("/") || /^[a-z]:\//iu.test(withoutScheme);
-  const filename = isAbsolute
-    ? (withoutScheme.split("/").filter(Boolean).at(-1) ?? "")
-    : withoutScheme;
+  const segments = withoutScheme.split("/").filter(Boolean);
+  const stablePathIndex = segments.findIndex((segment) =>
+    ["app", "apps", "lib", "packages", "src"].includes(segment),
+  );
+  const filename = !isAbsolute
+    ? withoutScheme
+    : stablePathIndex >= 0
+      ? segments.slice(stablePathIndex).join("/")
+      : segments.slice(-2).join("/");
   return normalizeMessageTemplate(filename);
 }
 
@@ -192,4 +211,9 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
 
 function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function meaningfulText(value: unknown): string | null {
+  const candidate = text(value)?.trim();
+  return candidate === undefined || candidate.length === 0 ? null : candidate;
 }

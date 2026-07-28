@@ -46,8 +46,14 @@ export function decideOccurrence(
       webhookRequired: true,
     };
   }
+  assertValidGeneration(current);
   if (current.status === "unresolved") {
     return { outcome: "repeated", next: current, webhookRequired: false };
+  }
+  if (current.generation === Number.MAX_SAFE_INTEGER) {
+    throw new RangeError(
+      "issue generation cannot exceed Number.MAX_SAFE_INTEGER",
+    );
   }
   return {
     outcome: "regressed",
@@ -64,6 +70,7 @@ export function decideResolve(
   current: UnresolvedIssueSnapshot,
   resolvedAt: string,
 ): ResolveDecision {
+  assertValidGeneration(current);
   return {
     outcome: "resolved",
     next: { status: "resolved", generation: current.generation, resolvedAt },
@@ -74,6 +81,7 @@ export function decideResolve(
 export function decideManualReopen(
   current: ResolvedIssueSnapshot,
 ): ManualReopenDecision {
+  assertValidGeneration(current);
   return {
     outcome: "manually_reopened",
     next: {
@@ -86,6 +94,12 @@ export function decideManualReopen(
 }
 
 export function decideDelete(current: IssueSnapshot): DeleteDecision {
-  void current;
+  assertValidGeneration(current);
   return { outcome: "deleted", next: null };
+}
+
+function assertValidGeneration(current: IssueSnapshot): void {
+  if (!Number.isSafeInteger(current.generation) || current.generation < 1) {
+    throw new RangeError("issue generation must be a positive safe integer");
+  }
 }
