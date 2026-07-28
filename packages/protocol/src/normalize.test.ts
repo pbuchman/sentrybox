@@ -41,6 +41,22 @@ describe("admitEvent", () => {
 });
 
 describe("normalizeEvent", () => {
+  it.each([
+    [{ formatted: "formatted Sentry message" }, "formatted Sentry message"],
+    [{ message: "fallback Sentry message" }, "fallback Sentry message"],
+    ["plain Sentry message", "plain Sentry message"],
+  ])("retains %o as the bounded message and title", (message, expected) => {
+    const result = normalizeEvent(
+      { event_id: "structured-message", level: "error", message },
+      "2026-07-28T12:01:00.000Z",
+    );
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: { message: expected, title: expected },
+    });
+  });
+
   it("uses the documented correlation precedence and preserves the selected source alias", () => {
     const result = normalizeEvent(
       {
@@ -280,6 +296,44 @@ describe("normalizeEvent", () => {
     expect(serialized).not.toContain("password");
     expect(serialized).not.toContain("hidden");
     expect(serialized).toContain("page=2");
+  });
+
+  it("retains canonical mixed-case diagnostic request headers", () => {
+    const result = normalizeEvent(
+      {
+        event_id: "header-casing",
+        level: "error",
+        contexts: {
+          request: {
+            headers: {
+              "User-Agent": "Mozilla/5.0",
+              "Content-Type": "application/json",
+              "X-Request-Id": "request-123",
+              Authorization: "Bearer should-not-survive",
+            },
+          },
+        },
+      },
+      "2026-07-28T12:01:00.000Z",
+    );
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: {
+        payload: {
+          contexts: {
+            request: {
+              headers: {
+                "user-agent": "Mozilla/5.0",
+                "content-type": "application/json",
+                "x-request-id": "request-123",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("should-not-survive");
   });
 
   it("fails closed for relative and malformed request URLs", () => {

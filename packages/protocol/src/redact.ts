@@ -6,7 +6,11 @@ const SENSITIVE_KEY =
   /(?:auth(?:entication|orization)?|cookie|credential|secret|password|token|api[_-]?key|request[_-]?body|body|content|access[_-]?key)/i;
 const AUTH_HEADER =
   /\b(?:authorization|authentication|auth)\s*[:=]\s*[^\r\n]*/gi;
-const AUTH_SCHEME = /\b(?:bearer|basic|digest)\b[^\r\n]*/gi;
+const BEARER_TOKEN = /\bbearer\s+[^\s,;]+/gi;
+const BASIC_CREDENTIAL =
+  /\bbasic\s+(?=[A-Z0-9+/=]*[=+/0-9])[A-Z0-9+/]{8,}={0,2}(?=$|[\s,;])/gi;
+const DIGEST_CREDENTIAL =
+  /\bdigest\s+(?=[^\r\n]*(?:username|response|realm)\s*=)[^\r\n]*/gi;
 const API_KEY = /\b(?:sk|pk|api)[_-][a-z0-9_-]{8,}\b/gi;
 const SENTRY_DSN = /https?:\/\/[^\s/@]+@[^\s/]+\/\d+\b/gi;
 const COOKIE = /\b(?:set-cookie|cookie)\s*[:=]\s*[^\r\n]*/gi;
@@ -60,7 +64,9 @@ export function redactWithMetadata(value: unknown, depth = 0): RedactionResult {
 export function redactString(value: string): string {
   return value
     .replace(AUTH_HEADER, REDACTED)
-    .replace(AUTH_SCHEME, REDACTED)
+    .replace(BEARER_TOKEN, REDACTED)
+    .replace(BASIC_CREDENTIAL, REDACTED)
+    .replace(DIGEST_CREDENTIAL, REDACTED)
     .replace(API_KEY, REDACTED)
     .replace(SENTRY_DSN, REDACTED)
     .replace(COOKIE, REDACTED)
@@ -68,7 +74,7 @@ export function redactString(value: string): string {
 }
 
 export function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY.test(key);
+  return key.toLowerCase() !== "content-type" && SENSITIVE_KEY.test(key);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

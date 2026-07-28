@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { redactValue } from "./index.js";
+import { redactString } from "./redact.js";
 
 describe("redactValue", () => {
   it("removes sensitive keys and secret patterns before serialization", () => {
@@ -70,6 +71,23 @@ describe("redactValue", () => {
     expect(Object.getPrototypeOf(result)).toBeNull();
     expect(JSON.stringify(result)).toContain("safe-constructor");
     expect(JSON.stringify(result)).toContain("safe-prototype");
+  });
+
+  it("redacts credential-bearing Basic and Digest schemes without erasing ordinary diagnostics", () => {
+    const basicCredential = "Basic dXNlcjpwYXNzd29yZA==";
+    const digestCredential = "Digest username=alice, response=secret-digest";
+    const serialized = JSON.stringify(
+      redactValue({ basic: basicCredential, digest: digestCredential }),
+    );
+
+    expect(serialized).not.toContain(basicCredential);
+    expect(serialized).not.toContain(digestCredential);
+    expect(redactString("Basic validation failed")).toBe(
+      "Basic validation failed",
+    );
+    expect(redactString("digest calculation failed")).toBe(
+      "digest calculation failed",
+    );
   });
 });
 

@@ -148,12 +148,7 @@ export function normalizeEvent(
   const reasons = new Set<string>();
   const tags = normalizeTags(asRecord(input.tags), reasons);
   const exception = normalizeException(input.exception, reasons);
-  const message = normalizedString(
-    input.message,
-    MAX_MESSAGE_BYTES,
-    "message_bytes",
-    reasons,
-  );
+  const message = normalizeMessage(input.message, reasons);
   const title = bounded(
     normalizedString(input.title, MAX_TITLE_BYTES, "title_bytes", reasons) ??
       message ??
@@ -552,11 +547,13 @@ function sanitizeContexts(
   if (Object.keys(request).length === 0) {
     return contexts;
   }
-  const headers = Object.fromEntries(
-    Object.entries(asRecord(request.headers)).filter(([key]) =>
-      REQUEST_HEADERS.has(key.toLowerCase()),
-    ),
-  );
+  const headers = nullRecord();
+  for (const [key, value] of Object.entries(asRecord(request.headers))) {
+    const canonicalKey = key.toLowerCase();
+    if (REQUEST_HEADERS.has(canonicalKey)) {
+      headers[canonicalKey] = value;
+    }
+  }
   return {
     ...contexts,
     request: {
@@ -682,6 +679,27 @@ function normalizedString(
     reasons.add("recursion_depth");
   }
   return bounded(String(redaction.value), limit, reason, reasons);
+}
+
+function normalizeMessage(value: unknown, reasons: Set<string>): string | null {
+  if (typeof value === "string") {
+    return normalizedString(value, MAX_MESSAGE_BYTES, "message_bytes", reasons);
+  }
+  const message = asRecord(value);
+  return (
+    normalizedString(
+      message.formatted,
+      MAX_MESSAGE_BYTES,
+      "message_bytes",
+      reasons,
+    ) ??
+    normalizedString(
+      message.message,
+      MAX_MESSAGE_BYTES,
+      "message_bytes",
+      reasons,
+    )
+  );
 }
 
 function enforceNormalizedEventLimit(
