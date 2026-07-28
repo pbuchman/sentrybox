@@ -1,0 +1,25 @@
+{
+  "name": "@intexura-error-hub/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0",
+    "@testing-library/react": "16.3.2",
+    "vite": "8.1.5"
+  },
+  "scripts": {
+    "typecheck": "pnpm --dir ../.. exec tsc --build apps/web/tsconfig.json",
+    "lint": "pnpm --dir ../.. exec eslint apps/web",
+    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/web",
+    "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir apps/web/test/integration",
+    "build": "pnpm --dir ../.. exec tsc --build apps/web/tsconfig.json"
+  }
+}

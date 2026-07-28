@@ -1,0 +1,19 @@
+{
+  "name": "@intexura-error-hub/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "scripts": {
+    "typecheck": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json",
+    "lint": "pnpm --dir ../.. exec eslint packages/protocol",
+    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/protocol",
+    "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir packages/protocol/test/integration",
+    "build": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json"
+  }
+}
