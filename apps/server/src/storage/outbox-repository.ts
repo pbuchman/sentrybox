@@ -80,6 +80,17 @@ export interface ClaimedWebhookRedrive extends StoredWebhookRedrive {
   readonly body: Buffer;
 }
 
+export interface DueFrontierCursor {
+  readonly nextAttempt: string;
+  readonly id: number;
+}
+
+export interface PreparedDueFrontier {
+  readonly inspected: number;
+  readonly claimableIds: readonly number[];
+  readonly cursor: DueFrontierCursor | null;
+}
+
 interface OutboxRow {
   id: number;
   delivery_id: string;
@@ -206,44 +217,63 @@ export class OutboxRepository {
     return rows.map(mapRow);
   }
 
-  /**
-   * Terminalizes due rows that can never be sent automatically. The caller's
-   * limit is a maintenance budget, so a long outage cannot turn one dispatcher
-   * tick into an unbounded write transaction.
-   */
-  public maintainDue(maintainedAt: string, limit: number): number {
-    const canonicalMaintainedAt = timestamp(
-      maintainedAt,
-      "maintenance timestamp",
-    );
-    positiveInteger(limit, "maintenance limit");
+  public prepareDue(
+    checkedAt: string,
+    limit: number,
+    after: DueFrontierCursor | null = null,
+  ): PreparedDueFrontier {
+    const canonicalCheckedAt = timestamp(checkedAt, "due check timestamp");
+    positiveInteger(limit, "due frontier limit");
+    const canonicalAfter =
+      after === null
+        ? null
+        : {
+            nextAttempt: timestamp(
+              after.nextAttempt,
+              "due frontier cursor timestamp",
+            ),
+            id: positiveInteger(after.id, "due frontier cursor id"),
+          };
     return this.database
       .transaction(() => {
         const cutoff = new Date(
-          Date.parse(canonicalMaintainedAt) - 7 * 24 * 60 * 60_000,
+          Date.parse(canonicalCheckedAt) - 7 * 24 * 60 * 60_000,
         ).toISOString();
-        const candidates = this.database
-          .prepare(
-            `SELECT id,
-                    CASE WHEN created_at < ?
-                      THEN 'automatic retry window expired'
-                      ELSE 'delivery attempt limit exhausted'
-                    END AS error
-             FROM webhook_outbox
-             WHERE state IN ('pending', 'retry')
-               AND next_attempt <= ?
-               AND (created_at < ? OR attempts >= 9007199254740991)
-               AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)
-             ORDER BY next_attempt, id
-             LIMIT ?`,
-          )
-          .all(
-            cutoff,
-            canonicalMaintainedAt,
-            cutoff,
-            canonicalMaintainedAt,
-            limit,
-          ) as { id: number; error: string }[];
+        const candidates = (
+          canonicalAfter === null
+            ? this.database
+                .prepare(
+                  `SELECT id, next_attempt, created_at, attempts,
+                        dispatch_lease_until
+                 FROM webhook_outbox INDEXED BY idx_webhook_outbox_due_frontier
+                 WHERE state IN ('pending', 'retry') AND next_attempt <= ?
+                 ORDER BY next_attempt, id
+                 LIMIT ?`,
+                )
+                .all(canonicalCheckedAt, limit)
+            : this.database
+                .prepare(
+                  `SELECT id, next_attempt, created_at, attempts,
+                        dispatch_lease_until
+                 FROM webhook_outbox INDEXED BY idx_webhook_outbox_due_frontier
+                 WHERE state IN ('pending', 'retry') AND next_attempt <= ?
+                   AND (next_attempt, id) > (?, ?)
+                 ORDER BY next_attempt, id
+                 LIMIT ?`,
+                )
+                .all(
+                  canonicalCheckedAt,
+                  canonicalAfter.nextAttempt,
+                  canonicalAfter.id,
+                  limit,
+                )
+        ) as {
+          id: number;
+          next_attempt: string;
+          created_at: string;
+          attempts: number;
+          dispatch_lease_until: string | null;
+        }[];
         const terminalize = this.database.prepare(
           `UPDATE webhook_outbox
            SET state = 'dead_letter', next_attempt = NULL, last_error = ?,
@@ -253,17 +283,41 @@ export class OutboxRepository {
              AND (created_at < ? OR attempts >= 9007199254740991)
              AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
         );
-        let maintained = 0;
+        const claimableIds: number[] = [];
         for (const candidate of candidates) {
-          maintained += terminalize.run(
-            candidate.error,
-            candidate.id,
-            canonicalMaintainedAt,
-            cutoff,
-            canonicalMaintainedAt,
-          ).changes;
+          if (
+            candidate.dispatch_lease_until !== null &&
+            candidate.dispatch_lease_until > canonicalCheckedAt
+          ) {
+            continue;
+          }
+          const error =
+            candidate.created_at < cutoff
+              ? "automatic retry window expired"
+              : candidate.attempts >= 9007199254740991
+                ? "delivery attempt limit exhausted"
+                : null;
+          if (error === null) {
+            claimableIds.push(candidate.id);
+          } else {
+            terminalize.run(
+              error,
+              candidate.id,
+              canonicalCheckedAt,
+              cutoff,
+              canonicalCheckedAt,
+            );
+          }
         }
-        return maintained;
+        const last = candidates.at(-1);
+        return {
+          inspected: candidates.length,
+          claimableIds,
+          cursor:
+            last === undefined
+              ? canonicalAfter
+              : { nextAttempt: last.next_attempt, id: last.id },
+        };
       })
       .immediate();
   }
@@ -279,33 +333,38 @@ export class OutboxRepository {
     leaseId: string,
     limit: number,
   ): readonly StoredOutboxRow[] {
+    const prepared = this.prepareDue(claimedAt, limit);
+    return this.claimPrepared(
+      prepared.claimableIds,
+      claimedAt,
+      leaseUntil,
+      leaseId,
+    );
+  }
+
+  public claimPrepared(
+    ids: readonly number[],
+    claimedAt: string,
+    leaseUntil: string,
+    leaseId: string,
+  ): readonly StoredOutboxRow[] {
     const canonicalClaimedAt = timestamp(claimedAt, "claim timestamp");
     const canonicalLeaseUntil = timestamp(leaseUntil, "lease timestamp");
     if (canonicalLeaseUntil <= canonicalClaimedAt) {
       throw new TypeError("lease timestamp must be after claim timestamp");
     }
     nonEmpty(leaseId, "lease id");
-    positiveInteger(limit, "claim limit");
+    if (ids.length === 0) return [];
+    const uniqueIds = new Set(ids);
+    if (uniqueIds.size !== ids.length) {
+      throw new TypeError("prepared claim ids must be unique");
+    }
+    for (const id of ids) positiveInteger(id, "prepared claim id");
     return this.database
       .transaction(() => {
         const cutoff = new Date(
           Date.parse(canonicalClaimedAt) - 7 * 24 * 60 * 60_000,
         ).toISOString();
-        const candidates = this.database
-          .prepare(
-            `SELECT id
-             FROM webhook_outbox
-             WHERE state IN ('pending', 'retry')
-               AND next_attempt <= ?
-               AND created_at >= ? AND attempts < 9007199254740991
-               AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)
-             ORDER BY next_attempt, id
-             LIMIT ?`,
-          )
-          .all(canonicalClaimedAt, cutoff, canonicalClaimedAt, limit) as {
-          id: number;
-        }[];
-        if (candidates.length === 0) return [];
         const claim = this.database.prepare(
           `UPDATE webhook_outbox
            SET dispatch_lease_id = ?, dispatch_lease_until = ?
@@ -315,17 +374,17 @@ export class OutboxRepository {
              AND (dispatch_lease_until IS NULL OR dispatch_lease_until <= ?)`,
         );
         const claimed: StoredOutboxRow[] = [];
-        for (const candidate of candidates) {
+        for (const id of ids) {
           const result = claim.run(
             leaseId,
             canonicalLeaseUntil,
-            candidate.id,
+            id,
             canonicalClaimedAt,
             cutoff,
             canonicalClaimedAt,
           );
           if (result.changes !== 1) continue;
-          const row = this.getById(candidate.id);
+          const row = this.getById(id);
           if (row !== null) claimed.push(row);
         }
         return claimed;

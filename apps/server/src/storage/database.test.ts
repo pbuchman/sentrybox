@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 describe("SQLite database and migrations", () => {
-  it("applies every connection pragma and the initial migration idempotently", () => {
+  it("applies every connection pragma and all migrations idempotently", () => {
     const path = temporaryDatabasePath();
     const first = openDatabase(path);
     openConnections.push(first);
@@ -49,7 +49,7 @@ describe("SQLite database and migrations", () => {
     expect(pragmaScalar(first, "wal_autocheckpoint")).toBe(1_000);
     expect(
       first.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get(),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 3 });
 
     first.close();
     openConnections.pop();
@@ -142,6 +142,7 @@ describe("SQLite database and migrations", () => {
         "idx_issues_project_last_seen",
         "idx_issues_project_status_last_seen",
         "idx_outbox_dispatch",
+        "idx_webhook_outbox_due_frontier",
         "idx_outbox_issue_created",
         "idx_webhook_redrives_dispatch",
         "idx_webhook_redrives_original",

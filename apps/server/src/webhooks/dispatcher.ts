@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   OutboxRepository,
   type ClaimedWebhookRedrive,
+  type DueFrontierCursor,
+  type PreparedDueFrontier,
   type StoredOutboxRow,
 } from "../storage/outbox-repository.js";
 import { createStoredSentryEventAlertHeaders } from "./payload.js";
@@ -46,6 +48,17 @@ export interface DispatchSummary {
   readonly deadLettered: number;
 }
 
+interface LeaseWindow {
+  readonly claimedAt: string;
+  readonly leaseUntil: string;
+  readonly leaseId: string;
+}
+
+interface LeasedAutomatic {
+  readonly row: StoredOutboxRow;
+  readonly leaseId: string;
+}
+
 export class WebhookDispatcher {
   readonly #outbox: OutboxRepository;
   readonly #http: WebhookHttpClient;
@@ -76,46 +89,39 @@ export class WebhookDispatcher {
   }
 
   public async dispatchDue(): Promise<DispatchSummary> {
-    const maintainedAt = canonicalDate(this.#now(), "maintenance timestamp");
-    const maintained = this.#outbox.maintainDue(
-      maintainedAt.toISOString(),
-      this.#batchSize,
-    );
-    const remaining = this.#batchSize - maintained;
-    if (remaining === 0) return emptySummary();
-
-    const claimedAt = canonicalDate(this.#now(), "dispatch timestamp");
-    const leaseId = nonEmpty(this.#createLeaseId(), "lease id");
-    const leaseUntil = new Date(
-      claimedAt.getTime() + this.#leaseMs,
-    ).toISOString();
-    const claimTimestamp = claimedAt.toISOString();
     const automaticGetsOddSlot = this.#automaticGetsOddSlot;
     this.#automaticGetsOddSlot = !this.#automaticGetsOddSlot;
     const automaticBudget = automaticGetsOddSlot
-      ? Math.ceil(remaining / 2)
-      : Math.floor(remaining / 2);
-    const redriveBudget = remaining - automaticBudget;
-    const rows = [
-      ...this.claimAutomatic(
-        claimTimestamp,
-        leaseUntil,
-        leaseId,
-        automaticBudget,
-      ),
-    ];
-    const redrives = [
-      ...this.claimRedrives(claimTimestamp, leaseUntil, leaseId, redriveBudget),
-    ];
-    const unused = remaining - rows.length - redrives.length;
+      ? Math.ceil(this.#batchSize / 2)
+      : Math.floor(this.#batchSize / 2);
+    const redriveBudget = this.#batchSize - automaticBudget;
+    const prepared = this.prepareAutomatic(automaticBudget);
+    const initialLease = this.createLeaseWindow();
+    const rows: LeasedAutomatic[] = this.#outbox
+      .claimPrepared(
+        prepared.claimableIds,
+        initialLease.claimedAt,
+        initialLease.leaseUntil,
+        initialLease.leaseId,
+      )
+      .map((row) => ({ row, leaseId: initialLease.leaseId }));
+    const redrives = [...this.claimRedrives(initialLease, redriveBudget)];
+    const unused = this.#batchSize - prepared.inspected - redrives.length;
     if (unused > 0) {
-      if (rows.length < automaticBudget) {
-        redrives.push(
-          ...this.claimRedrives(claimTimestamp, leaseUntil, leaseId, unused),
-        );
+      if (prepared.inspected < automaticBudget) {
+        redrives.push(...this.claimRedrives(initialLease, unused));
       } else if (redrives.length < redriveBudget) {
+        const extra = this.prepareAutomatic(unused, prepared.cursor);
+        const extraLease = this.createLeaseWindow();
         rows.push(
-          ...this.claimAutomatic(claimTimestamp, leaseUntil, leaseId, unused),
+          ...this.#outbox
+            .claimPrepared(
+              extra.claimableIds,
+              extraLease.claimedAt,
+              extraLease.leaseUntil,
+              extraLease.leaseId,
+            )
+            .map((row) => ({ row, leaseId: extraLease.leaseId })),
         );
       }
     }
@@ -126,8 +132,10 @@ export class WebhookDispatcher {
       deadLettered: 0,
     };
     const results = await Promise.all([
-      ...rows.map(async (row) => this.deliver(row, leaseId)),
-      ...redrives.map(async (redrive) => this.deliverRedrive(redrive, leaseId)),
+      ...rows.map(async ({ row, leaseId }) => this.deliver(row, leaseId)),
+      ...redrives.map(async (redrive) =>
+        this.deliverRedrive(redrive, initialLease.leaseId),
+      ),
     ]);
     for (const result of results) {
       if (result === null) continue;
@@ -138,31 +146,40 @@ export class WebhookDispatcher {
     return summary;
   }
 
-  private claimAutomatic(
-    claimedAt: string,
-    leaseUntil: string,
-    leaseId: string,
+  private prepareAutomatic(
     limit: number,
-  ): readonly StoredOutboxRow[] {
+    after: DueFrontierCursor | null = null,
+  ): PreparedDueFrontier {
     return limit === 0
-      ? []
-      : this.#outbox.claimDue(claimedAt, leaseUntil, leaseId, limit);
+      ? { inspected: 0, claimableIds: [], cursor: after }
+      : this.#outbox.prepareDue(
+          canonicalDate(this.#now(), "maintenance timestamp").toISOString(),
+          limit,
+          after,
+        );
   }
 
   private claimRedrives(
-    claimedAt: string,
-    leaseUntil: string,
-    leaseId: string,
+    lease: LeaseWindow,
     limit: number,
   ): readonly ClaimedWebhookRedrive[] {
     return limit === 0
       ? []
       : this.#outbox.claimPendingRedrives(
-          claimedAt,
-          leaseUntil,
-          leaseId,
+          lease.claimedAt,
+          lease.leaseUntil,
+          lease.leaseId,
           limit,
         );
+  }
+
+  private createLeaseWindow(): LeaseWindow {
+    const claimedAt = canonicalDate(this.#now(), "dispatch timestamp");
+    return {
+      claimedAt: claimedAt.toISOString(),
+      leaseUntil: new Date(claimedAt.getTime() + this.#leaseMs).toISOString(),
+      leaseId: nonEmpty(this.#createLeaseId(), "lease id"),
+    };
   }
 
   private async deliverRedrive(
@@ -368,13 +385,4 @@ function positiveInteger(value: number, field: string): number {
 function nonEmpty(value: string, field: string): string {
   if (value.length === 0) throw new TypeError(`${field} must not be empty`);
   return value;
-}
-
-function emptySummary(): DispatchSummary {
-  return {
-    claimed: 0,
-    delivered: 0,
-    retried: 0,
-    deadLettered: 0,
-  };
 }

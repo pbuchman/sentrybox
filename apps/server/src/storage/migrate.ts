@@ -19,6 +19,11 @@ const MIGRATIONS: readonly Migration[] = [
     name: "002_webhook_delivery",
     url: new URL("./migrations/002_webhook_delivery.sql", import.meta.url),
   },
+  {
+    version: 3,
+    name: "003_due_frontier",
+    url: new URL("./migrations/003_due_frontier.sql", import.meta.url),
+  },
 ];
 
 export function migrateDatabase(

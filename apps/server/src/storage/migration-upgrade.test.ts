@@ -10,6 +10,8 @@ import { WebhookDispatcher } from "../webhooks/dispatcher.js";
 
 const ORIGINAL_001_SHA256 =
   "a24c930f9028bf0aa20b62e6e03edf2f4d0f502d422d8ee0643fe2781230b1e3";
+const ORIGINAL_002_SHA256 =
+  "13f0e90064b78ef7727d139869f0bace45e54c499cee94c0c2bfbc9c7a4debb9";
 const APPLIED_AT = "2026-07-28T10:00:00.000Z";
 const directories: string[] = [];
 const databases: ErrorHubDatabase[] = [];
@@ -32,7 +34,7 @@ describe("ordered database migration upgrade", () => {
     );
   });
 
-  it("upgrades a populated v1 database to v2 without changing historical rows", async () => {
+  it("upgrades a populated v1 database through v3 without changing historical rows", async () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v1-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -54,7 +56,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:05:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(2);
+    expect(database.pragma("user_version", { simple: true })).toBe(3);
     expect(
       database
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -62,6 +64,7 @@ describe("ordered database migration upgrade", () => {
     ).toEqual([
       { version: 1, name: "001_initial" },
       { version: 2, name: "002_webhook_delivery" },
+      { version: 3, name: "003_due_frontier" },
     ]);
     expect(historicalRows(database)).toEqual(before);
     const outbox = new OutboxRepository(database);
@@ -122,7 +125,66 @@ describe("ordered database migration upgrade", () => {
     expect(() => migrateDatabase(database, "2026-07-28T10:06:00.000Z")).toThrow(
       /002_webhook_delivery checksum/u,
     );
-    expect(database.pragma("user_version", { simple: true })).toBe(2);
+    expect(database.pragma("user_version", { simple: true })).toBe(3);
+  });
+
+  it("upgrades populated v2 to v3 with an indexed bounded due frontier", () => {
+    const directory = mkdtempSync(join(tmpdir(), "error-hub-v2-upgrade-"));
+    directories.push(directory);
+    const database = openDatabase(join(directory, "error-hub.sqlite"));
+    databases.push(database);
+    const initialSql = readFileSync(
+      new URL("./migrations/001_initial.sql", import.meta.url),
+      "utf8",
+    );
+    const webhookDeliverySql = readFileSync(
+      new URL("./migrations/002_webhook_delivery.sql", import.meta.url),
+      "utf8",
+    );
+    database.exec(initialSql);
+    insertV1Rows(database);
+    database.exec(webhookDeliverySql);
+    database
+      .prepare(
+        `INSERT INTO schema_migrations(version, name, checksum, applied_at)
+         VALUES (1, '001_initial', ?, ?),
+                (2, '002_webhook_delivery', ?, ?)`,
+      )
+      .run(ORIGINAL_001_SHA256, APPLIED_AT, ORIGINAL_002_SHA256, APPLIED_AT);
+    database.pragma("user_version = 2");
+    const before = database
+      .prepare("SELECT * FROM webhook_outbox ORDER BY id")
+      .all();
+
+    migrateDatabase(database, "2026-07-28T10:07:00.000Z");
+
+    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(
+      database
+        .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([
+      { version: 1, name: "001_initial" },
+      { version: 2, name: "002_webhook_delivery" },
+      { version: 3, name: "003_due_frontier" },
+    ]);
+    expect(
+      database.prepare("SELECT * FROM webhook_outbox ORDER BY id").all(),
+    ).toEqual(before);
+    const plan = database
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id, next_attempt, created_at, attempts,
+                dispatch_lease_until
+         FROM webhook_outbox INDEXED BY idx_webhook_outbox_due_frontier
+         WHERE state IN ('pending', 'retry') AND next_attempt <= ?
+         ORDER BY next_attempt, id
+         LIMIT ?`,
+      )
+      .all(APPLIED_AT, 25) as { detail: string }[];
+    expect(plan.map((step) => step.detail).join("\n")).toMatch(
+      /SEARCH webhook_outbox USING INDEX idx_webhook_outbox_due_frontier \(next_attempt<\?\)/u,
+    );
   });
 });
 

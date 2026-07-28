@@ -324,6 +324,122 @@ describe("webhook lifecycle and dispatch", () => {
     ]);
   });
 
+  it("dispatches a bounded batch from a large all-normal due backlog", async () => {
+    setKey("live");
+    for (let index = 1; index <= 100; index += 1) {
+      record(
+        `normal-backlog-${String(index)}`,
+        {
+          ...FINGERPRINT,
+          digest: (index + 100).toString(16).padStart(64, "0"),
+        },
+        {
+          occurredAt: "2026-08-04T09:00:00.000Z",
+          receivedAt: "2026-08-04T09:00:00.000Z",
+        },
+      );
+    }
+    const dispatcher = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send() {
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date("2026-08-04T10:00:00.000Z"),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 3,
+      createLeaseId: () => "normal-frontier",
+    });
+
+    await expect(dispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 3,
+      delivered: 3,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM webhook_outbox WHERE state = 'pending'",
+        )
+        .get(),
+    ).toEqual({ count: 97 });
+  });
+
+  it("sends normal due prefix rows without scanning ahead to invalid work", async () => {
+    setKey("live");
+    const normalIds: number[] = [];
+    for (let index = 1; index <= 5; index += 1) {
+      normalIds.push(
+        required(
+          record(
+            `normal-prefix-${String(index)}`,
+            {
+              ...FINGERPRINT,
+              digest: (index + 300).toString(16).padStart(64, "0"),
+            },
+            {
+              occurredAt: "2026-08-04T09:00:00.000Z",
+              receivedAt: "2026-08-04T09:00:00.000Z",
+            },
+          ).outboxId,
+        ),
+      );
+    }
+    const staleIds: number[] = [];
+    for (let index = 1; index <= 3; index += 1) {
+      staleIds.push(
+        required(
+          record(`invalid-after-prefix-${String(index)}`, {
+            ...FINGERPRINT,
+            digest: (index + 400).toString(16).padStart(64, "0"),
+          }).outboxId,
+        ),
+      );
+    }
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET next_attempt = '2026-08-04T09:30:00.000Z'
+         WHERE id IN (?, ?, ?)`,
+      )
+      .run(...staleIds);
+    const dispatcher = new WebhookDispatcher({
+      outbox,
+      http: {
+        async send() {
+          return { statusCode: 204 };
+        },
+      },
+      now: () => new Date("2026-08-04T10:00:00.001Z"),
+      requestTimeoutMs: 2_000,
+      leaseMs: 10_000,
+      batchSize: 3,
+      createLeaseId: () => "mixed-frontier",
+    });
+
+    await expect(dispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 3,
+      delivered: 3,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(normalIds.map((id) => outbox.getById(id)?.state)).toEqual([
+      "delivered",
+      "delivered",
+      "delivered",
+      "pending",
+      "pending",
+    ]);
+    expect(staleIds.map((id) => outbox.getById(id)?.state)).toEqual([
+      "pending",
+      "pending",
+      "pending",
+    ]);
+  });
+
   it("starts the delivery lease after bounded maintenance finishes", async () => {
     setKey("live");
     record("stale-before-claim", FINGERPRINT);
@@ -337,6 +453,8 @@ describe("webhook lifecycle and dispatch", () => {
     );
     const timestamps = [
       "2026-08-04T10:00:00.001Z",
+      "2026-08-04T10:00:05.000Z",
+      "2026-08-04T10:00:05.000Z",
       "2026-08-04T10:00:05.000Z",
       "2026-08-04T10:00:05.000Z",
     ];
