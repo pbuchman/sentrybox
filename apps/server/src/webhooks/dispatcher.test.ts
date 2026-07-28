@@ -18,12 +18,17 @@ import {
   type WebhookHttpRequest,
 } from "./dispatcher.js";
 import { nextRetryAt } from "./retry-policy.js";
+import { signWebhookBody } from "./signature.js";
 
 const CREATED_AT = "2026-07-28T10:00:00.000Z";
 const PRIVATE_ORIGIN = new URL("https://error-hub.tail.example:8443");
 const TARGET = "https://code-agent.example/api/code/webhooks/sentry";
 const SECRET_REF = "CODE_AGENT_HMAC_BACKEND_DEV";
 const SECRET = "webhook-secret";
+const SECRETS = {
+  references: () => [SECRET_REF],
+  resolve: () => SECRET,
+};
 const FINGERPRINT: FingerprintResult = {
   version: 1,
   digest: "a".repeat(64),
@@ -85,6 +90,7 @@ describe("webhook lifecycle and dispatch", () => {
           targetUrl: TARGET,
           secretRef: SECRET_REF,
           enabledAt: "2026-07-28T10:05:00.000Z",
+          secrets: SECRETS,
         });
         expect(projects.verifyIngestKey(1, "public-key")).toMatchObject({
           webhookMode: "live",
@@ -129,13 +135,20 @@ describe("webhook lifecycle and dispatch", () => {
       });
   });
 
-  it("claims atomically, retries byte-identically, and resolves the secret only per attempt", async () => {
+  it("pins the signature before sending so automatic retries survive secret rotation", async () => {
     setKey("live");
-    const created = record("4f7a4f2c0e8e4c2a9c3d5e7f90123456", FINGERPRINT);
+    let activeSecret = SECRET;
+    const resolve = vi.fn(() => activeSecret);
+    const created = record(
+      "4f7a4f2c0e8e4c2a9c3d5e7f90123456",
+      FINGERPRINT,
+      {},
+      { references: () => [SECRET_REF], resolve },
+    );
+    activeSecret = "rotated-secret";
     const row = outbox.getById(required(created.outboxId));
     const requests: WebhookHttpRequest[] = [];
     const responses = [500, 204];
-    const resolve = vi.fn(() => SECRET);
     let now = new Date(CREATED_AT);
     const http: WebhookHttpClient = {
       async send(request) {
@@ -146,7 +159,6 @@ describe("webhook lifecycle and dispatch", () => {
     const dispatcher = new WebhookDispatcher({
       outbox,
       http,
-      secrets: { resolve },
       now: () => now,
       requestTimeoutMs: 2_000,
       leaseMs: 10_000,
@@ -173,8 +185,11 @@ describe("webhook lifecycle and dispatch", () => {
     expect(requests[1]?.body).toEqual(row?.body);
     expect(requests[1]?.headers).toEqual(requests[0]?.headers);
     expect(requests[0]?.headers["X-Error-Hub-Delivery"]).toBe(row?.deliveryId);
-    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve).toHaveBeenCalledTimes(1);
     expect(resolve).toHaveBeenCalledWith(SECRET_REF);
+    expect(row?.signature).not.toBe(
+      signWebhookBody(required(row).body, "rotated-secret"),
+    );
   });
 
   it("prevents concurrent ticks from delivering one due row twice and retries after an expired lease", async () => {
@@ -249,7 +264,6 @@ describe("webhook lifecycle and dispatch", () => {
     const dispatcher = new WebhookDispatcher({
       outbox,
       http: { send },
-      secrets: { resolve: () => SECRET },
       now: () => new Date(CREATED_AT),
       requestTimeoutMs: 2_000,
       leaseMs: 10_000,
@@ -305,24 +319,124 @@ describe("webhook lifecycle and dispatch", () => {
     ).toBe(true);
   });
 
-  it("records an invalid target as retryable and always releases its claim", async () => {
-    setKey("live", "http://code-agent.invalid/api/code/webhooks/sentry");
-    const created = record("invalid-target", FINGERPRINT);
+  it("rejects a wrong live URL or unconfigured secret before persistence", () => {
+    expect(() =>
+      setKey("live", "http://code-agent.invalid/api/code/webhooks/sentry"),
+    ).toThrow(/canonical HTTPS/u);
+    expect(() =>
+      projects.setIngestKey({
+        projectId: 1,
+        environment: "dev",
+        publicKey: "public-key",
+        allowedOrigins: [],
+        forwardingMode: "disabled",
+        forwardingSecretRef: null,
+        webhookMode: "live",
+        webhookTargetUrl: TARGET,
+        webhookSecretRef: "UNKNOWN_SECRET",
+        enabledAt: CREATED_AT,
+        webhookSecrets: SECRETS,
+      }),
+    ).toThrow(/not configured/u);
+    expect(
+      database
+        .prepare("SELECT COUNT(*) AS count FROM project_ingest_keys")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("uses transactional destination state rather than a paused auth snapshot", () => {
+    setKey("disabled");
+    const staleDisabled = required(projects.verifyIngestKey(1, "public-key"));
+    const controlDatabase = openDatabase(join(directory, "error-hub.sqlite"));
+    const controlProjects = new ProjectRepository(controlDatabase);
+    controlProjects.enableWebhookDestination({
+      projectId: 1,
+      environment: "dev",
+      targetUrl: TARGET,
+      secretRef: SECRET_REF,
+      enabledAt: "2026-07-28T10:01:00.000Z",
+      secrets: SECRETS,
+    });
+    const afterEnable = record(
+      "after-enable",
+      FINGERPRINT,
+      {},
+      SECRETS,
+      staleDisabled,
+    );
+    expect(outbox.getById(required(afterEnable.outboxId))).toMatchObject({
+      state: "pending",
+      destinationMode: "live",
+    });
+
+    const staleLive = required(projects.verifyIngestKey(1, "public-key"));
+    controlProjects.disableWebhookDestination({
+      projectId: 1,
+      environment: "dev",
+      disabledAt: "2026-07-28T10:02:00.000Z",
+    });
+    const afterDisable = record(
+      "after-disable",
+      { ...FINGERPRINT, digest: "f".repeat(64) },
+      {},
+      SECRETS,
+      staleLive,
+    );
+    expect(outbox.getById(required(afterDisable.outboxId))).toMatchObject({
+      state: "suppressed",
+      destinationMode: "disabled",
+    });
+    expect(outbox.listByIssue(afterDisable.issueId)).toHaveLength(1);
+    controlDatabase.close();
+  });
+
+  it("dead-letters an invalid legacy stored destination as configuration without network", async () => {
+    setKey("live");
+    const created = record("legacy-invalid-target", FINGERPRINT);
+    const outboxId = required(created.outboxId);
+    database.exec("DROP TRIGGER webhook_outbox_immutable_fields");
+    database
+      .prepare("UPDATE webhook_outbox SET target_url = ? WHERE id = ?")
+      .run("http://legacy.invalid/not-code-agent", outboxId);
     const send = vi.fn<WebhookHttpClient["send"]>();
-    const dispatcher = createDispatcher(send, CREATED_AT, "invalid-target");
+    const dispatcher = createDispatcher(send, CREATED_AT, "legacy-invalid");
 
     await expect(dispatcher.dispatchDue()).resolves.toEqual({
       claimed: 1,
       delivered: 0,
-      retried: 1,
-      deadLettered: 0,
+      retried: 0,
+      deadLettered: 1,
     });
     expect(send).not.toHaveBeenCalled();
-    expect(outbox.getById(required(created.outboxId))).toMatchObject({
-      state: "retry",
+    expect(outbox.getById(outboxId)).toMatchObject({
+      state: "dead_letter",
+      attempts: 1,
+      lastError: "invalid destination configuration",
       dispatchLeaseId: null,
-      dispatchLeaseUntil: null,
-      lastError: "network failure",
+    });
+  });
+
+  it("terminally dead-letters attempt overflow before network", async () => {
+    setKey("live");
+    const created = record("attempt-overflow", FINGERPRINT);
+    const outboxId = required(created.outboxId);
+    database
+      .prepare(
+        "UPDATE webhook_outbox SET attempts = 9007199254740991 WHERE id = ?",
+      )
+      .run(outboxId);
+    const send = vi.fn<WebhookHttpClient["send"]>();
+    const dispatcher = createDispatcher(send, CREATED_AT, "overflow");
+
+    await expect(dispatcher.dispatchDue()).resolves.toMatchObject({
+      claimed: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(outbox.getById(outboxId)).toMatchObject({
+      state: "dead_letter",
+      attempts: 9007199254740991,
+      lastError: "delivery attempt limit exhausted",
     });
   });
 
@@ -375,17 +489,96 @@ describe("webhook lifecycle and dispatch", () => {
     expect(
       JSON.stringify(outbox.getById(required(created.outboxId))),
     ).not.toContain(SECRET);
-    expect(
-      outbox.retryDeadLetter(
-        required(created.outboxId),
-        "2026-08-04T10:01:00.000Z",
-      ),
-    ).toBe(true);
-    expect(outbox.getById(required(created.outboxId))).toMatchObject({
-      state: "retry",
+  });
+
+  it("expires stale automatic work before network and sends one audited corrected redrive", async () => {
+    setKey("live");
+    const created = record("stale-automatic", FINGERPRINT);
+    const outboxId = required(created.outboxId);
+    const original = required(outbox.getById(outboxId));
+    const automaticSend = vi.fn<WebhookHttpClient["send"]>();
+    const expiredDispatcher = createDispatcher(
+      automaticSend,
+      "2026-08-04T10:00:00.001Z",
+      "expired-auto",
+    );
+
+    await expect(expiredDispatcher.dispatchDue()).resolves.toMatchObject({
+      claimed: 0,
+    });
+    expect(automaticSend).not.toHaveBeenCalled();
+    expect(outbox.getById(outboxId)).toMatchObject({
+      state: "dead_letter",
+      attempts: 0,
+      lastError: "automatic retry window expired",
+    });
+
+    const correctedTarget =
+      "https://fixed-code-agent.example/api/code/webhooks/sentry";
+    const correctedRef = "CODE_AGENT_HMAC_FIXED";
+    const correctedSecrets = {
+      references: () => [SECRET_REF, correctedRef],
+      resolve: (reference: string) =>
+        reference === correctedRef ? "corrected-secret" : SECRET,
+    };
+    projects.enableWebhookDestination({
+      projectId: 1,
+      environment: "dev",
+      targetUrl: correctedTarget,
+      secretRef: correctedRef,
+      enabledAt: "2026-08-04T10:00:00.002Z",
+      secrets: correctedSecrets,
+    });
+    const redrive = outbox.requestRedrive({
+      outboxId,
+      deliveryId: "608902f0-f65c-4c2a-9b9b-6dadcd810f27",
+      requestedAt: "2026-08-04T10:00:00.003Z",
+      secrets: correctedSecrets,
+    });
+    expect(redrive).toMatchObject({
+      originalOutboxId: outboxId,
+      targetUrl: correctedTarget,
+      secretRef: correctedRef,
+      state: "pending",
+      attempts: 0,
+    });
+    expect(redrive.signature).not.toBe(original.signature);
+    expect(outbox.getById(outboxId)).toMatchObject({
+      targetUrl: original.targetUrl,
+      secretRef: original.secretRef,
+      signature: original.signature,
+      body: original.body,
+      state: "dead_letter",
+    });
+
+    const redriveRequests: WebhookHttpRequest[] = [];
+    const redriveDispatcher = createDispatcher(
+      async (request) => {
+        redriveRequests.push(request);
+        return { statusCode: 204 };
+      },
+      "2026-08-04T10:00:00.003Z",
+      "redrive-lease",
+    );
+    await expect(redriveDispatcher.dispatchDue()).resolves.toEqual({
+      claimed: 1,
+      delivered: 1,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(redriveRequests).toHaveLength(1);
+    expect(redriveRequests[0]).toMatchObject({
+      body: original.body,
+      targetUrl: new URL(correctedTarget),
+      headers: {
+        "X-Error-Hub-Delivery": redrive.deliveryId,
+        "Sentry-Hook-Signature": redrive.signature,
+      },
+    });
+    expect(outbox.getRedriveById(redrive.id)).toMatchObject({
+      state: "delivered",
       attempts: 1,
-      nextAttempt: "2026-08-04T10:01:00.000Z",
-      lastError: null,
+      attemptedAt: "2026-08-04T10:00:00.003Z",
     });
   });
 });
@@ -462,6 +655,7 @@ function setKey(mode: "disabled" | "live", targetUrl: string = TARGET): void {
     webhookTargetUrl: mode === "live" ? targetUrl : null,
     webhookSecretRef: mode === "live" ? SECRET_REF : null,
     enabledAt: mode === "live" ? CREATED_AT : null,
+    ...(mode === "live" ? { webhookSecrets: SECRETS } : {}),
   });
 }
 
@@ -469,8 +663,12 @@ function record(
   eventId: string,
   fingerprint: FingerprintResult,
   overrides: Partial<NormalizedEvent> = {},
+  secrets = SECRETS,
+  ingestKeyOverride?: ReturnType<ProjectRepository["verifyIngestKey"]>,
 ) {
-  const ingestKey = required(projects.verifyIngestKey(1, "public-key"));
+  const ingestKey = required(
+    ingestKeyOverride ?? projects.verifyIngestKey(1, "public-key"),
+  );
   const event: NormalizedEvent = {
     id: eventId,
     occurredAt: CREATED_AT,
@@ -499,14 +697,16 @@ function record(
     projectId: 1,
     event,
     fingerprint,
-    buildOutbox: (transition) =>
+    buildOutbox: (transition, destination) =>
       buildCodeAgentOutboxDraft({
         ingestKey,
         event,
         transition,
+        destination,
         organizationSlug: "intexuraos",
         privateHubOrigin: PRIVATE_ORIGIN,
         deliveryId: deliveryId(transition.issueId, transition.generation),
+        secrets,
       }),
   });
 }
@@ -519,7 +719,6 @@ function createDispatcher(
   return new WebhookDispatcher({
     outbox,
     http: { send },
-    secrets: { resolve: () => SECRET },
     now: () => new Date(now),
     requestTimeoutMs: 2_000,
     leaseMs: 10_000,

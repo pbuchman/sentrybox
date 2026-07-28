@@ -180,8 +180,13 @@ export function registerIngestRoute(
             projectId: ingestKey.projectId,
             event,
             fingerprint: fingerprintEvent(preparedEvent.input),
-            buildOutbox: (transition) =>
-              options.buildOutbox({ ingestKey, event, transition }),
+            buildOutbox: (transition, destination) =>
+              options.buildOutbox({
+                ingestKey,
+                event,
+                transition,
+                destination,
+              }),
           });
         }
       } catch {

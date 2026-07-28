@@ -40,6 +40,19 @@ beforeEach(() => {
     enabled: true,
     createdAt: "2026-07-28T10:00:00.000Z",
   });
+  projects.setIngestKey({
+    projectId: 1,
+    environment: "dev",
+    publicKey: "issue-tests",
+    allowedOrigins: [],
+    forwardingMode: "disabled",
+    forwardingSecretRef: null,
+    webhookMode: "live",
+    webhookTargetUrl: "https://code-agent.example/api/code/webhooks/sentry",
+    webhookSecretRef: "CODE_AGENT_HMAC_BACKEND_DEV",
+    enabledAt: "2026-07-28T10:00:00.000Z",
+    webhookSecrets: { references: () => ["CODE_AGENT_HMAC_BACKEND_DEV"] },
+  });
   issues = new IssueRepository(database);
   events = new EventRepository(database);
   outbox = new OutboxRepository(database);
@@ -309,7 +322,21 @@ describe("IssueRepository.recordOccurrence", () => {
         .prepare("UPDATE webhook_outbox SET body = ? WHERE id = ?")
         .run(Buffer.from("changed"), created.outboxId),
     ).toThrow(/immutable/i);
-    outbox.markDelivered(created.outboxId, "2026-07-28T10:01:00.000Z");
+    expect(
+      outbox.claimDue(
+        "2026-07-28T10:00:01.000Z",
+        "2026-07-28T10:00:11.000Z",
+        "issue-test-lease",
+        1,
+      ),
+    ).toHaveLength(1);
+    expect(
+      outbox.completeDelivered(
+        created.outboxId,
+        "issue-test-lease",
+        "2026-07-28T10:01:00.000Z",
+      ),
+    ).toBe(true);
     expect(outbox.getById(created.outboxId)).toMatchObject({
       state: "delivered",
       attempts: 1,
@@ -327,6 +354,7 @@ describe("IssueRepository.recordOccurrence", () => {
         mode: "disabled",
         targetUrl: null,
         secretRef: null,
+        signature: null,
         body: Buffer.from('{"action":"triggered"}'),
       }),
     });
@@ -342,9 +370,14 @@ describe("IssueRepository.recordOccurrence", () => {
       targetUrl: null,
       secretRef: null,
     });
-    expect(() =>
-      outbox.markDelivered(outboxId, "2026-07-28T10:01:00.000Z"),
-    ).toThrow("not pending or retryable");
+    expect(
+      outbox.claimDue(
+        "2026-07-28T10:00:01.000Z",
+        "2026-07-28T10:00:11.000Z",
+        "suppressed-lease",
+        1,
+      ),
+    ).toHaveLength(0);
   });
 });
 
@@ -402,6 +435,7 @@ function liveOutbox(input: {
     mode: "live" as const,
     targetUrl: "https://code-agent.example/api/code/webhooks/sentry",
     secretRef: "CODE_AGENT_HMAC_BACKEND_DEV",
+    signature: "a".repeat(64),
     body: Buffer.from(
       JSON.stringify({ issueId: input.issueId, eventId: input.eventId }),
     ),

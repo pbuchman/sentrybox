@@ -49,7 +49,7 @@ describe("SQLite database and migrations", () => {
     expect(pragmaScalar(first, "wal_autocheckpoint")).toBe(1_000);
     expect(
       first.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get(),
-    ).toEqual({ count: 1 });
+    ).toEqual({ count: 2 });
 
     first.close();
     openConnections.pop();
@@ -81,6 +81,7 @@ describe("SQLite database and migrations", () => {
       "projects",
       "schema_migrations",
       "webhook_outbox",
+      "webhook_redrives",
     ]);
 
     expect(foreignKeys(database, "project_ingest_keys")).toEqual([
@@ -101,6 +102,9 @@ describe("SQLite database and migrations", () => {
     ]);
     expect(foreignKeys(database, "webhook_outbox")).toEqual([
       "issue_id,project_id->issues.id,project_id:CASCADE",
+    ]);
+    expect(foreignKeys(database, "webhook_redrives")).toEqual([
+      "original_outbox_id->webhook_outbox.id:CASCADE",
     ]);
 
     expect(uniqueColumnSets(database, "project_ingest_keys")).toEqual(
@@ -139,6 +143,8 @@ describe("SQLite database and migrations", () => {
         "idx_issues_project_status_last_seen",
         "idx_outbox_dispatch",
         "idx_outbox_issue_created",
+        "idx_webhook_redrives_dispatch",
+        "idx_webhook_redrives_original",
       ]),
     );
   });
@@ -165,6 +171,7 @@ describe("SQLite database and migrations", () => {
       webhookTargetUrl: "https://code-agent.example/api/code/webhooks/sentry",
       webhookSecretRef: "CODE_AGENT_HMAC_BACKEND_DEV",
       enabledAt: "2026-07-28T10:00:00.000Z",
+      webhookSecrets: { references: () => ["CODE_AGENT_HMAC_BACKEND_DEV"] },
     });
 
     const stored = database

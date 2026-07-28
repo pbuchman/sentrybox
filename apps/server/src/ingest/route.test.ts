@@ -1006,6 +1006,7 @@ function createFixture(options: FixtureOptions = {}): {
         )}`,
         targetUrl: null,
         secretRef: null,
+        signature: null,
         body: Buffer.from('{"action":"triggered"}'),
       };
     },

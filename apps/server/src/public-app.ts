@@ -6,6 +6,7 @@ import type {
 import type { ErrorHubDatabase } from "./storage/database.js";
 import type { VerifiedIngestKey } from "./storage/project-repository.js";
 import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { CurrentWebhookDestination } from "./storage/issue-repository.js";
 import type { ShadowForwarder } from "./ingest/shadow-forwarder.js";
 import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
 import { registerIngestRoute } from "./ingest/route.js";
@@ -30,6 +31,7 @@ export interface BuildOutboxInput {
   readonly ingestKey: VerifiedIngestKey;
   readonly event: NormalizedEvent;
   readonly transition: OutboxTransition;
+  readonly destination: CurrentWebhookDestination;
 }
 
 export interface PublicAppOptions {

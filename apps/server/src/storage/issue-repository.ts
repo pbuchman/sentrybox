@@ -18,8 +18,27 @@ export interface RecordOccurrenceInput {
   readonly projectId: number;
   readonly event: NormalizedEvent;
   readonly fingerprint: FingerprintResult;
-  readonly buildOutbox: (transition: OutboxTransition) => OutboxDraft;
+  readonly buildOutbox: (
+    transition: OutboxTransition,
+    destination: CurrentWebhookDestination,
+  ) => OutboxDraft;
 }
+
+export type CurrentWebhookDestination =
+  | {
+      readonly projectSlug: string;
+      readonly mode: "disabled";
+      readonly targetUrl: null;
+      readonly secretRef: null;
+      readonly enabledAt: null;
+    }
+  | {
+      readonly projectSlug: string;
+      readonly mode: "live";
+      readonly targetUrl: string;
+      readonly secretRef: string;
+      readonly enabledAt: string;
+    };
 
 export interface RecordOccurrenceResult {
   readonly duplicate: boolean;
@@ -219,9 +238,13 @@ export class IssueRepository {
   ): RecordOccurrenceResult {
     assertPositiveInteger(input.projectId, "project id");
     const eventId = requireNonEmpty(input.event.id, "event id");
-    requireNonEmpty(input.event.environment, "event environment");
+    const environment = requireNonEmpty(
+      input.event.environment ?? "",
+      "event environment",
+    );
     const event: NormalizedEvent = {
       ...input.event,
+      environment,
       occurredAt: canonicalTimestamp(
         input.event.occurredAt,
         "event occurrence timestamp",
@@ -292,8 +315,12 @@ export class IssueRepository {
         eventId,
         generation: decision.next.generation,
         cause: decision.outcome,
+        environment,
       };
-      const draft = input.buildOutbox(transition);
+      const draft = input.buildOutbox(
+        transition,
+        this.currentWebhookDestination(input.projectId, environment),
+      );
       outboxId = this.outbox.insert(transition, draft, event.receivedAt);
     }
 
@@ -304,6 +331,55 @@ export class IssueRepository {
       generation: decision.next.generation,
       outcome: decision.outcome,
       outboxId,
+    };
+  }
+
+  private currentWebhookDestination(
+    projectId: number,
+    environment: string,
+  ): CurrentWebhookDestination {
+    const row = this.database
+      .prepare(
+        `SELECT p.slug AS project_slug, k.webhook_mode, k.webhook_target_url,
+                k.webhook_secret_ref, k.enabled_at
+         FROM project_ingest_keys AS k
+         INNER JOIN projects AS p ON p.id = k.project_id
+         WHERE k.project_id = ? AND k.environment = ?`,
+      )
+      .get(projectId, environment) as
+      | {
+          project_slug: string;
+          webhook_mode: "disabled" | "live";
+          webhook_target_url: string | null;
+          webhook_secret_ref: string | null;
+          enabled_at: string | null;
+        }
+      | undefined;
+    if (row === undefined) {
+      throw new Error("current webhook destination is unavailable");
+    }
+    if (row.webhook_mode === "disabled") {
+      return {
+        projectSlug: row.project_slug,
+        mode: "disabled",
+        targetUrl: null,
+        secretRef: null,
+        enabledAt: null,
+      };
+    }
+    if (
+      row.webhook_target_url === null ||
+      row.webhook_secret_ref === null ||
+      row.enabled_at === null
+    ) {
+      throw new Error("current live webhook destination is invalid");
+    }
+    return {
+      projectSlug: row.project_slug,
+      mode: "live",
+      targetUrl: row.webhook_target_url,
+      secretRef: row.webhook_secret_ref,
+      enabledAt: row.enabled_at,
     };
   }
 

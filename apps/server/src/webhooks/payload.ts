@@ -1,7 +1,9 @@
 import type { NormalizedEvent } from "@intexura-error-hub/protocol";
 import type { BuildOutboxInput } from "../public-app.js";
+import type { SecretStore } from "../secrets.js";
 import type { OutboxDraft } from "../storage/outbox-repository.js";
 import { signWebhookBody } from "./signature.js";
+import { validateWebhookDestination } from "./destination.js";
 
 export interface SentryEventAlertInput {
   readonly privateHubOrigin: URL;
@@ -19,10 +21,16 @@ export interface SentryEventAlertHeadersInput {
   readonly secret: string;
 }
 
+export interface StoredSentryEventAlertHeadersInput {
+  readonly deliveryId: string;
+  readonly signature: string;
+}
+
 export interface BuildCodeAgentOutboxDraftInput extends BuildOutboxInput {
   readonly privateHubOrigin: URL;
   readonly organizationSlug: string;
   readonly deliveryId: string;
+  readonly secrets: Pick<SecretStore, "references" | "resolve">;
 }
 
 export type SentryEventAlertHeaders = Readonly<{
@@ -77,10 +85,22 @@ export function createSentryEventAlertBody(
 export function createSentryEventAlertHeaders(
   input: SentryEventAlertHeadersInput,
 ): SentryEventAlertHeaders {
+  return createStoredSentryEventAlertHeaders({
+    deliveryId: input.deliveryId,
+    signature: signWebhookBody(input.body, input.secret),
+  });
+}
+
+export function createStoredSentryEventAlertHeaders(
+  input: StoredSentryEventAlertHeadersInput,
+): SentryEventAlertHeaders {
+  if (!/^[0-9a-f]{64}$/u.test(input.signature)) {
+    throw new TypeError("stored webhook signature must be lowercase SHA-256");
+  }
   return {
     "Content-Type": "application/json",
     "Sentry-Hook-Resource": "event_alert",
-    "Sentry-Hook-Signature": signWebhookBody(input.body, input.secret),
+    "Sentry-Hook-Signature": input.signature,
     "X-Error-Hub-Delivery": deliveryUuid(input.deliveryId),
   };
 }
@@ -93,31 +113,35 @@ export function buildCodeAgentOutboxDraft(
     privateHubOrigin: input.privateHubOrigin,
     organizationSlug: input.organizationSlug,
     projectId: input.transition.projectId,
-    projectSlug: input.ingestKey.projectSlug,
+    projectSlug: input.destination.projectSlug,
     issueId: input.transition.issueId,
     eventId: input.transition.eventId,
     title: eventTitle(input.event),
   });
   const deliveryId = deliveryUuid(input.deliveryId);
-  if (input.ingestKey.webhookMode === "disabled") {
+  if (input.destination.mode === "disabled") {
     return {
       deliveryId,
       mode: "disabled",
       targetUrl: null,
       secretRef: null,
+      signature: null,
       body,
     };
   }
+  const destination = validateWebhookDestination(
+    input.destination.targetUrl,
+    input.destination.secretRef,
+    input.secrets,
+  );
   return {
     deliveryId,
     mode: "live",
-    targetUrl: nonEmpty(
-      input.ingestKey.webhookTargetUrl ?? "",
-      "webhook target URL",
-    ),
-    secretRef: nonEmpty(
-      input.ingestKey.webhookSecretRef ?? "",
-      "webhook secret reference",
+    targetUrl: destination.targetUrl,
+    secretRef: destination.secretRef,
+    signature: signWebhookBody(
+      body,
+      input.secrets.resolve(destination.secretRef),
     ),
     body,
   };

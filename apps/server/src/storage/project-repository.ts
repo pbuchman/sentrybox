@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { ErrorHubDatabase } from "./database.js";
+import type { SecretStore } from "../secrets.js";
+import { validateWebhookDestination } from "../webhooks/destination.js";
 
 export type ForwardingMode = "disabled" | "shadow";
 export type WebhookMode = "disabled" | "live";
@@ -23,6 +25,7 @@ export interface IngestKeyInput {
   readonly webhookTargetUrl: string | null;
   readonly webhookSecretRef: string | null;
   readonly enabledAt: string | null;
+  readonly webhookSecrets?: Pick<SecretStore, "references">;
 }
 
 export interface VerifiedIngestKey {
@@ -89,7 +92,19 @@ export class ProjectRepository {
     if (input.enabledAt !== null) {
       assertTimestamp(input.enabledAt, "webhook enabled timestamp");
     }
-    const now = input.enabledAt ?? new Date().toISOString();
+    const destination =
+      input.webhookMode === "live"
+        ? validateWebhookDestination(
+            input.webhookTargetUrl ?? "",
+            input.webhookSecretRef ?? "",
+            requiredSecretCatalog(input.webhookSecrets),
+          )
+        : { targetUrl: null, secretRef: null };
+    if (input.webhookMode === "live" && input.enabledAt === null) {
+      throw new TypeError("live webhook requires an enabled timestamp");
+    }
+    const enabledAt = input.webhookMode === "live" ? input.enabledAt : null;
+    const now = enabledAt ?? new Date().toISOString();
     const origins = [...new Set(input.allowedOrigins)].sort(compareCodePoints);
     this.database
       .prepare(
@@ -118,9 +133,9 @@ export class ProjectRepository {
         input.forwardingMode,
         input.forwardingSecretRef,
         input.webhookMode,
-        input.webhookTargetUrl,
-        input.webhookSecretRef,
-        input.enabledAt,
+        destination.targetUrl,
+        destination.secretRef,
+        enabledAt,
         now,
         now,
       );
@@ -132,12 +147,18 @@ export class ProjectRepository {
     readonly targetUrl: string;
     readonly secretRef: string;
     readonly enabledAt: string;
+    readonly secrets: Pick<SecretStore, "references">;
   }): void {
     assertPositiveInteger(input.projectId, "project id");
     assertNonEmpty(input.environment, "ingest environment");
     assertNonEmpty(input.targetUrl, "webhook target URL");
     assertNonEmpty(input.secretRef, "webhook secret reference");
     assertTimestamp(input.enabledAt, "webhook enabled timestamp");
+    const destination = validateWebhookDestination(
+      input.targetUrl,
+      input.secretRef,
+      input.secrets,
+    );
     const result = this.database
       .prepare(
         `UPDATE project_ingest_keys
@@ -151,13 +172,34 @@ export class ProjectRepository {
          WHERE project_id = ? AND environment = ?`,
       )
       .run(
-        input.targetUrl,
-        input.secretRef,
+        destination.targetUrl,
+        destination.secretRef,
         input.enabledAt,
         input.enabledAt,
         input.projectId,
         input.environment,
       );
+    if (result.changes !== 1) {
+      throw new Error("ingest key does not exist for webhook destination");
+    }
+  }
+
+  public disableWebhookDestination(input: {
+    readonly projectId: number;
+    readonly environment: string;
+    readonly disabledAt: string;
+  }): void {
+    assertPositiveInteger(input.projectId, "project id");
+    assertNonEmpty(input.environment, "ingest environment");
+    assertTimestamp(input.disabledAt, "webhook disabled timestamp");
+    const result = this.database
+      .prepare(
+        `UPDATE project_ingest_keys
+         SET webhook_mode = 'disabled', webhook_target_url = NULL,
+             webhook_secret_ref = NULL, enabled_at = NULL, updated_at = ?
+         WHERE project_id = ? AND environment = ?`,
+      )
+      .run(input.disabledAt, input.projectId, input.environment);
     if (result.changes !== 1) {
       throw new Error("ingest key does not exist for webhook destination");
     }
@@ -216,6 +258,15 @@ export class ProjectRepository {
       enabledAt: match.enabled_at,
     };
   }
+}
+
+function requiredSecretCatalog(
+  value: Pick<SecretStore, "references"> | undefined,
+): Pick<SecretStore, "references"> {
+  if (value === undefined) {
+    throw new TypeError("live webhook requires a typed secret store");
+  }
+  return value;
 }
 
 export function hashPublicKey(publicKey: string): Buffer {

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { SecretStore } from "../secrets.js";
 import {
   OutboxRepository,
+  type ClaimedWebhookRedrive,
   type StoredOutboxRow,
 } from "../storage/outbox-repository.js";
-import { createSentryEventAlertHeaders } from "./payload.js";
+import { createStoredSentryEventAlertHeaders } from "./payload.js";
 import { classifyHttpStatus, nextRetryAt } from "./retry-policy.js";
+import { canonicalWebhookTargetUrl } from "./destination.js";
 
 export interface WebhookAttempt {
   readonly deliveryId: string;
@@ -31,7 +32,6 @@ export interface WebhookHttpClient {
 export interface WebhookDispatcherOptions {
   readonly outbox: OutboxRepository;
   readonly http: WebhookHttpClient;
-  readonly secrets: Pick<SecretStore, "resolve">;
   readonly now?: () => Date;
   readonly requestTimeoutMs?: number;
   readonly leaseMs?: number;
@@ -49,7 +49,6 @@ export interface DispatchSummary {
 export class WebhookDispatcher {
   readonly #outbox: OutboxRepository;
   readonly #http: WebhookHttpClient;
-  readonly #secrets: Pick<SecretStore, "resolve">;
   readonly #now: () => Date;
   readonly #requestTimeoutMs: number;
   readonly #leaseMs: number;
@@ -59,7 +58,6 @@ export class WebhookDispatcher {
   public constructor(options: WebhookDispatcherOptions) {
     this.#outbox = options.outbox;
     this.#http = options.http;
-    this.#secrets = options.secrets;
     this.#now = options.now ?? (() => new Date());
     this.#requestTimeoutMs = positiveInteger(
       options.requestTimeoutMs ?? 10_000,
@@ -88,15 +86,22 @@ export class WebhookDispatcher {
       leaseId,
       this.#batchSize,
     );
+    const redrives = this.#outbox.claimPendingRedrives(
+      claimedAt.toISOString(),
+      leaseUntil,
+      leaseId,
+      this.#batchSize,
+    );
     const summary = {
-      claimed: rows.length,
+      claimed: rows.length + redrives.length,
       delivered: 0,
       retried: 0,
       deadLettered: 0,
     };
-    const results = await Promise.all(
-      rows.map(async (row) => this.deliver(row, leaseId)),
-    );
+    const results = await Promise.all([
+      ...rows.map(async (row) => this.deliver(row, leaseId)),
+      ...redrives.map(async (redrive) => this.deliverRedrive(redrive, leaseId)),
+    ]);
     for (const result of results) {
       if (result === null) continue;
       if (result === "delivered") summary.delivered += 1;
@@ -106,6 +111,63 @@ export class WebhookDispatcher {
     return summary;
   }
 
+  private async deliverRedrive(
+    redrive: ClaimedWebhookRedrive,
+    leaseId: string,
+  ): Promise<DeliveryResult | null> {
+    let targetUrl: URL;
+    try {
+      targetUrl = new URL(canonicalWebhookTargetUrl(redrive.targetUrl));
+      createStoredSentryEventAlertHeaders({
+        deliveryId: redrive.deliveryId,
+        signature: redrive.signature,
+      });
+    } catch {
+      return this.#outbox.completeRedrive(
+        redrive.id,
+        leaseId,
+        "dead_letter",
+        canonicalDate(
+          this.#now(),
+          "redrive completion timestamp",
+        ).toISOString(),
+        "invalid destination configuration",
+      )
+        ? "dead_letter"
+        : null;
+    }
+    let delivered = false;
+    let error = "network failure";
+    try {
+      const response = await this.#http.send({
+        body: Buffer.from(redrive.body),
+        targetUrl,
+        headers: createStoredSentryEventAlertHeaders({
+          deliveryId: redrive.deliveryId,
+          signature: redrive.signature,
+        }),
+        timeoutMs: this.#requestTimeoutMs,
+      });
+      delivered = classifyHttpStatus(response.statusCode) === "delivered";
+      error = `HTTP ${String(response.statusCode)}`;
+    } catch (caught) {
+      error =
+        caught instanceof WebhookTimeoutError
+          ? "request timeout"
+          : "network failure";
+    }
+    const result = delivered ? "delivered" : "dead_letter";
+    return this.#outbox.completeRedrive(
+      redrive.id,
+      leaseId,
+      result,
+      canonicalDate(this.#now(), "redrive completion timestamp").toISOString(),
+      delivered ? null : error,
+    )
+      ? result
+      : null;
+  }
+
   private async deliver(
     row: StoredOutboxRow,
     leaseId: string,
@@ -113,7 +175,8 @@ export class WebhookDispatcher {
     if (
       row.destinationMode !== "live" ||
       row.targetUrl === null ||
-      row.secretRef === null
+      row.secretRef === null ||
+      row.signature === null
     ) {
       return this.#outbox.completeDeadLetter(
         row.id,
@@ -124,24 +187,38 @@ export class WebhookDispatcher {
         : null;
     }
     const attemptNumber = row.attempts + 1;
+    let targetUrl: URL;
+    try {
+      targetUrl = new URL(canonicalWebhookTargetUrl(row.targetUrl));
+      createStoredSentryEventAlertHeaders({
+        deliveryId: row.deliveryId,
+        signature: row.signature,
+      });
+    } catch {
+      return this.#outbox.completeDeadLetter(
+        row.id,
+        leaseId,
+        "invalid destination configuration",
+      )
+        ? "dead_letter"
+        : null;
+    }
+    const attempt: WebhookAttempt = {
+      deliveryId: row.deliveryId,
+      body: Buffer.from(row.body),
+      targetUrl,
+      secretRef: row.secretRef,
+      attempt: attemptNumber,
+    };
     let result: DeliveryResult;
     let error: string;
     try {
-      const attempt: WebhookAttempt = {
-        deliveryId: row.deliveryId,
-        body: Buffer.from(row.body),
-        targetUrl: validatedTargetUrl(row.targetUrl),
-        secretRef: row.secretRef,
-        attempt: attemptNumber,
-      };
-      const secret = this.#secrets.resolve(attempt.secretRef);
       const response = await this.#http.send({
         body: attempt.body,
         targetUrl: attempt.targetUrl,
-        headers: createSentryEventAlertHeaders({
-          body: attempt.body,
+        headers: createStoredSentryEventAlertHeaders({
           deliveryId: attempt.deliveryId,
-          secret,
+          signature: row.signature,
         }),
         timeoutMs: this.#requestTimeoutMs,
       });
@@ -218,18 +295,6 @@ export class FetchWebhookHttpClient implements WebhookHttpClient {
       clearTimeout(timer);
     }
   }
-}
-
-function validatedTargetUrl(value: string): URL {
-  const target = new URL(value);
-  if (
-    target.protocol !== "https:" ||
-    target.username.length > 0 ||
-    target.password.length > 0
-  ) {
-    throw new TypeError("webhook target must use HTTPS without credentials");
-  }
-  return target;
 }
 
 function canonicalDate(value: Date, field: string): Date {
