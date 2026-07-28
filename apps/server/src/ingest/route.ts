@@ -17,6 +17,7 @@ import {
 } from "../storage/project-repository.js";
 import { authenticateProject } from "./project-auth.js";
 import { ConcurrencyGate, FixedWindowRateLimiter } from "./rate-limit.js";
+import { createAdmissionReleaseHooks } from "./admission-lifecycle.js";
 
 interface IngestRequest {
   readonly Params: { readonly projectId: string };
@@ -81,15 +82,7 @@ export function registerIngestRoute(
   };
   const routeHooks = {
     onRequest: earlyAdmission,
-    onError: async (request: FastifyRequest): Promise<void> => {
-      releaseRequest(request);
-    },
-    onRequestAbort: async (request: FastifyRequest): Promise<void> => {
-      releaseRequest(request);
-    },
-    onResponse: async (request: FastifyRequest): Promise<void> => {
-      releaseRequest(request);
-    },
+    ...createAdmissionReleaseHooks(releaseRequest),
   };
 
   app.options<IngestRequest>(
