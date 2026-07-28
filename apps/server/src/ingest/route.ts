@@ -124,7 +124,7 @@ export function registerIngestRoute(
       if (now === undefined) {
         throw new Error("ingest admission timestamp is unavailable");
       }
-      if (!isStorageReady(options)) {
+      if (!options.operations.storageSafety.snapshot().acceptingIngest) {
         return sendSentryError(
           reply,
           new SentryHttpError(
@@ -173,7 +173,7 @@ export function registerIngestRoute(
           now.toISOString(),
         );
       } finally {
-        options.metrics?.observeParseDuration(
+        options.operations.metrics.observeParseDuration(
           Math.max(0, monotonicNow(options) - parseStarted) / 1_000,
         );
       }
@@ -203,11 +203,11 @@ export function registerIngestRoute(
                 destination,
               }),
           });
-          options.metrics?.recordIngest("accepted");
-          options.metrics?.recordGrouping(result);
+          options.operations.metrics.recordIngest("accepted");
+          options.operations.metrics.recordGrouping(result);
         }
         for (let index = 0; index < prepared.discarded; index += 1) {
-          options.metrics?.recordIngest("discarded");
+          options.operations.metrics.recordIngest("discarded");
         }
       } catch {
         return sendSentryError(
@@ -251,17 +251,6 @@ function rateLimitError(
     "Rate limit exceeded.",
     Math.max(decision.retryAfterSeconds, limits.retryAfterSeconds),
   );
-}
-
-function isStorageReady(options: PublicAppOptions): boolean {
-  try {
-    if (options.storageSafety !== undefined) {
-      return options.storageSafety.snapshot().acceptingIngest;
-    }
-    return options.isStorageReady?.() !== false;
-  } catch {
-    return false;
-  }
 }
 
 function reportOperationalMetric(

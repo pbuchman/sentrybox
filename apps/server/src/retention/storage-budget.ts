@@ -96,8 +96,16 @@ export class StorageSafetyState {
     ) {
       throw new TypeError("oldest event timestamp must be valid");
     }
+    const observedSafety = classifyStorage(this.#config, physical, logical);
+    const publishObservedSafety =
+      observedSafety === "critical" || this.#snapshot.retentionKnownSuccessful;
     this.#snapshot = {
       ...this.#snapshot,
+      safety: publishObservedSafety ? observedSafety : this.#snapshot.safety,
+      acceptingIngest:
+        publishObservedSafety && observedSafety !== "critical"
+          ? this.#snapshot.retentionKnownSuccessful
+          : false,
       physicalUsage: physical,
       logicalPayloadBytes: logical,
       oldestEventReceivedAt,
@@ -137,7 +145,10 @@ export class StorageSafetyState {
       throw new TypeError("retention failure reason must not be empty");
     }
     const safety: StorageSafety =
-      reason === "physical_storage_critical" ? "critical" : "unsafe";
+      reason === "physical_storage_critical" ||
+      this.#snapshot.safety === "critical"
+        ? "critical"
+        : "unsafe";
     this.#snapshot = {
       ...this.#snapshot,
       safety,

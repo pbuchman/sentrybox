@@ -9,7 +9,7 @@ import {
 import { createStoredSentryEventAlertHeaders } from "./payload.js";
 import { classifyHttpStatus, nextRetryAt } from "./retry-policy.js";
 import { canonicalWebhookTargetUrl } from "./destination.js";
-import type { ErrorHubMetrics } from "../metrics.js";
+import type { OperationsContext } from "../operations.js";
 
 export interface WebhookAttempt {
   readonly deliveryId: string;
@@ -34,13 +34,13 @@ export interface WebhookHttpClient {
 
 export interface WebhookDispatcherOptions {
   readonly outbox: OutboxRepository;
+  readonly operations: OperationsContext;
   readonly http: WebhookHttpClient;
   readonly now?: () => Date;
   readonly requestTimeoutMs?: number;
   readonly leaseMs?: number;
   readonly batchSize?: number;
   readonly createLeaseId?: () => string;
-  readonly metrics?: Pick<ErrorHubMetrics, "recordDispatch">;
 }
 
 export interface DispatchSummary {
@@ -69,7 +69,7 @@ export class WebhookDispatcher {
   readonly #leaseMs: number;
   readonly #batchSize: number;
   readonly #createLeaseId: () => string;
-  readonly #metrics: Pick<ErrorHubMetrics, "recordDispatch"> | undefined;
+  readonly #operations: OperationsContext;
   #automaticGetsOddSlot = true;
 
   public constructor(options: WebhookDispatcherOptions) {
@@ -89,7 +89,7 @@ export class WebhookDispatcher {
     }
     this.#batchSize = positiveInteger(options.batchSize ?? 25, "batch size");
     this.#createLeaseId = options.createLeaseId ?? randomUUID;
-    this.#metrics = options.metrics;
+    this.#operations = options.operations;
   }
 
   public async dispatchDue(): Promise<DispatchSummary> {
@@ -167,7 +167,7 @@ export class WebhookDispatcher {
 
   private recordTerminalized(prepared: PreparedDueFrontier): void {
     for (let index = 0; index < prepared.terminalized; index += 1) {
-      this.#metrics?.recordDispatch("dead_letter");
+      this.#operations.metrics.recordDispatch("dead_letter");
     }
   }
 
@@ -355,7 +355,7 @@ export class WebhookDispatcher {
     result: DeliveryResult,
     changed: boolean,
   ): DeliveryResult | null {
-    this.#metrics?.recordDispatch(changed ? result : "stale_lease");
+    this.#operations.metrics.recordDispatch(changed ? result : "stale_lease");
     return changed ? result : null;
   }
 }

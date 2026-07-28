@@ -9,6 +9,7 @@ import { openDatabase, type ErrorHubDatabase } from "./database.js";
 import { migrateDatabase } from "./migrate.js";
 import { OutboxRepository } from "./outbox-repository.js";
 import { WebhookDispatcher } from "../webhooks/dispatcher.js";
+import { createOperationsContext } from "../operations.js";
 
 const ORIGINAL_001_SHA256 =
   "a24c930f9028bf0aa20b62e6e03edf2f4d0f502d422d8ee0643fe2781230b1e3";
@@ -86,6 +87,7 @@ describe("ordered database migration upgrade", () => {
     const send = vi.fn(async () => ({ statusCode: 204 }));
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations: createOperationsContext(),
       http: { send },
       now: () => new Date(APPLIED_AT),
       requestTimeoutMs: 2_000,

@@ -3,6 +3,7 @@ import type { NormalizedEvent } from "@intexura-error-hub/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrivateApp } from "../private-app.js";
 import { ErrorHubMetrics } from "../metrics.js";
+import { createOperationsContext } from "../operations.js";
 import {
   DEFAULT_RETENTION_CONFIG,
   StorageSafetyState,
@@ -72,8 +73,10 @@ describe("private operator API", () => {
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: [PUBLIC_HOST],
       grafanaExploreUrl: new URL("https://grafana.test/explore"),
-      metrics: new ErrorHubMetrics(),
-      storageSafety,
+      operations: {
+        storageSafety,
+        metrics: new ErrorHubMetrics(),
+      },
       now: () => clock,
       createDeliveryId: () => "55555555-5555-4555-8555-555555555555",
       secrets: {
@@ -666,6 +669,7 @@ describe("private operator API", () => {
   it("classifies retry validation, missing/conflict, and internal failures without leaking dependency data", async () => {
     const appWithoutSecrets = createPrivateApp({
       database,
+      operations: createOperationsContext(),
       privateOrigin: new URL(PRIVATE_ORIGIN),
       organizationSlug: "intexuraos",
       allowedHosts: [PRIVATE_HOST],

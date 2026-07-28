@@ -862,18 +862,13 @@ describe("public Sentry envelope ingest", () => {
     expect(fixture.forwarded).toEqual([]);
   });
 
-  it("maps a throwing storage-readiness probe to a bounded retryable 503", async () => {
-    const fixture = createFixture({
-      isStorageReady() {
-        throw new Error("private readiness failure");
-      },
-    });
+  it("fails closed with a bounded retryable 503 before storage safety has a successful sample", async () => {
+    const fixture = createFixture({ storageInitiallyUnknown: true });
 
     const response = await postEnvelope(fixture.app, NODE_FIXTURE);
 
     expectSentryError(response, 503);
     expect(response.headers["retry-after"]).toBe("60");
-    expect(response.body).not.toContain("private readiness failure");
   });
 
   it("maps unexpected internal failures to a bounded retryable 500", async () => {
@@ -977,8 +972,8 @@ interface FixtureOptions {
   readonly forwardingSecretRef?: string | null;
   readonly shadowResult?: ReturnType<ShadowForwarder["enqueue"]>;
   readonly shadowThrows?: boolean;
-  readonly isStorageReady?: () => boolean;
   readonly storageSafety?: StorageSafetyState;
+  readonly storageInitiallyUnknown?: boolean;
   readonly now?: () => Date;
   readonly limits?: PublicAppOptions["limits"];
 }
@@ -1059,8 +1054,30 @@ function createFixture(options: FixtureOptions = {}): {
   };
   const operationalMetrics: { readonly type: string }[] = [];
   const metrics = new ErrorHubMetrics();
+  const storageSafety =
+    options.storageSafety ?? new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+  if (
+    options.storageSafety === undefined &&
+    options.storageInitiallyUnknown !== true
+  ) {
+    storageSafety.observeUsage(
+      {
+        databaseBytes: 0,
+        walBytes: 0,
+        shmBytes: 0,
+        temporaryBytes: 0,
+        dataDirectoryOtherBytes: 0,
+        totalBytes: 0,
+        freeBytes: 10 * 1024 ** 3,
+      },
+      0,
+      null,
+    );
+    storageSafety.markSuccess(new Date(RECEIVED_AT), { age: 0, budget: 0 });
+  }
   const app = createPublicApp({
     database,
+    operations: { storageSafety, metrics },
     shadowForwarder,
     buildOutbox({ transition }): OutboxDraft {
       return {
@@ -1078,13 +1095,6 @@ function createFixture(options: FixtureOptions = {}): {
     onOperationalMetric(metric) {
       operationalMetrics.push(metric);
     },
-    metrics,
-    ...(options.isStorageReady === undefined
-      ? {}
-      : { isStorageReady: options.isStorageReady }),
-    ...(options.storageSafety === undefined
-      ? {}
-      : { storageSafety: options.storageSafety }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
   });
   openApplications.push(app);

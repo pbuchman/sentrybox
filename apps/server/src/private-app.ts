@@ -14,11 +14,11 @@ import { registerSentryIssueRoutes } from "./sentry-api/issues.js";
 import { registerSentryProjectRoutes } from "./sentry-api/projects.js";
 import { sentryNotFound } from "./sentry-api/model.js";
 import { HealthStatusService } from "./health/status.js";
-import { ErrorHubMetrics } from "./metrics.js";
-import { StorageSafetyState } from "./retention/storage-budget.js";
+import type { OperationsContext } from "./operations.js";
 
 export interface PrivateAppOptions {
   readonly database: ErrorHubDatabase;
+  readonly operations: OperationsContext;
   readonly privateOrigin: URL;
   readonly organizationSlug: string;
   readonly allowedHosts: readonly string[];
@@ -28,8 +28,6 @@ export interface PrivateAppOptions {
   readonly secrets?: Pick<SecretStore, "references" | "resolve">;
   readonly now?: () => Date;
   readonly createDeliveryId?: () => string;
-  readonly metrics?: ErrorHubMetrics;
-  readonly storageSafety?: StorageSafetyState;
   readonly exportBatchSize?: number;
   readonly onExportBatch?: (size: number) => void;
 }
@@ -68,12 +66,10 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
     });
   });
   const now = options.now ?? (() => new Date());
-  const storageSafety = options.storageSafety ?? new StorageSafetyState();
   const health = new HealthStatusService({
     database: options.database,
-    safetyState: storageSafety,
+    safetyState: options.operations.storageSafety,
   });
-  const metrics = options.metrics ?? new ErrorHubMetrics();
   registerIssueRoutes(app, { database: options.database, now });
   registerEventRoutes(app, options.database, options.grafanaExploreUrl ?? null);
   registerFacetRoutes(app, options.database);
@@ -92,8 +88,8 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
     createDeliveryId: options.createDeliveryId ?? randomUUID,
     ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
     health,
-    metrics,
-    storageSafety,
+    metrics: options.operations.metrics,
+    storageSafety: options.operations.storageSafety,
   });
   const sentryOptions = {
     database: options.database,

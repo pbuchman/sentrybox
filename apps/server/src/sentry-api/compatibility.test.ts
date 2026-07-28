@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { NormalizedEvent } from "@intexura-error-hub/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrivateApp } from "../private-app.js";
+import { createOperationsContext } from "../operations.js";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { IssueRepository } from "../storage/issue-repository.js";
 import { migrateDatabase } from "../storage/migrate.js";
@@ -31,6 +32,7 @@ describe("Sentry worker evidence API", () => {
     issueId = seedEvidence(database);
     app = createPrivateApp({
       database,
+      operations: createOperationsContext(),
       privateOrigin: new URL(PRIVATE_ORIGIN),
       organizationSlug: ORGANIZATION,
       allowedHosts: ["hub.test:8443"],
@@ -345,6 +347,7 @@ describe("pinned official Sentry MCP compatibility", () => {
       const issueId = seedEvidence(activeDatabase);
       const activeApp = createPrivateApp({
         database: activeDatabase,
+        operations: createOperationsContext(),
         privateOrigin: new URL(PRIVATE_ORIGIN),
         organizationSlug: ORGANIZATION,
         allowedHosts: [host],

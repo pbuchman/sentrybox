@@ -106,6 +106,24 @@ describe("buildLogLocator", () => {
     });
   });
 
+  it("marks browser JavaScript without an exact identifier not applicable even with a decorative service", () => {
+    expect(
+      buildLogLocator(
+        event({
+          platform: "javascript",
+          service: "web-shell",
+          message: "browser render failed",
+        }),
+        { grafanaExploreUrl: GRAFANA },
+      ),
+    ).toMatchObject({
+      confidence: "not_applicable",
+      query: null,
+      grafanaUrl: null,
+      criteria: { service: "web-shell", identifier: null, message: null },
+    });
+  });
+
   it("escapes labels, literals, regex metacharacters, quotes, slashes, newlines, and backticks", () => {
     const locator = buildLogLocator(
       event({
@@ -117,13 +135,66 @@ describe("buildLogLocator", () => {
     );
 
     expect(locator.query).not.toContain("\n");
-    expect(locator.query).not.toContain("`");
+    expect(locator.query).toContain("`");
     expect(locator.query).toContain('\\"');
     expect(locator.query).toContain("\\\\");
-    expect(locator.query).toContain("\\n");
-    expect(locator.query).toContain("\\u0060");
+    expect(locator.query).toContain("\\u000A");
+    expect(locator.query).not.toContain("\\`");
     expect(locator.query).toContain("\\\\.\\\\*");
     expect(locator.query).toContain("\\\\[x\\\\]");
+  });
+
+  it("encodes every C0 control and lone surrogate in labels, identifiers, and fallback regex strings", () => {
+    const adversarial = `nul\0back\bform\fescape\u001bunit\u0001vertical\u000bunit-separator\u001fdelete\u007fquote"slash/back\\carriage\rtab\tline\nend\ud800`;
+    const expectedEscapes = [
+      "\\u0000",
+      "\\u0008",
+      "\\u000C",
+      "\\u001B",
+      "\\u0001",
+      "\\u000B",
+      "\\u001F",
+      "\\u007F",
+      "\\u000D",
+      "\\u0009",
+      '\\"',
+      "\\\\",
+      "\\u000A",
+      "\\uFFFD",
+    ];
+    const exact = buildLogLocator(
+      event({
+        environment: adversarial,
+        service: adversarial,
+        traceId: adversarial,
+      }),
+      { grafanaExploreUrl: GRAFANA },
+    );
+    const fallback = buildLogLocator(
+      event({
+        environment: adversarial,
+        service: adversarial,
+        message: adversarial,
+      }),
+      { grafanaExploreUrl: GRAFANA },
+    );
+
+    for (const locator of [exact, fallback]) {
+      for (const escaped of expectedEscapes) {
+        expect(locator.query).toContain(escaped);
+      }
+      expect(
+        [...(locator.query ?? "")].some((character) => {
+          const code = character.charCodeAt(0);
+          return (
+            code <= 0x1f || code === 0x7f || (code >= 0xd800 && code <= 0xdfff)
+          );
+        }),
+      ).toBe(false);
+      expect(new URL(locator.grafanaUrl ?? "").searchParams.get("query")).toBe(
+        locator.query,
+      );
+    }
   });
 
   it("uses URLSearchParams without corrupting the query or exact time boundaries", () => {

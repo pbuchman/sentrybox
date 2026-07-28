@@ -7,17 +7,23 @@ import {
   type PhysicalStorageUsage,
 } from "../retention/storage-budget.js";
 import { RetentionSweeper } from "../retention/sweeper.js";
+import {
+  createOperationsContext,
+  type OperationsContext,
+} from "../operations.js";
 import { HealthStatusService } from "./status.js";
 
 const NOW = "2026-08-28T10:00:00.000Z";
 let database: ErrorHubDatabase;
 let safetyState: StorageSafetyState;
+let operations: OperationsContext;
 let health: HealthStatusService;
 
 beforeEach(() => {
   database = openDatabase(":memory:");
   migrateDatabase(database, "2026-07-28T00:00:00.000Z");
-  safetyState = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+  operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
+  safetyState = operations.storageSafety;
   health = new HealthStatusService({ database, safetyState });
 });
 
@@ -73,8 +79,8 @@ describe("HealthStatusService", () => {
     });
     const criticalRun = new RetentionSweeper({
       database,
+      operations,
       clock: () => new Date(NOW),
-      safetyState,
       readPhysicalUsage: () => critical,
     });
     await criticalRun.run();
@@ -126,8 +132,8 @@ describe("HealthStatusService", () => {
   async function successfulRetention(): Promise<void> {
     await new RetentionSweeper({
       database,
+      operations,
       clock: () => new Date(NOW),
-      safetyState,
       readPhysicalUsage: () => physical(),
     }).run();
   }

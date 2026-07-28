@@ -59,9 +59,7 @@ export function buildLogLocator(
   const to = new Date(occurredAt + windowMs).toISOString();
   const identifier = firstIdentifier(event);
   const browserWithoutServerLocator =
-    event.platform?.toLowerCase() === "javascript" &&
-    event.service === null &&
-    identifier === null;
+    event.platform?.toLowerCase() === "javascript" && identifier === null;
   if (browserWithoutServerLocator) {
     return {
       confidence: "not_applicable",
@@ -71,7 +69,7 @@ export function buildLogLocator(
       to,
       criteria: {
         environment: event.environment,
-        service: null,
+        service: event.service,
         identifier: null,
         message: null,
       },
@@ -140,13 +138,26 @@ function escapeLogQlRegex(value: string): string {
 }
 
 function escapeLogQlLiteral(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("\r", "\\r")
-    .replaceAll("\n", "\\n")
-    .replaceAll("\t", "\\t")
-    .replaceAll("`", "\\u0060");
+  let escaped = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        escaped += value[index]! + value[index + 1]!;
+        index += 1;
+      } else {
+        escaped += "\\uFFFD";
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      escaped += "\\uFFFD";
+    } else if (code === 0x22) escaped += '\\"';
+    else if (code === 0x5c) escaped += "\\\\";
+    else if (code <= 0x1f || code === 0x7f) {
+      escaped += `\\u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    } else escaped += value[index];
+  }
+  return escaped;
 }
 
 function grafanaUrl(

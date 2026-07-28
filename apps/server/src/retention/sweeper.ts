@@ -1,8 +1,7 @@
 import type { ErrorHubDatabase } from "../storage/database.js";
-import type { ErrorHubMetrics } from "../metrics.js";
+import type { OperationsContext } from "../operations.js";
 import {
   DEFAULT_RETENTION_CONFIG,
-  StorageSafetyState,
   type PhysicalStorageUsage,
   type RetentionConfig,
   validateRetentionConfig,
@@ -42,17 +41,17 @@ export interface RetentionRunResult {
 
 export interface RetentionSweeperOptions {
   readonly database: ErrorHubDatabase;
+  readonly operations: OperationsContext;
   readonly clock?: () => Date;
   readonly config?: Partial<RetentionConfig>;
-  readonly safetyState: StorageSafetyState;
   readonly readPhysicalUsage: () =>
     | PhysicalStorageUsage
     | Promise<PhysicalStorageUsage>;
   readonly checkpoint?: () => WalCheckpointResult;
+  readonly emergencyCheckpoint?: () => WalCheckpointResult;
   readonly incrementalVacuum?: (pages: number) => void;
   readonly yieldControl?: () => void | Promise<void>;
   readonly onBatch?: (batch: RetentionBatch) => void;
-  readonly metrics?: Pick<ErrorHubMetrics, "recordRetention">;
 }
 
 interface EventCandidate {
@@ -64,13 +63,13 @@ export class RetentionSweeper {
   readonly #database: ErrorHubDatabase;
   readonly #clock: () => Date;
   readonly #config: RetentionConfig;
-  readonly #safetyState: StorageSafetyState;
+  readonly #operations: OperationsContext;
   readonly #readPhysicalUsage: RetentionSweeperOptions["readPhysicalUsage"];
   readonly #checkpoint: () => WalCheckpointResult;
+  readonly #emergencyCheckpoint: () => WalCheckpointResult;
   readonly #incrementalVacuum: (pages: number) => void;
   readonly #yieldControl: () => void | Promise<void>;
   readonly #onBatch: ((batch: RetentionBatch) => void) | undefined;
-  readonly #metrics: Pick<ErrorHubMetrics, "recordRetention"> | undefined;
 
   public constructor(options: RetentionSweeperOptions) {
     this.#database = options.database;
@@ -79,10 +78,12 @@ export class RetentionSweeper {
       ...DEFAULT_RETENTION_CONFIG,
       ...options.config,
     });
-    this.#safetyState = options.safetyState;
+    this.#operations = options.operations;
     this.#readPhysicalUsage = options.readPhysicalUsage;
     this.#checkpoint =
       options.checkpoint ?? (() => passiveCheckpoint(this.#database));
+    this.#emergencyCheckpoint =
+      options.emergencyCheckpoint ?? (() => restartCheckpoint(this.#database));
     this.#incrementalVacuum =
       options.incrementalVacuum ??
       ((pages) => {
@@ -90,7 +91,6 @@ export class RetentionSweeper {
       });
     this.#yieldControl = options.yieldControl ?? (() => undefined);
     this.#onBatch = options.onBatch;
-    this.#metrics = options.metrics;
   }
 
   public async run(): Promise<RetentionRunResult> {
@@ -103,24 +103,32 @@ export class RetentionSweeper {
     let physical: PhysicalStorageUsage | null = null;
     let logical = logicalPayloadBytes(this.#database);
     let oldest = oldestEventReceivedAt(this.#database);
+    let stoppedAtHardLimit = false;
     try {
-      physical = await this.#readPhysicalUsage();
-      this.#safetyState.observeUsage(physical, logical, oldest);
+      physical = await this.sampleAndPublish();
+      if (this.isPhysicalCritical(physical)) {
+        physical = await this.emergencyReclaimAndResample();
+      }
+      stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
       const ageCutoff = new Date(
         now.getTime() - this.#config.eventAgeMs,
       ).toISOString();
-      for (;;) {
+      while (!stoppedAtHardLimit) {
         const candidates = this.selectAgeCandidates(ageCutoff);
         if (candidates.length === 0) break;
         this.deleteEventBatch(candidates, "age");
         removedEvents.age += candidates.length;
         batches += 1;
-        await this.afterBatch();
+        physical = await this.afterBatch();
+        stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
       }
 
       logical = logicalPayloadBytes(this.#database);
-      if (logical > this.#config.logicalHighBytes) {
-        while (logical > this.#config.logicalTargetBytes) {
+      if (!stoppedAtHardLimit && logical > this.#config.logicalHighBytes) {
+        while (
+          !stoppedAtHardLimit &&
+          logical > this.#config.logicalTargetBytes
+        ) {
           const candidates = this.selectBudgetCandidates();
           if (candidates.length === 0) {
             throw new Error("logical payload usage cannot be reduced");
@@ -128,7 +136,8 @@ export class RetentionSweeper {
           this.deleteEventBatch(candidates, "budget");
           removedEvents.budget += candidates.length;
           batches += 1;
-          await this.afterBatch();
+          physical = await this.afterBatch();
+          stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
           logical = logicalPayloadBytes(this.#database);
         }
       }
@@ -136,12 +145,21 @@ export class RetentionSweeper {
       const deliveryCutoff = new Date(
         now.getTime() - this.#config.deliveryTtlMs,
       ).toISOString();
-      const redriveCleanup = this.cleanupTerminalRedrives(deliveryCutoff);
-      removedRedrives += redriveCleanup.removed;
-      batches += redriveCleanup.batches;
-      const outboxCleanup = this.cleanupDeliveredOutbox(deliveryCutoff);
-      removedOutbox += outboxCleanup.removed;
-      batches += outboxCleanup.batches;
+      if (!stoppedAtHardLimit) {
+        const redriveCleanup =
+          await this.cleanupTerminalRedrives(deliveryCutoff);
+        removedRedrives += redriveCleanup.removed;
+        batches += redriveCleanup.batches;
+        physical = redriveCleanup.physical ?? physical;
+        stoppedAtHardLimit = redriveCleanup.stoppedAtHardLimit;
+      }
+      if (!stoppedAtHardLimit) {
+        const outboxCleanup = await this.cleanupDeliveredOutbox(deliveryCutoff);
+        removedOutbox += outboxCleanup.removed;
+        batches += outboxCleanup.batches;
+        physical = outboxCleanup.physical ?? physical;
+        stoppedAtHardLimit = outboxCleanup.stoppedAtHardLimit;
+      }
 
       if (batches > 0) {
         checkpoint = this.#checkpoint();
@@ -149,16 +167,18 @@ export class RetentionSweeper {
         this.#incrementalVacuum(this.#config.incrementalVacuumPages);
       }
 
-      physical = await this.#readPhysicalUsage();
+      physical = await this.sampleAndPublish();
+      if (this.isPhysicalCritical(physical)) {
+        physical = await this.emergencyReclaimAndResample();
+      }
       logical = logicalPayloadBytes(this.#database);
       oldest = oldestEventReceivedAt(this.#database);
-      this.#safetyState.observeUsage(physical, logical, oldest);
-      if (
-        physical.totalBytes >= this.#config.physicalCriticalBytes ||
-        physical.freeBytes < this.#config.minimumFreeBytes
-      ) {
-        this.#safetyState.markFailure("physical_storage_critical", now);
-        this.#metrics?.recordRetention("failure", removedEvents);
+      if (this.isPhysicalCritical(physical)) {
+        this.#operations.storageSafety.markFailure(
+          "physical_storage_critical",
+          now,
+        );
+        this.#operations.metrics.recordRetention("failure", removedEvents);
         return result(
           false,
           "physical_storage_critical",
@@ -172,8 +192,8 @@ export class RetentionSweeper {
           oldest,
         );
       }
-      this.#safetyState.markSuccess(now, removedEvents);
-      this.#metrics?.recordRetention("success", removedEvents);
+      this.#operations.storageSafety.markSuccess(now, removedEvents);
+      this.#operations.metrics.recordRetention("success", removedEvents);
       return result(
         true,
         null,
@@ -189,8 +209,8 @@ export class RetentionSweeper {
     } catch {
       logical = logicalPayloadBytesSafely(this.#database);
       oldest = oldestEventReceivedAtSafely(this.#database);
-      this.#safetyState.markFailure("cleanup_failed", now);
-      this.#metrics?.recordRetention("failure", removedEvents);
+      this.#operations.storageSafety.markFailure("cleanup_failed", now);
+      this.#operations.metrics.recordRetention("failure", removedEvents);
       return result(
         false,
         "cleanup_failed",
@@ -326,10 +346,7 @@ export class RetentionSweeper {
       .run(...issueIds);
   }
 
-  private cleanupDeliveredOutbox(cutoff: string): {
-    readonly removed: number;
-    readonly batches: number;
-  } {
+  private cleanupDeliveredOutbox(cutoff: string): Promise<CleanupRowsResult> {
     return this.cleanupRows(
       `SELECT id
        FROM webhook_outbox INDEXED BY idx_outbox_retention_delivered
@@ -341,10 +358,7 @@ export class RetentionSweeper {
     );
   }
 
-  private cleanupTerminalRedrives(cutoff: string): {
-    readonly removed: number;
-    readonly batches: number;
-  } {
+  private cleanupTerminalRedrives(cutoff: string): Promise<CleanupRowsResult> {
     return this.cleanupRows(
       `SELECT id
        FROM webhook_redrives INDEXED BY idx_webhook_redrives_retention_terminal
@@ -356,20 +370,23 @@ export class RetentionSweeper {
     );
   }
 
-  private cleanupRows(
+  private async cleanupRows(
     selectSql: string,
     table: "webhook_outbox" | "webhook_redrives",
     cutoff: string,
-  ): { readonly removed: number; readonly batches: number } {
+  ): Promise<CleanupRowsResult> {
     let removed = 0;
     let batches = 0;
+    let physical: PhysicalStorageUsage | null = null;
     for (;;) {
       const ids = (
         this.#database
           .prepare(selectSql)
           .all(cutoff, this.#config.batchSize) as { id: number }[]
       ).map((row) => row.id);
-      if (ids.length === 0) return { removed, batches };
+      if (ids.length === 0) {
+        return { removed, batches, physical, stoppedAtHardLimit: false };
+      }
       this.#database
         .transaction(() => {
           const deleted = this.#database
@@ -382,18 +399,58 @@ export class RetentionSweeper {
         .immediate();
       removed += ids.length;
       batches += 1;
+      physical = await this.afterBatch();
+      if (this.isHardPhysicalLimit(physical)) {
+        return { removed, batches, physical, stoppedAtHardLimit: true };
+      }
     }
   }
 
-  private async afterBatch(): Promise<void> {
+  private async afterBatch(): Promise<PhysicalStorageUsage> {
+    let physical = await this.sampleAndPublish();
+    if (this.isPhysicalCritical(physical)) {
+      physical = await this.emergencyReclaimAndResample();
+    }
     await this.#yieldControl();
+    return physical;
+  }
+
+  private async sampleAndPublish(): Promise<PhysicalStorageUsage> {
     const physical = await this.#readPhysicalUsage();
-    this.#safetyState.observeUsage(
+    this.#operations.storageSafety.observeUsage(
       physical,
       logicalPayloadBytes(this.#database),
       oldestEventReceivedAt(this.#database),
     );
+    return physical;
   }
+
+  private async emergencyReclaimAndResample(): Promise<PhysicalStorageUsage> {
+    validateCheckpoint(this.#emergencyCheckpoint());
+    this.#incrementalVacuum(this.#config.incrementalVacuumPages);
+    return this.sampleAndPublish();
+  }
+
+  private isPhysicalCritical(physical: PhysicalStorageUsage): boolean {
+    return (
+      physical.totalBytes >= this.#config.physicalCriticalBytes ||
+      physical.freeBytes < this.#config.minimumFreeBytes
+    );
+  }
+
+  private isHardPhysicalLimit(physical: PhysicalStorageUsage): boolean {
+    return (
+      physical.totalBytes >= this.#config.physicalTotalBytes ||
+      physical.freeBytes < this.#config.minimumFreeBytes
+    );
+  }
+}
+
+interface CleanupRowsResult {
+  readonly removed: number;
+  readonly batches: number;
+  readonly physical: PhysicalStorageUsage | null;
+  readonly stoppedAtHardLimit: boolean;
 }
 
 function logicalPayloadBytes(database: ErrorHubDatabase): number {
@@ -449,13 +506,30 @@ function passiveCheckpoint(database: ErrorHubDatabase): WalCheckpointResult {
   };
 }
 
+function restartCheckpoint(database: ErrorHubDatabase): WalCheckpointResult {
+  const row = (
+    database.pragma("wal_checkpoint(RESTART)") as {
+      busy: number;
+      log: number;
+      checkpointed: number;
+    }[]
+  )[0];
+  if (row === undefined)
+    throw new Error("RESTART checkpoint returned no result");
+  return {
+    busy: row.busy,
+    logFrames: row.log,
+    checkpointedFrames: row.checkpointed,
+  };
+}
+
 function validateCheckpoint(value: WalCheckpointResult): void {
   if (!Number.isSafeInteger(value.busy) || value.busy < 0) {
-    throw new Error("PASSIVE checkpoint returned invalid busy count");
+    throw new Error("WAL checkpoint returned invalid busy count");
   }
   for (const count of [value.logFrames, value.checkpointedFrames]) {
     if (!Number.isSafeInteger(count) || count < -1) {
-      throw new Error("PASSIVE checkpoint returned invalid frame counts");
+      throw new Error("WAL checkpoint returned invalid frame counts");
     }
   }
 }

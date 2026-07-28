@@ -21,6 +21,10 @@ import { nextRetryAt } from "./retry-policy.js";
 import { signWebhookBody } from "./signature.js";
 import { ErrorHubMetrics } from "../metrics.js";
 import {
+  createOperationsContext,
+  type OperationsContext,
+} from "../operations.js";
+import {
   DEFAULT_RETENTION_CONFIG,
   StorageSafetyState,
 } from "../retention/storage-budget.js";
@@ -45,6 +49,7 @@ let database: ErrorHubDatabase;
 let projects: ProjectRepository;
 let issues: IssueRepository;
 let outbox: OutboxRepository;
+let operations: OperationsContext;
 
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "error-hub-webhooks-"));
@@ -60,6 +65,7 @@ beforeEach(() => {
   });
   issues = new IssueRepository(database);
   outbox = new OutboxRepository(database);
+  operations = createOperationsContext();
 });
 
 afterEach(() => {
@@ -163,6 +169,7 @@ describe("webhook lifecycle and dispatch", () => {
     };
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http,
       now: () => now,
       requestTimeoutMs: 2_000,
@@ -268,6 +275,7 @@ describe("webhook lifecycle and dispatch", () => {
     });
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http: { send },
       now: () => new Date(CREATED_AT),
       requestTimeoutMs: 2_000,
@@ -300,13 +308,13 @@ describe("webhook lifecycle and dispatch", () => {
     const metrics = new ErrorHubMetrics();
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations: { ...operations, metrics },
       http: { send },
       now: () => new Date("2026-08-04T10:00:00.001Z"),
       requestTimeoutMs: 2_000,
       leaseMs: 10_000,
       batchSize: 3,
       createLeaseId: () => "bounded-maintenance",
-      metrics,
     });
 
     await expect(dispatcher.dispatchDue()).resolves.toEqual({
@@ -354,6 +362,7 @@ describe("webhook lifecycle and dispatch", () => {
     }
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http: {
         async send() {
           return { statusCode: 204 };
@@ -421,6 +430,7 @@ describe("webhook lifecycle and dispatch", () => {
       .run(...staleIds);
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http: {
         async send() {
           return { statusCode: 204 };
@@ -477,6 +487,7 @@ describe("webhook lifecycle and dispatch", () => {
     });
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http: {
         async send() {
           await blocked;
@@ -538,6 +549,7 @@ describe("webhook lifecycle and dispatch", () => {
     const requests: WebhookHttpRequest[] = [];
     const dispatcher = new WebhookDispatcher({
       outbox,
+      operations,
       http: {
         async send(request) {
           requests.push(request);
@@ -634,6 +646,7 @@ describe("webhook lifecycle and dispatch", () => {
     vi.spyOn(outbox, "completeDelivered").mockReturnValueOnce(false);
     const automatic = new WebhookDispatcher({
       outbox,
+      operations: { ...operations, metrics },
       http: {
         async send() {
           return { statusCode: 204 };
@@ -644,7 +657,6 @@ describe("webhook lifecycle and dispatch", () => {
       leaseMs: 10_000,
       batchSize: 1,
       createLeaseId: () => "stale-auto",
-      metrics,
     });
     await automatic.dispatchDue();
     database
@@ -677,6 +689,7 @@ describe("webhook lifecycle and dispatch", () => {
     vi.spyOn(outbox, "completeRedrive").mockReturnValueOnce(false);
     const redrive = new WebhookDispatcher({
       outbox,
+      operations: { ...operations, metrics },
       http: {
         async send() {
           return { statusCode: 204 };
@@ -687,7 +700,6 @@ describe("webhook lifecycle and dispatch", () => {
       leaseMs: 10_000,
       batchSize: 1,
       createLeaseId: () => "stale-redrive",
-      metrics,
     });
     await redrive.dispatchDue();
     const storage = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
@@ -1096,6 +1108,7 @@ function createDispatcher(
 ): WebhookDispatcher {
   return new WebhookDispatcher({
     outbox,
+    operations,
     http: { send },
     now: () => new Date(now),
     requestTimeoutMs: 2_000,

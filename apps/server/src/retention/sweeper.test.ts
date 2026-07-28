@@ -11,6 +11,7 @@ import {
   type PhysicalStorageUsage,
 } from "./storage-budget.js";
 import { RetentionSweeper } from "./sweeper.js";
+import { createOperationsContext } from "../operations.js";
 
 const NOW = "2026-08-28T10:00:00.000Z";
 const THIRTY_DAY_CUTOFF = "2026-07-29T10:00:00.000Z";
@@ -298,7 +299,7 @@ describe("RetentionSweeper", () => {
     });
   });
 
-  it("resamples critical physical usage and recovers only below the limit after a successful run", async () => {
+  it("recovers critical physical usage only after an explicit bounded emergency reclaim and real resample", async () => {
     const critical = usage({
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
     });
@@ -306,13 +307,19 @@ describe("RetentionSweeper", () => {
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes - 1,
     });
     const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
-    const readings = [critical, recovered];
+    let reclaimed = false;
+    const emergencyCheckpoint = vi.fn(() => {
+      reclaimed = true;
+      return { busy: 0, logFrames: 8, checkpointedFrames: 8 };
+    });
 
     const result = await createSweeper({
       safetyState: state,
-      readPhysicalUsage: () => readings.shift() ?? recovered,
+      readPhysicalUsage: () => (reclaimed ? recovered : critical),
+      emergencyCheckpoint,
     }).run();
 
+    expect(emergencyCheckpoint).toHaveBeenCalledOnce();
     expect(result.success).toBe(true);
     expect(state.snapshot()).toMatchObject({
       acceptingIngest: true,
@@ -326,10 +333,16 @@ describe("RetentionSweeper", () => {
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
     });
     const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    const emergencyCheckpoint = vi.fn(() => ({
+      busy: 0,
+      logFrames: 8,
+      checkpointedFrames: 8,
+    }));
 
     const result = await createSweeper({
       safetyState: state,
       readPhysicalUsage: () => critical,
+      emergencyCheckpoint,
     }).run();
 
     expect(result.success).toBe(false);
@@ -339,20 +352,165 @@ describe("RetentionSweeper", () => {
       retentionKnownSuccessful: false,
       safety: "critical",
     });
+    expect(emergencyCheckpoint).toHaveBeenCalled();
+  });
+
+  it("publishes event-batch critical safety before yielding and stops further cleanup at the hard limit", async () => {
+    const first = record({
+      fingerprint: "a",
+      receivedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const second = record({
+      fingerprint: "b",
+      receivedAt: "2026-07-02T00:00:00.000Z",
+    });
+    const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    const safe = usage();
+    const hard = usage({
+      totalBytes: DEFAULT_RETENTION_CONFIG.physicalTotalBytes,
+    });
+    let samples = 0;
+    const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
+    const result = await createSweeper({
+      safetyState: state,
+      config: { batchSize: 1 },
+      readPhysicalUsage: () => {
+        samples += 1;
+        return samples === 1 ? safe : hard;
+      },
+      emergencyCheckpoint: () => ({
+        busy: 1,
+        logFrames: 9,
+        checkpointedFrames: 0,
+      }),
+      yieldControl: async () => {
+        safetyAtYield.push(state.snapshot());
+      },
+    }).run();
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "physical_storage_critical",
+      removedEvents: { age: 1, budget: 0 },
+    });
+    expect(safetyAtYield).toEqual([
+      expect.objectContaining({ safety: "critical", acceptingIngest: false }),
+    ]);
+    expect(eventIds()).toContain(second.eventRowId);
+    expect(eventIds()).not.toContain(first.eventRowId);
+  });
+
+  it("samples and disables admission before yielding every terminal-redrive and delivered-outbox batch", async () => {
+    const delivered = record({ fingerprint: "a" });
+    const parent = record({ fingerprint: "b" });
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET state = 'delivered', next_attempt = NULL, delivered_at = ?, attempts = 1
+         WHERE id = ?`,
+      )
+      .run("2026-08-20T00:00:00.000Z", delivered.outboxId);
+    database
+      .prepare(
+        `UPDATE webhook_outbox
+         SET state = 'dead_letter', next_attempt = NULL, last_error = 'failed'
+         WHERE id = ?`,
+      )
+      .run(parent.outboxId);
+    database
+      .prepare(
+        `INSERT INTO webhook_redrives(
+           delivery_id, original_outbox_id, target_url, secret_ref, signature,
+           state, attempts, requested_at, attempted_at, last_error
+         ) VALUES (
+           '44444444-4444-4444-8444-444444444444', ?,
+           'https://code-agent.example/api/code/webhooks/sentry', 'HOOK', ?,
+           'dead_letter', 1, ?, ?, 'failed'
+         )`,
+      )
+      .run(
+        parent.outboxId,
+        "d".repeat(64),
+        "2026-08-20T00:00:00.000Z",
+        "2026-08-20T00:00:00.000Z",
+      );
+    const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    const critical = usage({
+      totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
+    });
+    let samples = 0;
+    const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
+
+    const result = await createSweeper({
+      safetyState: state,
+      config: { batchSize: 1 },
+      readPhysicalUsage: () => {
+        samples += 1;
+        return samples === 1 ? usage() : critical;
+      },
+      emergencyCheckpoint: () => ({
+        busy: 1,
+        logFrames: 10,
+        checkpointedFrames: 0,
+      }),
+      yieldControl: async () => {
+        safetyAtYield.push(state.snapshot());
+      },
+    }).run();
+
+    expect(result).toMatchObject({
+      success: false,
+      removedOutbox: 1,
+      removedRedrives: 1,
+    });
+    expect(safetyAtYield).toHaveLength(2);
+    expect(
+      safetyAtYield.every(
+        (snapshot) =>
+          snapshot.safety === "critical" && snapshot.acceptingIngest === false,
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves a sampled physical-critical classification when emergency reclaim throws", async () => {
+    const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    const critical = usage({
+      totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
+    });
+
+    const result = await createSweeper({
+      safetyState: state,
+      readPhysicalUsage: () => critical,
+      emergencyCheckpoint: () => {
+        throw new Error("restart checkpoint failed");
+      },
+    }).run();
+
+    expect(result).toMatchObject({ success: false, failure: "cleanup_failed" });
+    expect(state.snapshot()).toMatchObject({
+      safety: "critical",
+      acceptingIngest: false,
+      lastFailure: "cleanup_failed",
+    });
   });
 });
 
 function createSweeper(
-  overrides: Partial<ConstructorParameters<typeof RetentionSweeper>[0]> = {},
+  overrides: Partial<
+    Omit<ConstructorParameters<typeof RetentionSweeper>[0], "operations">
+  > & { readonly safetyState?: StorageSafetyState } = {},
 ): RetentionSweeper {
   const state =
     overrides.safetyState ?? new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+  const sweeperOverrides = { ...overrides };
+  delete sweeperOverrides.safetyState;
+  const operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
   return new RetentionSweeper({
     database,
     clock: () => new Date(NOW),
-    safetyState: state,
+    operations: { ...operations, storageSafety: state },
     readPhysicalUsage: () => usage(),
-    ...overrides,
+    ...sweeperOverrides,
   });
 }
 
