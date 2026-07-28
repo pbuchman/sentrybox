@@ -326,8 +326,54 @@ describe("fingerprintEvent", () => {
         },
       }),
     );
+    const sourceRoot = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "/src/orders/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const webpackSourceRoot = fingerprintEvent(
+      exceptionEvent({
+        exception: {
+          values: [
+            {
+              type: "TypeError",
+              value: "Cannot read properties of undefined",
+              stacktrace: {
+                frames: [
+                  {
+                    in_app: true,
+                    module: "application.index",
+                    filename: "webpack:///src/orders/index.ts",
+                    function: "run",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    );
 
     expect(appRoot.digest).toBe(srvRoot.digest);
+    expect(sourceRoot.digest).toBe(srvRoot.digest);
+    expect(webpackSourceRoot.digest).toBe(srvRoot.digest);
   });
 
   it("retains deep unanchored absolute paths instead of collapsing them", () => {

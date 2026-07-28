@@ -188,9 +188,8 @@ function normalizeFilename(value: string): string {
   const isAbsolute =
     withoutScheme.startsWith("/") || /^[a-z]:\//iu.test(withoutScheme);
   const segments = withoutScheme.split("/").filter(Boolean);
-  const stablePathIndex = segments.findLastIndex(
-    (segment, index) =>
-      index > 0 && ["app", "apps", "lib", "packages", "src"].includes(segment),
+  const stablePathIndex = segments.findLastIndex((segment) =>
+    ["app", "apps", "lib", "packages", "src"].includes(segment),
   );
   const filename = !isAbsolute
     ? withoutScheme
