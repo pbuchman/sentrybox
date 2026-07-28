@@ -9,8 +9,8 @@ import {
 } from "../storage/issue-repository.js";
 import { OutboxRepository } from "../storage/outbox-repository.js";
 import {
-  UNKNOWN_RELEASE_FILTER,
   encodeCursor,
+  encodeNullableFacetQueryValue,
   eventFilterPredicate,
   notFound,
   type PrivateFilters,
@@ -272,41 +272,29 @@ export function facetsForFilters(
   }[];
   return {
     project: projectRows.map((row) => ({ ...row, queryValue: row.value })),
-    release: scalarFacet(
-      database,
-      "e.release",
-      common,
-      predicate.parameters,
-      true,
-    ),
+    release: scalarFacet(database, "e.release", common, predicate.parameters, {
+      nullable: true,
+      unknownVersion: true,
+    }),
     environment: scalarFacet(
       database,
       "e.environment",
       common,
       predicate.parameters,
-      false,
+      { nullable: false, unknownVersion: false },
     ),
-    service: scalarFacet(
-      database,
-      "e.service",
-      common,
-      predicate.parameters,
-      false,
-    ),
-    level: scalarFacet(
-      database,
-      "e.level",
-      common,
-      predicate.parameters,
-      false,
-    ),
-    status: scalarFacet(
-      database,
-      "i.status",
-      common,
-      predicate.parameters,
-      false,
-    ),
+    service: scalarFacet(database, "e.service", common, predicate.parameters, {
+      nullable: true,
+      unknownVersion: false,
+    }),
+    level: scalarFacet(database, "e.level", common, predicate.parameters, {
+      nullable: false,
+      unknownVersion: false,
+    }),
+    status: scalarFacet(database, "i.status", common, predicate.parameters, {
+      nullable: false,
+      unknownVersion: false,
+    }),
   };
 }
 
@@ -318,11 +306,15 @@ function issueFacets(database: ErrorHubDatabase, issueId: number) {
     level: [],
   };
   for (const facet of new IssueRepository(database).listFacets(issueId)) {
+    const nullableFacet =
+      facet.facetType === "release" || facet.facetType === "service";
     const unknownRelease =
       facet.facetType === "release" && facet.facetValue === null;
     grouped[facet.facetType]!.push({
       value: facet.facetValue,
-      queryValue: unknownRelease ? UNKNOWN_RELEASE_FILTER : facet.facetValue,
+      queryValue: nullableFacet
+        ? encodeNullableFacetQueryValue(facet.facetValue)
+        : facet.facetValue,
       label: unknownRelease ? "Unknown version" : facet.facetValue,
       count: facet.count,
       lastSeen: facet.lastSeen,
@@ -336,7 +328,7 @@ function scalarFacet(
   column: string,
   common: string,
   parameters: readonly unknown[],
-  unknownVersion: boolean,
+  options: { readonly nullable: boolean; readonly unknownVersion: boolean },
 ) {
   const rows = database
     .prepare(
@@ -349,8 +341,10 @@ function scalarFacet(
     const unknown = row.value === null;
     return {
       value: row.value,
-      queryValue: unknown ? UNKNOWN_RELEASE_FILTER : row.value,
-      label: unknown && unknownVersion ? "Unknown version" : row.value,
+      queryValue: options.nullable
+        ? encodeNullableFacetQueryValue(row.value)
+        : row.value,
+      label: unknown && options.unknownVersion ? "Unknown version" : row.value,
       count: row.count,
     };
   });

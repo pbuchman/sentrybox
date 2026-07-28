@@ -80,6 +80,20 @@ export interface ClaimedWebhookRedrive extends StoredWebhookRedrive {
   readonly body: Buffer;
 }
 
+export class WebhookRedriveNotFoundError extends Error {
+  public constructor() {
+    super("webhook delivery not found");
+    this.name = "WebhookRedriveNotFoundError";
+  }
+}
+
+export class WebhookRedriveConflictError extends Error {
+  public constructor() {
+    super("webhook delivery cannot be redriven");
+    this.name = "WebhookRedriveConflictError";
+  }
+}
+
 export interface DueFrontierCursor {
   readonly nextAttempt: string;
   readonly id: number;
@@ -484,15 +498,15 @@ export class OutboxRepository {
               webhook_secret_ref: string | null;
             }
           | undefined;
-        if (source === undefined || source.state !== "dead_letter") {
-          throw new Error("only a dead-letter delivery can be redriven");
-        }
+        if (source === undefined) throw new WebhookRedriveNotFoundError();
+        if (source.state !== "dead_letter")
+          throw new WebhookRedriveConflictError();
         if (
           source.webhook_mode !== "live" ||
           source.webhook_target_url === null ||
           source.webhook_secret_ref === null
         ) {
-          throw new Error("current webhook destination is not live");
+          throw new WebhookRedriveConflictError();
         }
         const destination = validateWebhookDestination(
           source.webhook_target_url,

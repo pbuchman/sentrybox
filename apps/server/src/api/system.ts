@@ -1,8 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { SecretStore } from "../secrets.js";
 import type { ErrorHubDatabase } from "../storage/database.js";
-import { OutboxRepository } from "../storage/outbox-repository.js";
-import { conflict, positiveId } from "./query.js";
+import {
+  OutboxRepository,
+  WebhookRedriveConflictError,
+  WebhookRedriveNotFoundError,
+} from "../storage/outbox-repository.js";
+import { conflict, notFound, positiveId } from "./query.js";
 
 interface DeliveryParams {
   readonly Params: { readonly id: string };
@@ -32,11 +36,14 @@ export function registerSystemRoutes(
     async (request, reply) => {
       if (options.secrets === undefined)
         throw conflict("Webhook secrets are unavailable");
+      const outboxId = positiveId(request.params.id, "delivery id");
+      const deliveryId = options.createDeliveryId();
+      const requestedAt = canonicalNow(options.now);
       try {
         const redrive = new OutboxRepository(options.database).requestRedrive({
-          outboxId: positiveId(request.params.id, "delivery id"),
-          deliveryId: options.createDeliveryId(),
-          requestedAt: canonicalNow(options.now),
+          outboxId,
+          deliveryId,
+          requestedAt,
           secrets: options.secrets,
         });
         return reply.code(202).send({
@@ -50,9 +57,11 @@ export function registerSystemRoutes(
           lastError: redrive.lastError,
         });
       } catch (error) {
-        throw conflict(
-          error instanceof Error ? error.message : "Delivery cannot be retried",
-        );
+        if (error instanceof WebhookRedriveNotFoundError)
+          throw notFound("Delivery not found");
+        if (error instanceof WebhookRedriveConflictError)
+          throw conflict("Delivery cannot be retried");
+        throw error;
       }
     },
   );

@@ -6,12 +6,20 @@ import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { IssueRepository } from "../storage/issue-repository.js";
 import { migrateDatabase } from "../storage/migrate.js";
 import { ProjectRepository } from "../storage/project-repository.js";
+import {
+  decodeCursor,
+  encodeCursor,
+  encodeNullableFacetQueryValue,
+  parseFilters,
+} from "./query.js";
 
 const PRIVATE_HOST = "hub.test:8443";
 const PRIVATE_ORIGIN = `https://${PRIVATE_HOST}`;
 const PUBLIC_HOST = "errors.test";
 const NOW = "2026-07-28T12:00:00.000Z";
-const UNKNOWN_RELEASE = "__unknown__";
+const NULL_FACET_QUERY = "~v1:n";
+const LITERAL_UNKNOWN_QUERY = "~v1:s:X191bmtub3duX18";
+const LITERAL_TAG_QUERY = "~v1:s:fnYxOm4";
 
 describe("private operator API", () => {
   let database: ErrorHubDatabase;
@@ -21,6 +29,8 @@ describe("private operator API", () => {
   let deadLetterId: number;
   let firstEventRowId: number;
   let exportBatches: number[];
+  let clock: Date;
+  let secretFailure: Error | null;
 
   beforeEach(() => {
     database = openDatabase(":memory:");
@@ -31,6 +41,8 @@ describe("private operator API", () => {
     deadLetterId = seeded.deadLetterId;
     firstEventRowId = seeded.firstEventRowId;
     exportBatches = [];
+    clock = new Date(NOW);
+    secretFailure = null;
     app = createPrivateApp({
       database,
       privateOrigin: new URL(PRIVATE_ORIGIN),
@@ -38,11 +50,12 @@ describe("private operator API", () => {
       allowedHosts: [PRIVATE_HOST],
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: [PUBLIC_HOST],
-      now: () => new Date(NOW),
+      now: () => clock,
       createDeliveryId: () => "55555555-5555-4555-8555-555555555555",
       secrets: {
         references: () => ["HOOK_SECRET"],
         resolve: (reference) => {
+          if (secretFailure !== null) throw secretFailure;
           if (reference !== "HOOK_SECRET") throw new Error("unknown secret");
           return "current-secret";
         },
@@ -162,7 +175,7 @@ describe("private operator API", () => {
     expect(firstBody.facets).toBeTypeOf("object");
 
     const filtered = await privateGet(
-      `/api/issues?release=${UNKNOWN_RELEASE}&release=1.0.0&environment=prod`,
+      `/api/issues?release=${encodeURIComponent(NULL_FACET_QUERY)}&release=1.0.0&environment=prod`,
     );
     expect(
       filtered.json<{ items: Array<{ id: number; matchingCount: number }> }>()
@@ -182,6 +195,17 @@ describe("private operator API", () => {
       `/api/issues?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
     );
     expect(repeatedCursor.json()).toEqual(nextPage.json());
+
+    expect(parseFilters({ status: ["unresolved", "resolved"] }).status).toEqual(
+      [],
+    );
+    const allStatuses = await privateGet(
+      "/api/issues?status=unresolved&status=resolved",
+    );
+    expect(allStatuses.json<{ items: Array<{ id: number }> }>().items).toEqual(
+      (await privateGet("/api/issues")).json<{ items: Array<{ id: number }> }>()
+        .items,
+    );
   });
 
   it("returns issue detail, issue facets, occurrence pages, and one normalized event with exact timestamps", async () => {
@@ -199,7 +223,7 @@ describe("private operator API", () => {
             expect.objectContaining({
               value: null,
               label: "Unknown version",
-              queryValue: UNKNOWN_RELEASE,
+              queryValue: NULL_FACET_QUERY,
               count: 1,
             }),
           ]),
@@ -312,24 +336,121 @@ describe("private operator API", () => {
     ).toBe(eventId(3));
   });
 
-  it("exposes selectable global facets while keeping unknown releases null", async () => {
+  it("keeps null and literal nullable facet values collision-free through facets, filters, counts, and exports", async () => {
+    const maximumUnicodeValue = "ą".repeat(1_024);
+    expect(
+      parseFilters({
+        release: encodeNullableFacetQueryValue(maximumUnicodeValue),
+      }).release,
+    ).toEqual([maximumUnicodeValue]);
+    const issues = new IssueRepository(database);
+    for (const [sequence, release, service] of [
+      [20, null, null],
+      [21, "__unknown__", "__unknown__"],
+      [22, "~v1:n", "~v1:n"],
+    ] as const) {
+      issues.recordOccurrence({
+        ...occurrenceInput(
+          {
+            ...normalizedEvent(
+              sequence,
+              `2026-07-28T0${String(sequence - 20)}:00:00.000Z`,
+              release,
+              "prod",
+            ),
+            serverName: service,
+          },
+          "f",
+        ),
+        buildOutbox: disabledOutbox(
+          `${String(sequence).padStart(8, "0")}-3333-4333-8333-333333333333`,
+        ),
+      });
+    }
     const response = await privateGet("/api/facets");
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(
+    const facets = response.json<{
+      release: Array<{
+        value: string | null;
+        queryValue: string;
+        label: string | null;
+        count: number;
+      }>;
+      service: Array<{
+        value: string | null;
+        queryValue: string;
+        label: string | null;
+        count: number;
+      }>;
+      environment: Array<{ value: string; count: number }>;
+    }>();
+    expect(facets).toEqual(
       expect.objectContaining({
         release: expect.arrayContaining([
           {
             value: null,
-            queryValue: UNKNOWN_RELEASE,
+            queryValue: NULL_FACET_QUERY,
             label: "Unknown version",
+            count: 2,
+          },
+          {
+            value: "__unknown__",
+            queryValue: LITERAL_UNKNOWN_QUERY,
+            label: "__unknown__",
+            count: 1,
+          },
+          {
+            value: "~v1:n",
+            queryValue: LITERAL_TAG_QUERY,
+            label: "~v1:n",
             count: 1,
           },
         ]),
+        service: expect.arrayContaining([
+          expect.objectContaining({
+            value: null,
+            queryValue: NULL_FACET_QUERY,
+            count: 1,
+          }),
+          expect.objectContaining({
+            value: "__unknown__",
+            queryValue: LITERAL_UNKNOWN_QUERY,
+            count: 1,
+          }),
+          expect.objectContaining({
+            value: "~v1:n",
+            queryValue: LITERAL_TAG_QUERY,
+            count: 1,
+          }),
+        ]),
         environment: expect.arrayContaining([
-          expect.objectContaining({ value: "prod", count: 3 }),
+          expect.objectContaining({ value: "prod", count: 6 }),
         ]),
       }),
     );
+
+    for (const [queryValue, expected] of [
+      [NULL_FACET_QUERY, { release: null, serverName: null }],
+      [
+        LITERAL_UNKNOWN_QUERY,
+        { release: "__unknown__", serverName: "__unknown__" },
+      ],
+      [LITERAL_TAG_QUERY, { release: "~v1:n", serverName: "~v1:n" }],
+    ] as const) {
+      const query = `release=${encodeURIComponent(queryValue)}&service=${encodeURIComponent(queryValue)}`;
+      const filtered = await privateGet(`/api/issues?${query}`);
+      expect(
+        filtered.json<{ items: Array<{ matchingCount: number }> }>().items,
+      ).toEqual([expect.objectContaining({ matchingCount: 1 })]);
+      const exported = await privateGet(`/api/export?${query}`);
+      expect(parseNdjson(exported.rawPayload)).toEqual([
+        expect.objectContaining(expected),
+      ]);
+    }
+
+    expect(
+      (await privateGet("/api/issues?release=~v1:malformed")).statusCode,
+    ).toBe(400);
   });
 
   it("resolves, manually reopens, and permanently deletes atomically at the supplied exact timestamp", async () => {
@@ -417,7 +538,7 @@ describe("private operator API", () => {
     expect(parseNdjson(issue.rawPayload)).toHaveLength(3);
 
     const filtered = await privateGet(
-      `/api/export?release=${UNKNOWN_RELEASE}&environment=prod`,
+      `/api/export?release=${encodeURIComponent(NULL_FACET_QUERY)}&environment=prod`,
     );
     expect(filtered.headers["content-encoding"]).toBe("gzip");
     expect(filtered.headers["content-length"]).toBeUndefined();
@@ -467,6 +588,90 @@ describe("private operator API", () => {
         )
         .get(deadLetterId),
     ).toEqual({ count: 0 });
+  });
+
+  it("classifies retry validation, missing/conflict, and internal failures without leaking dependency data", async () => {
+    const malformed = await privateMutation(
+      "POST",
+      "/api/webhook-deliveries/not-an-id/retry",
+    );
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toEqual({
+      error: { code: "invalid_request", message: "delivery id is invalid" },
+    });
+
+    const missing = await privateMutation(
+      "POST",
+      "/api/webhook-deliveries/999999/retry",
+    );
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({
+      error: { code: "not_found", message: "Delivery not found" },
+    });
+
+    const nonDead = database
+      .prepare(
+        "SELECT id FROM webhook_outbox WHERE state <> 'dead_letter' LIMIT 1",
+      )
+      .get() as { id: number };
+    const conflictResponse = await privateMutation(
+      "POST",
+      `/api/webhook-deliveries/${String(nonDead.id)}/retry`,
+    );
+    expect(conflictResponse.statusCode).toBe(409);
+    expect(conflictResponse.json()).toEqual({
+      error: { code: "conflict", message: "Delivery cannot be retried" },
+    });
+
+    database
+      .prepare(
+        `UPDATE project_ingest_keys
+         SET webhook_mode = 'disabled', webhook_target_url = NULL,
+             webhook_secret_ref = NULL, enabled_at = NULL
+         WHERE project_id = 1 AND environment = 'prod'`,
+      )
+      .run();
+    const disabledDestination = await privateMutation(
+      "POST",
+      `/api/webhook-deliveries/${String(deadLetterId)}/retry`,
+    );
+    expect(disabledDestination.statusCode).toBe(409);
+    expect(disabledDestination.json()).toEqual({
+      error: { code: "conflict", message: "Delivery cannot be retried" },
+    });
+    database
+      .prepare(
+        `UPDATE project_ingest_keys
+         SET webhook_mode = 'live',
+             webhook_target_url = 'https://code-agent.test/api/code/webhooks/sentry',
+             webhook_secret_ref = 'HOOK_SECRET', enabled_at = ?
+         WHERE project_id = 1 AND environment = 'prod'`,
+      )
+      .run(NOW);
+
+    secretFailure = new Error(
+      "TOP_SECRET https://private-target.test HOOK_SECRET",
+    );
+    const dependencyFailure = await privateMutation(
+      "POST",
+      `/api/webhook-deliveries/${String(deadLetterId)}/retry`,
+    );
+    expect(dependencyFailure.statusCode).toBe(500);
+    expect(dependencyFailure.json()).toEqual({
+      error: { code: "internal_error", message: "Internal server error" },
+    });
+    expect(dependencyFailure.body).not.toMatch(
+      /TOP_SECRET|private-target|HOOK_SECRET/u,
+    );
+
+    secretFailure = null;
+    clock = new Date(Number.NaN);
+    const clockFailure = await privateMutation(
+      "POST",
+      `/api/webhook-deliveries/${String(deadLetterId)}/retry`,
+    );
+    expect(clockFailure.statusCode).toBe(500);
+    expect(clockFailure.body).not.toContain("private API clock");
   });
 
   it("uses the database row locator when two projects contain the same SDK event id", async () => {
@@ -570,10 +775,36 @@ describe("private operator API", () => {
     ).toBe(400);
     expect((await privateGet("/api/issues/999999")).statusCode).toBe(404);
     expect((await privateGet("/api/events/999999")).statusCode).toBe(404);
-    expect(
-      (await privateMutation("POST", "/api/webhook-deliveries/999999/retry"))
-        .statusCode,
-    ).toBe(409);
+    for (const value of [
+      "2026",
+      "2026-07-28",
+      "07/28/2026",
+      "2026-07-28T11:00:00+00:00",
+      "2026-07-28T11:00:00Z",
+    ]) {
+      expect(
+        (
+          await privateGet(
+            `/api/issues?from=${encodeURIComponent(value)}&to=2026-07-28T12%3A00%3A00.000Z`,
+          )
+        ).statusCode,
+      ).toBe(400);
+      const cursor = rawCursor(value, firstIssueId);
+      expect(
+        (await privateGet(`/api/issues?cursor=${encodeURIComponent(cursor)}`))
+          .statusCode,
+      ).toBe(400);
+    }
+
+    const canonicalTimestamp = "2026-07-28T11:00:00.000Z";
+    const canonicalCursor = encodeCursor(canonicalTimestamp, firstIssueId);
+    expect(decodeCursor(canonicalCursor, "number")).toEqual({
+      timestamp: canonicalTimestamp,
+      id: firstIssueId,
+    });
+    expect(encodeCursor(canonicalTimestamp, firstIssueId)).toBe(
+      canonicalCursor,
+    );
   });
 
   async function privateGet(url: string) {
@@ -774,4 +1005,11 @@ function parseNdjson(payload: Buffer): unknown[] {
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as unknown);
+}
+
+function rawCursor(timestamp: string, id: number): string {
+  return Buffer.from(
+    JSON.stringify({ v: 1, t: timestamp, i: id }),
+    "utf8",
+  ).toString("base64url");
 }

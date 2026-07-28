@@ -256,25 +256,43 @@ function expectPrivateApiPlans(database: ErrorHubDatabase): void {
   expect(exportPlan.map((step) => step.detail).join("\n")).toMatch(
     /USING INDEX idx_events_export_order/u,
   );
-  const issuePlan = database
-    .prepare(
-      `EXPLAIN QUERY PLAN
-       SELECT i.id,
-              (SELECT COUNT(*)
-               FROM events AS count_event
-               WHERE count_event.issue_id = i.id) AS matching_count
-       FROM issues AS i INDEXED BY idx_issues_last_seen
-       WHERE EXISTS (
-         SELECT 1 FROM events AS matching_event
-         WHERE matching_event.issue_id = i.id
-       )
-       ORDER BY i.last_seen DESC, i.id DESC
-       LIMIT ?`,
-    )
-    .all(25) as { detail: string }[];
-  const issuePlanText = issuePlan.map((step) => step.detail).join("\n");
-  expect(issuePlanText).toMatch(/USING COVERING INDEX idx_issues_last_seen/u);
-  expect(issuePlanText).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/u);
+  for (const shape of [
+    {
+      index: "idx_issues_last_seen",
+      predicate: "",
+      parameters: [] as string[],
+    },
+    {
+      index: "idx_issues_status_last_seen",
+      predicate: "AND i.status IN (?)",
+      parameters: ["unresolved"],
+    },
+    {
+      index: "idx_issues_last_seen",
+      predicate: "",
+      parameters: [] as string[],
+    },
+  ]) {
+    const issuePlan = database
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT i.id,
+                (SELECT COUNT(*)
+                 FROM events AS count_event
+                 WHERE count_event.issue_id = i.id) AS matching_count
+         FROM issues AS i INDEXED BY ${shape.index}
+         WHERE EXISTS (
+           SELECT 1 FROM events AS matching_event
+           WHERE matching_event.issue_id = i.id
+         ) ${shape.predicate}
+         ORDER BY i.last_seen DESC, i.id DESC
+         LIMIT ?`,
+      )
+      .all(...shape.parameters, 25) as { detail: string }[];
+    const issuePlanText = issuePlan.map((step) => step.detail).join("\n");
+    expect(issuePlanText).toContain(`USING COVERING INDEX ${shape.index}`);
+    expect(issuePlanText).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/u);
+  }
 }
 
 function insertV1Rows(database: ErrorHubDatabase): void {

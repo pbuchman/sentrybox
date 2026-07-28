@@ -21,6 +21,11 @@ interface EventParams extends IssueParams {
   readonly Params: IssueParams["Params"] & { readonly eventId: string };
 }
 
+// The worker evidence facade supports lookback windows up to 90 days.
+const MAX_STATS_PERIOD_MILLISECONDS = 90 * 24 * 60 * 60_000;
+const MAX_STATS_PERIOD_DIGITS = 4;
+const DATE_TIME_CLIP_LIMIT = 8_640_000_000_000_000;
+
 export function registerSentryEventRoutes(
   app: FastifyInstance,
   options: SentryFacadeOptions,
@@ -151,19 +156,34 @@ function parseListQuery(
   }
   const statsPeriod = stringValue(record.statsPeriod);
   if (statsPeriod !== undefined) {
-    const match = statsPeriod.match(/^(\d+)([hdw])$/u);
+    const match = statsPeriod.match(
+      new RegExp(
+        `^([1-9]\\d{0,${String(MAX_STATS_PERIOD_DIGITS - 1)}})([hdw])$`,
+        "u",
+      ),
+    );
     if (match === null) return invalidListQuery();
     const amount = Number(match[1]);
     const unit = match[2];
     const multiplier =
       unit === "h" ? 3_600_000 : unit === "d" ? 86_400_000 : 604_800_000;
     const now = options.now();
-    if (!Number.isFinite(now.getTime()) || !Number.isSafeInteger(amount))
+    if (
+      !Number.isFinite(now.getTime()) ||
+      !Number.isSafeInteger(amount) ||
+      amount > Math.floor(MAX_STATS_PERIOD_MILLISECONDS / multiplier)
+    )
+      return invalidListQuery();
+    const duration = amount * multiplier;
+    const earliest = now.getTime() - duration;
+    if (
+      !Number.isSafeInteger(duration) ||
+      !Number.isFinite(earliest) ||
+      Math.abs(earliest) > DATE_TIME_CLIP_LIMIT
+    )
       return invalidListQuery();
     clauses.push("occurred_at >= ?");
-    parameters.push(
-      new Date(now.getTime() - amount * multiplier).toISOString(),
-    );
+    parameters.push(new Date(earliest).toISOString());
   }
   return {
     whereSql: clauses.length === 0 ? "" : `AND ${clauses.join(" AND ")}`,

@@ -1,4 +1,8 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -198,6 +202,29 @@ describe("Sentry worker evidence API", () => {
     }
   });
 
+  it("bounds statsPeriod before arithmetic and always returns structured validation errors", async () => {
+    const base = `/api/0/organizations/${ORGANIZATION}/issues/${String(issueId)}/events/`;
+    expect((await sentryGet(`${base}?statsPeriod=90d`)).statusCode).toBe(200);
+    for (const period of [
+      "91d",
+      "2161h",
+      "9000000000d",
+      "9007199254740991w",
+      `${"9".repeat(128)}w`,
+    ]) {
+      const response = await sentryGet(
+        `${base}?statsPeriod=${encodeURIComponent(period)}`,
+      );
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: {
+          code: "invalid_request",
+          message: "Sentry event query is invalid",
+        },
+      });
+    }
+  });
+
   async function sentryGet(url: string) {
     return app.inject({
       method: "GET",
@@ -211,38 +238,81 @@ describe("Sentry worker evidence API", () => {
 });
 
 describe("pinned official Sentry MCP compatibility", () => {
+  it("fails closed and records an outbound attempt outside the selected loopback endpoint", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "error-hub-network-guard-"));
+    const reportPath = join(directory, "denied.ndjson");
+    writeFileSync(reportPath, "", "utf8");
+    try {
+      const child = spawn(
+        process.execPath,
+        [
+          "--import",
+          networkGuardFixture(),
+          "--eval",
+          'await fetch("http://127.0.0.1:9/denied")',
+        ],
+        {
+          env: minimalChildEnvironment("127.0.0.1:8", reportPath),
+          stdio: "ignore",
+        },
+      );
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      expect(exitCode).not.toBe(0);
+      expect(readNetworkReport(reportPath)).toEqual([
+        { kind: "fetch", target: "http://127.0.0.1:9/denied" },
+      ]);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it("runs get_issue_details and search_issue_events through execute_sentry_tool without external services", async () => {
-    const port = await reservePort();
-    const host = `127.0.0.1:${String(port)}`;
-    const database = openDatabase(":memory:");
-    migrateDatabase(database, "2026-07-28T00:00:00.000Z");
-    const issueId = seedEvidence(database);
+    const restoreEnvironment = poisonAmbientMcpEnvironment();
+    const directory = mkdtempSync(join(tmpdir(), "error-hub-mcp-probe-"));
+    const reportPath = join(directory, "denied.ndjson");
+    writeFileSync(reportPath, "", "utf8");
     const calls: Array<{
       method: string;
       url: string;
       authorization: string | undefined;
     }> = [];
-    const app = createPrivateApp({
-      database,
-      privateOrigin: new URL(PRIVATE_ORIGIN),
-      organizationSlug: ORGANIZATION,
-      allowedHosts: [host],
-      allowedOrigins: [PRIVATE_ORIGIN],
-      publicIngestHosts: ["errors.test"],
-    });
-    app.addHook("onRequest", async (request) => {
-      calls.push({
-        method: request.method,
-        url: request.raw.url ?? "",
-        authorization: request.headers.authorization,
-      });
-    });
+    let database: ErrorHubDatabase | null = null;
+    let app: ReturnType<typeof createPrivateApp> | null = null;
     let client: Client | null = null;
+    let transport: StdioClientTransport | null = null;
+    let childPid: number | null = null;
     try {
-      await app.listen({ host: "127.0.0.1", port });
-      const transport = new StdioClientTransport({
+      const port = await reservePort();
+      const host = `127.0.0.1:${String(port)}`;
+      const activeDatabase = openDatabase(":memory:");
+      database = activeDatabase;
+      migrateDatabase(activeDatabase, "2026-07-28T00:00:00.000Z");
+      const issueId = seedEvidence(activeDatabase);
+      const activeApp = createPrivateApp({
+        database: activeDatabase,
+        privateOrigin: new URL(PRIVATE_ORIGIN),
+        organizationSlug: ORGANIZATION,
+        allowedHosts: [host],
+        allowedOrigins: [PRIVATE_ORIGIN],
+        publicIngestHosts: ["errors.test"],
+      });
+      app = activeApp;
+      activeApp.addHook("onRequest", async (request) => {
+        calls.push({
+          method: request.method,
+          url: request.raw.url ?? "",
+          authorization: request.headers.authorization,
+        });
+      });
+      await activeApp.listen({ host: "127.0.0.1", port });
+      transport = new StdioClientTransport({
         command: process.execPath,
         args: [
+          "--import",
+          networkGuardFixture(),
           sentryMcpBinary(),
           `--host=${host}`,
           "--insecure-http",
@@ -250,7 +320,7 @@ describe("pinned official Sentry MCP compatibility", () => {
           "--skills=inspect",
           "--disable-skills=seer",
         ],
-        env: scrubbedChildEnvironment(),
+        env: minimalChildEnvironment(host, reportPath),
         stderr: "pipe",
       });
       client = new Client({
@@ -258,6 +328,8 @@ describe("pinned official Sentry MCP compatibility", () => {
         version: "1.0.0",
       });
       await client.connect(transport);
+      childPid = transport.pid;
+      expect(childPid).toBeTypeOf("number");
       const tools = await client.listTools();
       const names = tools.tools.map((tool) => tool.name);
       expect(names).toContain("execute_sentry_tool");
@@ -341,8 +413,24 @@ describe("pinned official Sentry MCP compatibility", () => {
       ).toBe(true);
     } finally {
       await client?.close().catch(() => undefined);
-      await app.close();
-      database.close();
+      await transport?.close().catch(() => undefined);
+      const processExited =
+        childPid === null ? true : await waitForProcessExit(childPid);
+      const transportPid = transport?.pid ?? null;
+      const deniedAttempts = readNetworkReport(reportPath);
+      try {
+        await app?.close();
+      } finally {
+        try {
+          database?.close();
+        } finally {
+          restoreEnvironment();
+          rmSync(directory, { force: true, recursive: true });
+        }
+      }
+      expect(processExited).toBe(true);
+      expect(transportPid).toBeNull();
+      expect(deniedAttempts).toEqual([]);
     }
   }, 30_000);
 });
@@ -486,21 +574,77 @@ function sentryMcpBinary(): string {
   );
 }
 
-function scrubbedChildEnvironment(): Record<string, string> {
-  const stripped = new Set([
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENROUTER_API_KEY",
-    "EMBEDDED_AGENT_PROVIDER",
-    "SENTRY_DSN",
-    "DEFAULT_SENTRY_DSN",
-  ]);
-  return Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] =>
-        entry[1] !== undefined && !stripped.has(entry[0]),
-    ),
-  );
+function networkGuardFixture(): string {
+  return fileURLToPath(new URL("./network-guard.fixture.mjs", import.meta.url));
+}
+
+function minimalChildEnvironment(
+  allowedEndpoint: string,
+  reportPath: string,
+): Record<string, string> {
+  return {
+    ERROR_HUB_NETWORK_ALLOWED_ENDPOINT: allowedEndpoint,
+    ERROR_HUB_NETWORK_REPORT_PATH: reportPath,
+  };
+}
+
+function poisonAmbientMcpEnvironment(): () => void {
+  const poison = {
+    SENTRY_URL: "http://127.0.0.1:9",
+    SENTRY_HOST: "attacker.invalid",
+    SENTRY_ACCESS_TOKEN: "ambient-sentry-token",
+    DEFAULT_SENTRY_DSN: "https://ambient@sentry.invalid/1",
+    MCP_URL: "https://attacker.invalid/mcp",
+    MCP_HOST: "attacker.invalid",
+    MCP_TOKEN: "ambient-mcp-token",
+    AI_GATEWAY_API_KEY: "ambient-ai-gateway-key",
+    OPENAI_API_KEY: "ambient-provider-key",
+    OTEL_EXPORTER_OTLP_ENDPOINT: "https://attacker.invalid/telemetry",
+  } as const;
+  const previous = new Map<string, string | undefined>();
+  for (const [name, value] of Object.entries(poison)) {
+    previous.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  return () => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
+function readNetworkReport(
+  path: string,
+): Array<{ readonly kind: string; readonly target: string }> {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as { kind: string; target: string });
+}
+
+async function waitForProcessExit(pid: number): Promise<boolean> {
+  const deadline = Date.now() + 2_000;
+  while (processRunning(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return !processRunning(pid);
+}
+
+function processRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { code?: unknown }).code === "ESRCH"
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function toolText(result: Awaited<ReturnType<Client["callTool"]>>): string {

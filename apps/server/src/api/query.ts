@@ -1,19 +1,21 @@
 import { Buffer } from "node:buffer";
 
-export const UNKNOWN_RELEASE_FILTER = "__unknown__";
+const NULLABLE_FACET_PREFIX = "~v1:";
+const NULLABLE_FACET_NULL = `${NULLABLE_FACET_PREFIX}n`;
 export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 100;
 const MAX_FILTER_VALUES = 20;
 const MAX_FILTER_VALUE_LENGTH = 1_024;
+const MAX_NULLABLE_FILTER_TOKEN_LENGTH = 6 + 4 * MAX_FILTER_VALUE_LENGTH;
 const MAX_QUERY_LENGTH = 1_024;
 const MAX_CURSOR_LENGTH = 2_048;
 const CURSOR_VERSION = 1;
 
 export interface PrivateFilters {
   readonly project: readonly string[];
-  readonly release: readonly string[];
+  readonly release: readonly (string | null)[];
   readonly environment: readonly string[];
-  readonly service: readonly string[];
+  readonly service: readonly (string | null)[];
   readonly level: readonly string[];
   readonly status: readonly string[];
   readonly from: string | null;
@@ -50,15 +52,11 @@ export function parseFilters(query: unknown): PrivateFilters {
   const search = rawSearch.trim();
   return {
     project: repeated(record.project),
-    release: repeated(record.release),
+    release: nullableFacetValues(record.release),
     environment: repeated(record.environment),
-    service: repeated(record.service),
+    service: nullableFacetValues(record.service),
     level: validatedValues(record.level, ["warn", "error", "fatal"], "level"),
-    status: validatedValues(
-      record.status,
-      ["unresolved", "resolved"],
-      "status",
-    ),
+    status: normalizedStatusValues(record.status),
     from,
     to,
     query: search.length === 0 ? null : search,
@@ -146,8 +144,9 @@ export function eventFilterPredicate(
 }
 
 export function encodeCursor(timestamp: string, id: number | string): string {
+  const canonical = canonicalTimestamp(timestamp, "cursor timestamp");
   return Buffer.from(
-    JSON.stringify({ v: CURSOR_VERSION, t: timestamp, i: id }),
+    JSON.stringify({ v: CURSOR_VERSION, t: canonical, i: id }),
     "utf8",
   ).toString("base64url");
 }
@@ -197,12 +196,24 @@ export function positiveId(value: string, field: string): number {
 }
 
 export function canonicalTimestamp(value: unknown, field: string): string {
-  if (typeof value !== "string")
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
+  )
     throw badRequest(`${field} must be an ISO timestamp`);
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds))
     throw badRequest(`${field} must be an ISO timestamp`);
-  return new Date(milliseconds).toISOString();
+  const canonical = new Date(milliseconds).toISOString();
+  if (canonical !== value)
+    throw badRequest(`${field} must be an ISO timestamp`);
+  return canonical;
+}
+
+export function encodeNullableFacetQueryValue(value: string | null): string {
+  return value === null
+    ? NULLABLE_FACET_NULL
+    : `${NULLABLE_FACET_PREFIX}s:${Buffer.from(value, "utf8").toString("base64url")}`;
 }
 
 export function badRequest(message: string): PrivateApiError {
@@ -223,7 +234,10 @@ function queryRecord(value: unknown): Readonly<Record<string, unknown>> {
     : {};
 }
 
-function repeated(value: unknown): readonly string[] {
+function repeated(
+  value: unknown,
+  maxLength = MAX_FILTER_VALUE_LENGTH,
+): readonly string[] {
   const values = Array.isArray(value)
     ? value
     : value === undefined
@@ -235,7 +249,7 @@ function repeated(value: unknown): readonly string[] {
     if (
       typeof entry !== "string" ||
       entry.length === 0 ||
-      entry.length > MAX_FILTER_VALUE_LENGTH
+      entry.length > maxLength
     ) {
       throw badRequest("filter value is invalid");
     }
@@ -254,6 +268,49 @@ function validatedValues(
     throw badRequest(`${field} filter is invalid`);
   }
   return values;
+}
+
+function normalizedStatusValues(value: unknown): readonly string[] {
+  const statuses = validatedValues(value, ["unresolved", "resolved"], "status");
+  return statuses.length === 2 ? [] : statuses;
+}
+
+function nullableFacetValues(value: unknown): readonly (string | null)[] {
+  const decoded = repeated(value, MAX_NULLABLE_FILTER_TOKEN_LENGTH).map(
+    decodeNullableFacetQueryValue,
+  );
+  const seen = new Set<string>();
+  return decoded.filter((entry) => {
+    const identity = entry === null ? "null" : `string:${entry}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function decodeNullableFacetQueryValue(value: string): string | null {
+  if (value === NULLABLE_FACET_NULL) return null;
+  if (!value.startsWith(NULLABLE_FACET_PREFIX)) {
+    if (value.length > MAX_FILTER_VALUE_LENGTH)
+      throw badRequest("nullable facet value is invalid");
+    return value;
+  }
+  const match = value.match(/^~v1:s:([A-Za-z0-9_-]+)$/u);
+  if (match === null) throw badRequest("nullable facet value is invalid");
+  const encoded = match[1];
+  if (encoded === undefined)
+    throw badRequest("nullable facet value is invalid");
+  const bytes = Buffer.from(encoded, "base64url");
+  const decoded = bytes.toString("utf8");
+  if (
+    bytes.toString("base64url") !== encoded ||
+    !Buffer.from(decoded, "utf8").equals(bytes) ||
+    decoded.length === 0 ||
+    decoded.length > MAX_FILTER_VALUE_LENGTH
+  ) {
+    throw badRequest("nullable facet value is invalid");
+  }
+  return decoded;
 }
 
 function firstValue(value: unknown): string | undefined {
@@ -296,11 +353,11 @@ function addNullableTextFacet(
   clauses: string[],
   parameters: unknown[],
   column: string,
-  values: readonly string[],
+  values: readonly (string | null)[],
 ): void {
   if (values.length === 0) return;
-  const includeNull = values.includes(UNKNOWN_RELEASE_FILTER);
-  const concrete = values.filter((value) => value !== UNKNOWN_RELEASE_FILTER);
+  const includeNull = values.includes(null);
+  const concrete = values.filter((value): value is string => value !== null);
   const choices: string[] = [];
   if (concrete.length > 0) {
     choices.push(`${column} IN (${concrete.map(() => "?").join(", ")})`);
@@ -314,7 +371,7 @@ function addReleaseFacet(
   clauses: string[],
   parameters: unknown[],
   column: string,
-  values: readonly string[],
+  values: readonly (string | null)[],
 ): void {
   addNullableTextFacet(clauses, parameters, column, values);
 }
