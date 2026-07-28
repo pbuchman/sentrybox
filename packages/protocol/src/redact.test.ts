@@ -89,6 +89,35 @@ describe("redactValue", () => {
       "digest calculation failed",
     );
   });
+
+  it("uses decoded Basic and canonical Digest parameters instead of token heuristics", () => {
+    const paddedBasic = "Basic dXNlcjpwYXNzd29yZA==";
+    const unpaddedBasic = "Basic YWFhOmJi";
+    const freeTextDigest =
+      "Digest username=alice, realm=example, response=secret-response";
+    const authorizationDigest =
+      'Authorization: Digest username="Mufasa", realm="testrealm@host.com", nonce="dcd98b", uri="/dir/index.html", response="6629fae"';
+
+    for (const credential of [
+      paddedBasic,
+      unpaddedBasic,
+      freeTextDigest,
+      authorizationDigest,
+    ]) {
+      expect(redactString(credential)).not.toContain(credential);
+    }
+
+    expect(redactString("Basic workflow2 failed")).toBe(
+      "Basic workflow2 failed",
+    );
+    expect(redactString("Digest response=slow operation failed")).toBe(
+      "Digest response=slow operation failed",
+    );
+    expect(redactString("Basic YWFhOmJ")).toBe("Basic YWFhOmJ");
+    expect(redactString("Basic !!!not-base64!!!")).toBe(
+      "Basic !!!not-base64!!!",
+    );
+  });
 });
 
 function nest(value: string, depth: number): unknown {

@@ -7,10 +7,10 @@ const SENSITIVE_KEY =
 const AUTH_HEADER =
   /\b(?:authorization|authentication|auth)\s*[:=]\s*[^\r\n]*/gi;
 const BEARER_TOKEN = /\bbearer\s+[^\s,;]+/gi;
-const BASIC_CREDENTIAL =
-  /\bbasic\s+(?=[A-Z0-9+/=]*[=+/0-9])[A-Z0-9+/]{8,}={0,2}(?=$|[\s,;])/gi;
-const DIGEST_CREDENTIAL =
-  /\bdigest\s+(?=[^\r\n]*(?:username|response|realm)\s*=)[^\r\n]*/gi;
+const BASIC_CANDIDATE = /\bbasic\s+([A-Z0-9+/]+={0,2})(?=$|[\s,;])/gi;
+const DIGEST_CANDIDATE = /\bdigest\s+[^\r\n]*/gi;
+const DIGEST_PARAMETER =
+  /\b(username|realm|nonce|uri|response|algorithm|qop|nc|cnonce)\s*=\s*(?:"(?:\\.|[^"\\])*"|[^,\s]+)/gi;
 const API_KEY = /\b(?:sk|pk|api)[_-][a-z0-9_-]{8,}\b/gi;
 const SENTRY_DSN = /https?:\/\/[^\s/@]+@[^\s/]+\/\d+\b/gi;
 const COOKIE = /\b(?:set-cookie|cookie)\s*[:=]\s*[^\r\n]*/gi;
@@ -62,15 +62,64 @@ export function redactWithMetadata(value: unknown, depth = 0): RedactionResult {
 }
 
 export function redactString(value: string): string {
-  return value
-    .replace(AUTH_HEADER, REDACTED)
-    .replace(BEARER_TOKEN, REDACTED)
-    .replace(BASIC_CREDENTIAL, REDACTED)
-    .replace(DIGEST_CREDENTIAL, REDACTED)
-    .replace(API_KEY, REDACTED)
-    .replace(SENTRY_DSN, REDACTED)
-    .replace(COOKIE, REDACTED)
-    .replace(EMAIL, REDACTED);
+  return redactDigestCandidates(
+    redactBasicCandidates(
+      value
+        .replace(AUTH_HEADER, REDACTED)
+        .replace(BEARER_TOKEN, REDACTED)
+        .replace(API_KEY, REDACTED)
+        .replace(SENTRY_DSN, REDACTED)
+        .replace(COOKIE, REDACTED)
+        .replace(EMAIL, REDACTED),
+    ),
+  );
+}
+
+function redactBasicCandidates(value: string): string {
+  return value.replace(BASIC_CANDIDATE, (candidate, encoded: string) =>
+    isBasicCredential(encoded) ? REDACTED : candidate,
+  );
+}
+
+function isBasicCredential(encoded: string): boolean {
+  const unpadded = encoded.replace(/=+$/u, "");
+  if (
+    unpadded.length === 0 ||
+    unpadded.length % 4 === 1 ||
+    (encoded.includes("=") && encoded.length % 4 !== 0)
+  ) {
+    return false;
+  }
+
+  const padded = unpadded.padEnd(Math.ceil(unpadded.length / 4) * 4, "=");
+  try {
+    const decoded = atob(padded);
+    const canonical = btoa(decoded);
+    if (encoded !== canonical && encoded !== canonical.replace(/=+$/u, "")) {
+      return false;
+    }
+    return decoded.includes(":");
+  } catch {
+    return false;
+  }
+}
+
+function redactDigestCandidates(value: string): string {
+  return value.replace(DIGEST_CANDIDATE, (candidate) =>
+    hasDigestCredentials(candidate) ? REDACTED : candidate,
+  );
+}
+
+function hasDigestCredentials(candidate: string): boolean {
+  const parameters = new Set<string>();
+  for (const match of candidate.matchAll(DIGEST_PARAMETER)) {
+    parameters.add(match[1]!.toLowerCase());
+  }
+  return (
+    parameters.size >= 2 &&
+    parameters.has("username") &&
+    parameters.has("response")
+  );
 }
 
 export function isSensitiveKey(key: string): boolean {
