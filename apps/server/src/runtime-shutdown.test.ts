@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createRetryableClose,
+  createIdempotentClose,
   runBoundedShutdown,
   RuntimeShutdownError,
   type RuntimeShutdownActions,
@@ -111,37 +111,40 @@ describe("bounded runtime shutdown", () => {
     ]);
   });
 
-  it("shares an active close, stays idempotent after success, and retries after rejection", async () => {
+  it("shares one close attempt and replays its exact success or rejection", async () => {
     let resolveFirst: (() => void) | undefined;
     const firstAttempt = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
-    const action = vi
-      .fn<() => Promise<void>>()
-      .mockReturnValueOnce(firstAttempt)
-      .mockRejectedValueOnce(new Error("cleanup failed"))
-      .mockResolvedValue(undefined);
-    const close = createRetryableClose(action);
+    const action = vi.fn<() => Promise<void>>().mockReturnValue(firstAttempt);
+    const close = createIdempotentClose(action);
 
     const first = close();
     const concurrent = close();
+    expect(concurrent).toBe(first);
     expect(action).toHaveBeenCalledTimes(1);
     resolveFirst?.();
     await expect(Promise.all([first, concurrent])).resolves.toEqual([
       undefined,
       undefined,
     ]);
-    await expect(close()).resolves.toBeUndefined();
+    const afterSuccess = close();
+    expect(afterSuccess).toBe(first);
+    await expect(afterSuccess).resolves.toBeUndefined();
     expect(action).toHaveBeenCalledTimes(1);
 
-    const retryAction = vi
+    const failure = new Error("cleanup failed");
+    const failedAction = vi
       .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("cleanup failed"))
-      .mockResolvedValue(undefined);
-    const retryClose = createRetryableClose(retryAction);
-    await expect(retryClose()).rejects.toThrow("cleanup failed");
-    await expect(retryClose()).resolves.toBeUndefined();
-    await expect(retryClose()).resolves.toBeUndefined();
-    expect(retryAction).toHaveBeenCalledTimes(2);
+      .mockRejectedValue(failure);
+    const failedClose = createIdempotentClose(failedAction);
+    const firstFailure = failedClose();
+    const concurrentFailure = failedClose();
+    expect(concurrentFailure).toBe(firstFailure);
+    await expect(firstFailure).rejects.toBe(failure);
+    const afterFailure = failedClose();
+    expect(afterFailure).toBe(firstFailure);
+    await expect(afterFailure).rejects.toBe(failure);
+    expect(failedAction).toHaveBeenCalledTimes(1);
   });
 });

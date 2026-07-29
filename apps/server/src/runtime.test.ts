@@ -7,7 +7,11 @@ import { ProjectRepository } from "./storage/project-repository.js";
 import { migrateDatabase } from "./storage/migrate.js";
 import { openDatabase } from "./storage/database.js";
 import { nodeEnvelope855, PUBLIC_KEY } from "../test/e2e/fixtures.js";
-import { startRuntime, type ErrorHubRuntime } from "./runtime.js";
+import {
+  RuntimeShutdownError,
+  startRuntime,
+  type ErrorHubRuntime,
+} from "./runtime.js";
 import { MAX_UNMEASURED_EVENT_PHYSICAL_BYTES } from "./retention/storage-budget.js";
 
 const temporaryDirectories: string[] = [];
@@ -236,6 +240,66 @@ describe("Error Hub runtime", () => {
     reopened.close();
     await expect(runtime.close()).resolves.toBeUndefined();
   });
+
+  it("replays the exact failed shutdown after a hanging live webhook without rerunning cleanup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "error-hub-failed-close-"));
+    temporaryDirectories.push(directory);
+    await writeFile(join(directory, "index.html"), "<h1>Error Hub</h1>");
+    const databasePath = join(directory, "error-hub.sqlite");
+    const webhookSecret = "runtime-webhook-secret";
+    seedLiveRuntimeProject(databasePath, webhookSecret);
+    let markSendStarted: (() => void) | undefined;
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
+    const runtime = await startRuntime({
+      ...baseOptions(directory, databasePath),
+      cadence: { dispatchMs: 1 },
+      shutdownTimeoutMs: 50,
+      secrets: {
+        references: () => [webhookSecret],
+        resolve: () => "signing-secret",
+      },
+      webhookHttp: {
+        async send() {
+          markSendStarted?.();
+          return new Promise<never>(() => undefined);
+        },
+      },
+    });
+    const ingest = await fetch(
+      new URL(`/api/1/envelope/?sentry_key=${PUBLIC_KEY}`, runtime.publicUrl),
+      { method: "POST", body: nodeEnvelope855 },
+    );
+    expect(ingest.status).toBe(200);
+    await sendStarted;
+
+    const firstClose = runtime.close();
+    const firstFailure = await firstClose.catch((error: unknown) => error);
+    expect(firstFailure).toBeInstanceOf(RuntimeShutdownError);
+    expect(
+      (firstFailure as RuntimeShutdownError).errors.map(
+        (error) => error.message,
+      ),
+    ).toEqual([
+      "close runtime loops: close runtime loops exceeded its shutdown deadline",
+    ]);
+    const secondClose = runtime.close();
+    expect(secondClose).toBe(firstClose);
+    const secondFailure = await secondClose.catch((error: unknown) => error);
+    expect(secondFailure).toBe(firstFailure);
+    expect(
+      (secondFailure as RuntimeShutdownError).errors.map(
+        (error) => error.message,
+      ),
+    ).toEqual([
+      "close runtime loops: close runtime loops exceeded its shutdown deadline",
+    ]);
+
+    const reopened = openDatabase(databasePath);
+    expect(reopened.open).toBe(true);
+    reopened.close();
+  });
 });
 
 function seedRuntimeProject(databasePath: string): void {
@@ -260,6 +324,36 @@ function seedRuntimeProject(databasePath: string): void {
     webhookTargetUrl: null,
     webhookSecretRef: null,
     enabledAt: null,
+  });
+  database.close();
+}
+
+function seedLiveRuntimeProject(
+  databasePath: string,
+  webhookSecret: string,
+): void {
+  const database = openDatabase(databasePath);
+  migrateDatabase(database, "2026-07-29T12:00:00.000Z");
+  const projects = new ProjectRepository(database);
+  projects.create({
+    id: 1,
+    slug: "runtime",
+    name: "Runtime",
+    enabled: true,
+    createdAt: "2026-07-29T12:00:00.000Z",
+  });
+  projects.setIngestKey({
+    projectId: 1,
+    environment: "fixture",
+    publicKey: PUBLIC_KEY,
+    allowedOrigins: [],
+    forwardingMode: "disabled",
+    forwardingSecretRef: null,
+    webhookMode: "live",
+    webhookTargetUrl: "https://code-agent.test/api/code/webhooks/sentry",
+    webhookSecretRef: webhookSecret,
+    enabledAt: "2026-07-29T12:00:00.000Z",
+    webhookSecrets: { references: () => [webhookSecret] },
   });
   database.close();
 }

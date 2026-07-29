@@ -195,7 +195,7 @@ export async function startRuntime(
       ),
     );
 
-    const close = createRetryableClose(() =>
+    const close = createIdempotentClose(() =>
       closeRuntime(
         {
           publicApp: requireApp(publicApp),
@@ -337,27 +337,18 @@ export async function runBoundedShutdown(
   if (errors.length > 0) throw new RuntimeShutdownError(errors);
 }
 
-export function createRetryableClose(
+export function createIdempotentClose(
   action: () => Promise<void>,
 ): () => Promise<void> {
-  let closed = false;
-  let active: Promise<void> | null = null;
+  let outcome: Promise<void> | null = null;
   return () => {
-    if (closed) return Promise.resolve();
-    if (active !== null) return active;
-    let actionResult: Promise<void>;
+    if (outcome !== null) return outcome;
     try {
-      actionResult = action();
+      outcome = action();
     } catch (error) {
-      actionResult = Promise.reject(error);
+      outcome = Promise.reject(error);
     }
-    const attempt = actionResult.then(() => {
-      closed = true;
-    });
-    active = attempt.finally(() => {
-      active = null;
-    });
-    return active;
+    return outcome;
   };
 }
 
