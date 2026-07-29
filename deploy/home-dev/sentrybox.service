@@ -12,6 +12,7 @@ WorkingDirectory=/home/pbuchman/deploy/sentrybox
 EnvironmentFile=/var/lib/sentrybox-deploy/current.env
 Environment=ERROR_HUB_RUNTIME_UID=1000
 Environment=ERROR_HUB_RUNTIME_GID=1000
+Environment=ERROR_HUB_RUNTIME_ENV_FILE=/var/lib/sentrybox-deploy/runtime.env
 UMask=0077
 ExecStartPre=/home/pbuchman/deploy/sentrybox/deploy/home-dev/preflight.sh ${ERROR_HUB_IMAGE}
 ExecStart=/usr/bin/docker compose --file /home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml up -d --wait --remove-orphans

@@ -43,6 +43,10 @@ setup() {
   printf '%s\n' "${ERROR_HUB_PRIVATE_ORIGIN}" \
     >"${fixture_root}/var/lib/sentrybox-deploy/private-origin"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/private-origin"
+  printf '%s\n' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    >"${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
 
   install_fake_commands
   write_valid_request
@@ -123,6 +127,13 @@ fi
 if [ "$1" = image ] && [ "$2" = inspect ]; then
   printf '%s\n' 'ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   exit 0
+fi
+if [ "$1" = compose ]; then
+  runtime_env="${ERROR_HUB_RUNTIME_ENV_FILE:-}"
+  [ -n "${runtime_env}" ] && [ -f "${runtime_env}" ] || exit 1
+  runtime_refs="$(sed -n 's/^ERROR_HUB_REQUIRED_SECRET_REFERENCES=//p' "${runtime_env}")"
+  [ -n "${runtime_refs}" ] || exit 1
+  printf 'docker RUNTIME_REFS=%s %s\n' "${runtime_refs}" "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 fi
 if [ "$1" = run ]; then
   if printf '%s' "$*" | grep -q 'synthetic-prepare'; then
@@ -327,6 +338,38 @@ EOF
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
+}
+
+@test "install creates and preserves the root-owned runtime reference state" {
+  runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  rm -f "${runtime_env}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ -f "${runtime_env}" ]
+  [ "$(stat -c '%a' "${runtime_env}")" = 600 ]
+  [ "$(stat -c '%u:%g' "${runtime_env}")" = '0:0' ]
+  run grep -Fx \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    "${runtime_env}"
+  [ "${status}" -eq 0 ]
+
+  printf '%s\n' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
+    >"${runtime_env}"
+  chmod 0644 "${runtime_env}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%a' "${runtime_env}")" = 600 ]
+  run grep -Fx \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
+    "${runtime_env}"
+  [ "${status}" -eq 0 ]
 }
 
 @test "preflight refuses less than 15 GiB and immutable image violations" {
@@ -553,6 +596,33 @@ EOF
   [ "${status}" -ne 0 ]
 }
 
+@test "deploy rollback and direct rollback retain live secret references outside image state" {
+  live_refs='LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV'
+  printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' "${live_refs}" \
+    >"${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  write_runtime_state
+  printf 'live-database\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+  export ERROR_HUB_FAKE_READINESS_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(grep -c "docker RUNTIME_REFS=${live_refs} compose .* up -d --wait --remove-orphans" "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  [ "$(wc -l <"${fixture_root}/var/lib/sentrybox-deploy/current.env" | tr -d ' ')" -eq 3 ]
+  run grep -F 'ERROR_HUB_REQUIRED_SECRET_REFERENCES' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ "${status}" -ne 0 ]
+
+  unset ERROR_HUB_FAKE_READINESS_FAIL
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c "docker RUNTIME_REFS=${live_refs} compose .* up -d --wait --remove-orphans" "${ERROR_HUB_COMMAND_LOG}")" -eq 3 ]
+  [ "$(wc -l <"${fixture_root}/var/lib/sentrybox-deploy/previous.env" | tr -d ' ')" -eq 3 ]
+}
+
 @test "rollback keeps a healthy database and restores a backup only after a failed integrity check" {
   write_runtime_state
   cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
@@ -571,6 +641,25 @@ EOF
   [ "${status}" -eq 0 ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'consistent-backup' ]
   [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = '1000:1000' ]
+}
+
+@test "direct rollback rejects unsafe persistent runtime reference metadata" {
+  write_runtime_state
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+
+  chmod 0644 "${runtime_env}"
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+  [ "${status}" -ne 0 ]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+
+  chmod 0600 "${runtime_env}"
+  mv "${runtime_env}" "${runtime_env}.real"
+  ln -s "${runtime_env}.real" "${runtime_env}"
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+  [ "${status}" -ne 0 ]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
 }
 
 @test "predeploy backup uses SQLite online backup and retains only one local snapshot" {
@@ -788,6 +877,9 @@ EOF
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'WorkingDirectory=/home/pbuchman/deploy/sentrybox' "${runtime_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'Environment=ERROR_HUB_RUNTIME_ENV_FILE=/var/lib/sentrybox-deploy/runtime.env' \
+    "${runtime_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${backup_timer}"
   [ "${status}" -eq 0 ]
