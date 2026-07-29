@@ -54,6 +54,7 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
   assert.doesNotMatch(runtime, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
   assert.doesNotMatch(runtime, /\bpnpm\s+(?:install|add)\b/u);
   assert.match(runtime, /\/usr\/local\/lib\/node_modules\/(?:npm|corepack)/u);
+  assert.match(runtime, /\/opt\/yarn-v1\.22\.22/u);
 });
 
 test("compose keeps both listeners on host loopback and hardens the container", async () => {
