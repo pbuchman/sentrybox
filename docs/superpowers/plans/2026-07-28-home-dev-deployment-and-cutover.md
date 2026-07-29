@@ -84,7 +84,7 @@ services:
 - [ ] On successful `push` to `main`, rebuild from the tested commit, scan the image, publish `linux/amd64` as `ghcr.io/pbuchman/sentrybox:sha-<40-character-sha>`, and expose the immutable manifest digest in the workflow summary.
 - [ ] Grant only `contents: read` and `packages: write` to the release job; use default read-only permissions elsewhere.
 - [ ] Generate an SBOM and provenance attestation tied to the digest. Do not publish a mutable `latest` tag.
-- [ ] Make the workflow name a fixed `Release Error Hub Image`; the deployment handler accepts only this exact name.
+- [ ] Make the workflow name a fixed `Release SentryBox Image`; the deployment handler accepts only this exact name.
 - [ ] Run workflow syntax validation and the policy test locally; expect no `self-hosted` string and no unpinned third-party action.
 - [ ] Commit with `ci: publish immutable sentrybox image`.
 
@@ -195,7 +195,7 @@ intexuraos-web     + prod
 - [ ] Store the replacement as a root/deployment-user-readable credential file, remove inline token use from systemd `ExecStart`, daemon-reload, restart Cloudflared, and verify every pre-existing tunnel route before proceeding.
 - [ ] Write failing handler tests for invalid/missing `X-Hub-Signature-256`, body over 1 MiB, repeated `X-GitHub-Delivery`, stale `workflow_run.updated_at`, wrong repository, action, workflow name, event, branch, conclusion, or head SHA.
 - [ ] Verify HMAC-SHA256 over exact raw bytes with a dedicated webhook secret and constant-time comparison.
-- [ ] Persist accepted delivery IDs before invoking deployment, reject replays for seven days, enforce a five-minute event freshness window, and allow only `action=completed`, `conclusion=success`, `event=push`, `head_branch=main`, repository `pbuchman/sentrybox`, and workflow `Release Error Hub Image`.
+- [ ] Persist accepted delivery IDs before invoking deployment, reject replays for seven days, enforce a five-minute event freshness window, and allow only `action=completed`, `conclusion=success`, `event=push`, `head_branch=main`, repository `pbuchman/sentrybox`, and workflow `Release SentryBox Image`.
 - [ ] Resolve the image tag from the verified 40-character head SHA and call only the fixed `deploy/home-dev/deploy.sh`; never evaluate a payload string as a command.
 - [ ] Run the handler on loopback port 9003 as a restricted systemd service with a concurrency lock, request timeout, bounded logs, and no access to the SentryBox data directory.
 - [ ] Configure the GitHub repository webhook for `workflow_run` only, send a test delivery, and verify one accepted deployment plus one deduplicated redelivery.
@@ -217,7 +217,7 @@ intexuraos-web     + prod
 - [ ] Write failing tests for a WAL-active database backup, 23-day backup scrub, aggregate recomputation, interrupted upload, corrupt backup, absent external destination, 5 GiB live limit, backup-staging growth, and restore-test cleanup.
 - [ ] Create backups through SQLite's online backup API in the shipped image, not by copying active database/WAL files.
 - [ ] In the backup copy, delete events older than 23 days and recompute issue aggregates before encryption. Keep at most one local staging snapshot outside the live data directory, upload it to the existing encrypted external-backed Home Dev backup target, verify checksum, then remove local staging data. Keep seven daily remote generations so no event copy survives beyond 30 days.
-- [ ] If the external destination is unavailable, mark backup disabled/degraded visibly rather than accumulating snapshots on the 97%-used root filesystem.
+- [ ] If the external destination is unavailable, mark backup disabled/degraded visibly rather than accumulating snapshots on the root filesystem; current verified capacity is 581 GiB free at 34% used.
 - [ ] Run a monthly restore into a temporary directory, execute integrity/migration/read checks, record success, and remove the temporary copy safely.
 - [ ] Alert privately on readiness failure, physical data above 4.5 GiB, ingest disabled at 4.75 GiB, retention failure, dead-letter webhook, backup age over 26 hours, restore-test age over 35 days, or repeated 429/503 responses.
 - [ ] Verify journald contains structured operational metadata but no event payloads, DSNs, HMACs, tokens, or downloaded exports.

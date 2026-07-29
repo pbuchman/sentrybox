@@ -255,3 +255,47 @@ test("Dependabot tracks lockfile, Actions, and pinned base image updates", async
   }
   assert.doesNotMatch(dependabot, /target-branch:\s*(?!main\b)/u);
 });
+
+test("documentation pins the SentryBox release workflow name", async () => {
+  const deploymentPlan = await source(
+    "docs/superpowers/plans/2026-07-28-home-dev-deployment-and-cutover.md",
+  );
+  assert.equal(
+    Array.from(deploymentPlan.matchAll(/`Release SentryBox Image`/gu)).length,
+    2,
+  );
+  assert.doesNotMatch(deploymentPlan, /Release Error Hub Image/u);
+});
+
+test("documentation records current Home Dev capacity", async () => {
+  const [specification, deploymentPlan] = await Promise.all([
+    source("docs/specification.md"),
+    source(
+      "docs/superpowers/plans/2026-07-28-home-dev-deployment-and-cutover.md",
+    ),
+  ]);
+  assert.doesNotMatch(specification, /97%/u);
+  assert.doesNotMatch(deploymentPlan, /97%/u);
+  assert.match(specification, /581 GiB free[\s\S]*?34% used/u);
+  assert.match(deploymentPlan, /581 GiB free at 34% used/u);
+});
+
+test("network runbook uses the canonical installer and verifies live fragments", async () => {
+  const networkRunbook = await source("docs/runbooks/network-exposure.md");
+  assert.match(
+    networkRunbook,
+    /sudo \.\/deploy\/home-dev\/install\.sh \\\n+\s+--private-origin "https:\/\/<home-dev-tailnet-name>:8443"/u,
+  );
+  assert.match(
+    networkRunbook,
+    /sudo test -f \/etc\/caddy\/Caddyfile\.d\/sentrybox\.caddy/u,
+  );
+  assert.match(
+    networkRunbook,
+    /sudo test -f \/etc\/caddy\/Caddyfile\.d\/sentrybox-deploy\.caddy/u,
+  );
+  assert.doesNotMatch(
+    networkRunbook,
+    /(?:sudo\s+)?(?:cp|install)\s+[^\n]*caddy-sentrybox/u,
+  );
+});

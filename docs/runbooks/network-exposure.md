@@ -33,11 +33,17 @@ import either source directly from the deployment checkout. When
 route and then restored from `deploy/home-dev/caddy-sentrybox.caddy`. The live
 deploy callback fragment remains unchanged.
 
-Before every reload:
+From the repository root, run the canonical installer as root with the actual
+private tailnet origin:
 
 ```bash
-test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy
-test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy
+sudo ./deploy/home-dev/install.sh \
+  --private-origin "https://<home-dev-tailnet-name>:8443"
+```
+
+Then verify the installed live fragments before every reload:
+
+```bash
 sudo test -f /etc/caddy/Caddyfile.d/sentrybox.caddy
 sudo test -f /etc/caddy/Caddyfile.d/sentrybox-deploy.caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
