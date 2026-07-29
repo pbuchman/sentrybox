@@ -24,6 +24,8 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
     dockerfile,
     /COPY --from=builder \/etc\/ssl\/certs\/ca-certificates\.crt \/etc\/ssl\/certs\/ca-certificates\.crt/u,
   );
+  assert.match(dockerfile, /scripts\/admin\/generate-project-config\.mjs/u);
+  assert.match(dockerfile, /scripts\/admin\/validate-project-config\.mjs/u);
 
   const runtime = dockerfile.split(/\bAS runtime\b/u)[1] ?? "";
   assert.doesNotMatch(runtime, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
@@ -58,6 +60,10 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.match(
     compose,
     /\/home\/pbuchman\/services\/intexura-error-hub\/env:\/run\/secrets\/error-hub-env:ro/u,
+  );
+  assert.match(
+    compose,
+    /config\.example\.json:\/run\/config\/error-hub-projects\.json:ro/u,
   );
   assert.doesNotMatch(compose, /^volumes:\s*$/mu);
   assert.doesNotMatch(compose, /\bdown\s+-v\b/u);

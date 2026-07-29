@@ -60,6 +60,7 @@ docker run --detach \
   --publish 127.0.0.1::8081 \
   --mount "type=bind,src=${verify_temp}/data,dst=/data" \
   --mount "type=bind,src=${verify_temp}/env,dst=/run/secrets/error-hub-env,readonly" \
+  --mount "type=bind,src=${verify_root}/deploy/home-dev/config.example.json,dst=/run/config/error-hub-projects.json,readonly" \
   --env ERROR_HUB_DATABASE_PATH=/data/error-hub.sqlite \
   --env ERROR_HUB_ENV_FILE=/run/secrets/error-hub-env \
   --env ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
@@ -120,6 +121,12 @@ if ! docker exec "${verify_container}" sh -c \
 fi
 if ! docker exec "${verify_container}" test -s /etc/ssl/certs/ca-certificates.crt; then
   printf 'Runtime CA certificate bundle is missing.\n' >&2
+  exit 1
+fi
+if ! docker exec "${verify_container}" node \
+  scripts/admin/validate-project-config.mjs \
+  --config /run/config/error-hub-projects.json >/dev/null; then
+  printf 'Runtime project configuration validator failed.\n' >&2
   exit 1
 fi
 if docker exec "${verify_container}" test -e /app/src \

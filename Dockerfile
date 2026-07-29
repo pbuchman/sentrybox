@@ -28,6 +28,8 @@ RUN sqlite_dir=/workspace/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/
 
 COPY apps apps
 COPY packages packages
+COPY scripts/admin/generate-project-config.mjs scripts/admin/generate-project-config.mjs
+COPY scripts/admin/validate-project-config.mjs scripts/admin/validate-project-config.mjs
 COPY LICENSE LICENSE
 
 RUN pnpm build \
@@ -50,6 +52,11 @@ RUN pnpm build \
       -name "*.test.js" -o -name "*.d.ts" -o -name "*.d.ts.map" \
       -o -name "*.js.map" -o -name "tsconfig.tsbuildinfo" \) -delete; \
   done \
+  && mkdir -p /opt/error-hub/scripts/admin \
+  && install -m 0444 \
+    /workspace/scripts/admin/generate-project-config.mjs \
+    /workspace/scripts/admin/validate-project-config.mjs \
+    /opt/error-hub/scripts/admin/ \
   && cp /workspace/LICENSE /opt/error-hub/LICENSE
 
 FROM ${NODE_IMAGE} AS runtime
@@ -57,7 +64,9 @@ FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN mkdir /data && chown 1000:1000 /data
+RUN mkdir /data \
+  && mkdir -p /run/config \
+  && chown 1000:1000 /data /run/config
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder --chown=1000:1000 /opt/error-hub/ ./

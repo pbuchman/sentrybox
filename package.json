@@ -12,7 +12,8 @@
     "format:check": "prettier --check .",
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
-    "test": "pnpm -r run test",
+    "test": "pnpm -r run test && pnpm run test:admin",
+    "test:admin": "node --test scripts/admin/*.test.mjs",
     "test:integration": "pnpm -r run test:integration",
     "build": "pnpm --filter @intexura-error-hub/domain build && pnpm --filter @intexura-error-hub/protocol build && pnpm --filter @intexura-error-hub/web build && pnpm --filter @intexura-error-hub/server build"
   },

@@ -189,6 +189,36 @@ describe("public Sentry envelope ingest", () => {
     expect(fixture.forwarded).toEqual([]);
   });
 
+  it("accepts a dev event then rejects prod metadata on the same dev key without new side effects", async () => {
+    const fixture = createFixture({
+      environment: "dev",
+      forwardingMode: "shadow",
+      forwardingSecretRef: "LEGACY_SENTRY_DSN_BACKEND_DEV",
+    });
+    const accepted = eventEnvelope({
+      event_id: eventId(201),
+      environment: "dev",
+      level: "error",
+      message: "accepted dev event",
+    });
+    const rejected = eventEnvelope({
+      event_id: eventId(202),
+      environment: "prod",
+      level: "error",
+      message: "rejected cross-environment event",
+    });
+
+    expect((await postEnvelope(fixture.app, accepted)).statusCode).toBe(200);
+    expect(count(fixture.database, "events")).toBe(1);
+    expect(count(fixture.database, "webhook_outbox")).toBe(1);
+    expect(fixture.forwarded).toHaveLength(1);
+
+    expectSentryError(await postEnvelope(fixture.app, rejected), 400);
+    expect(count(fixture.database, "events")).toBe(1);
+    expect(count(fixture.database, "webhook_outbox")).toBe(1);
+    expect(fixture.forwarded).toHaveLength(1);
+  });
+
   it("validates every event environment before persisting any item from a multi-event envelope", async () => {
     const fixture = createFixture({
       forwardingMode: "shadow",
@@ -1039,6 +1069,7 @@ describe("public Sentry envelope ingest", () => {
 
 interface FixtureOptions {
   readonly projectEnabled?: boolean;
+  readonly environment?: string;
   readonly forwardingMode?: "disabled" | "shadow";
   readonly forwardingSecretRef?: string | null;
   readonly shadowResult?: ReturnType<ShadowForwarder["enqueue"]>;
@@ -1080,7 +1111,7 @@ function createFixture(options: FixtureOptions = {}): {
   });
   projects.setIngestKey({
     projectId: 1,
-    environment: "fixture",
+    environment: options.environment ?? "fixture",
     publicKey: PUBLIC_KEY,
     allowedOrigins: [ALLOWED_ORIGIN],
     forwardingMode: options.forwardingMode ?? "disabled",

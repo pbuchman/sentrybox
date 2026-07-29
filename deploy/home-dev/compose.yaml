@@ -14,7 +14,7 @@ services:
       ERROR_HUB_PRIVATE_HOST: "0.0.0.0"
       ERROR_HUB_PRIVATE_PORT: "8081"
       ERROR_HUB_PUBLIC_INGEST_HOSTS: errors.intexuraos.cloud
-      ERROR_HUB_REQUIRED_SECRET_REFERENCES: "${ERROR_HUB_REQUIRED_SECRET_REFERENCES:-}"
+      ERROR_HUB_REQUIRED_SECRET_REFERENCES: "${ERROR_HUB_REQUIRED_SECRET_REFERENCES:-LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD}"
     ports:
       - "127.0.0.1:8140:8080"
       - "127.0.0.1:8141:8081"
@@ -28,6 +28,7 @@ services:
     volumes:
       - /home/pbuchman/services/intexura-error-hub/data:/data
       - /home/pbuchman/services/intexura-error-hub/env:/run/secrets/error-hub-env:ro
+      - /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/config.example.json:/run/config/error-hub-projects.json:ro
     pids_limit: 128
     mem_limit: 512m
     restart: unless-stopped
