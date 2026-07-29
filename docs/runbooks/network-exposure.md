@@ -21,15 +21,25 @@ The canonical fragments are:
 - `deploy/home-dev/caddy-sentrybox.caddy`
 - `deploy/home-dev/caddy-sentrybox-deploy.caddy`
 
-The canonical Home Dev Caddyfile in `pbuchman-dev` imports those files from the
-dedicated deployment checkout. Merge those imports into the live Caddyfile; do
-not replace unrelated Home Dev routes.
+Installation copies those canonical sources to these live paths:
+
+- `/etc/caddy/Caddyfile.d/sentrybox.caddy`
+- `/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy`
+
+The Home Dev Caddyfile imports `/etc/caddy/Caddyfile.d/*.caddy`; it does not
+import either source directly from the deployment checkout. When
+`sentrybox-deploy.service` runs the deployment transaction, only the live
+`sentrybox.caddy` ingest fragment is temporarily replaced by the maintenance
+route and then restored from `deploy/home-dev/caddy-sentrybox.caddy`. The live
+deploy callback fragment remains unchanged.
 
 Before every reload:
 
 ```bash
 test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy
 test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy
+sudo test -f /etc/caddy/Caddyfile.d/sentrybox.caddy
+sudo test -f /etc/caddy/Caddyfile.d/sentrybox-deploy.caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```

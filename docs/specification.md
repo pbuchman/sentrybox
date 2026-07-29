@@ -95,8 +95,9 @@ IntexuraOS behavior:
   Sentry MCP server and completes with `SENTRY_AGENT_FINAL`.
 - Dev and production already ship complete PM2 logs to Grafana Loki. SentryBox
   therefore needs a locator into those logs, not another copy of them.
-- Home Dev currently has about 34 GiB free on a 97% used root filesystem. The
-  5 GiB limit is a hard safety boundary, not a target size.
+- Current read-only Home Dev evidence shows 581 GiB free on a 915 GiB root
+  filesystem at 34% used. The 5 GiB limit remains a fixed safety boundary, not
+  a target size.
 
 The Home Dev sample starts with two IntexuraOS logical projects. Environment is
 deliberately not encoded in the project name:
@@ -804,7 +805,7 @@ integration tests, browser tests, protocol compatibility tests, image scanning,
 and a multi-stage Docker build. A successful `main` build publishes:
 
 ```text
-ghcr.io/pbuchman/sentrybox:<git-sha>
+ghcr.io/pbuchman/sentrybox:sha-<40-character-sha>
 ```
 
 Production deployment always references an immutable SHA or digest, never
@@ -819,8 +820,19 @@ Production deployment always references an immutable SHA or digest, never
 /home/pbuchman/services/sentrybox/backups/    # bounded backup staging
 /etc/systemd/system/sentrybox.service
 /etc/systemd/system/sentrybox-deploy.service
-/etc/caddy/Caddyfile.d/sentrybox.caddy
+/etc/caddy/Caddyfile.d/sentrybox.caddy         # live ingest fragment
+/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy  # live deploy callback fragment
 ```
+
+The canonical Caddy sources are
+`deploy/home-dev/caddy-sentrybox.caddy` and
+`deploy/home-dev/caddy-sentrybox-deploy.caddy` in the checkout. Installation
+copies them to the two live paths above. The Home Dev Caddyfile imports
+`/etc/caddy/Caddyfile.d/*.caddy`; it does not import files directly from the
+checkout. When `sentrybox-deploy.service` runs the deployment transaction, only
+the live `sentrybox.caddy` ingest fragment is temporarily replaced with the
+maintenance response and then restored from its canonical checkout source. The
+live deploy callback fragment is not swapped.
 
 The service is supervised by systemd and runs one non-root, read-only Docker
 container through Docker Compose. It binds container ports only to
@@ -881,12 +893,15 @@ errors.intexuraos.cloud:80 {
 
 1. Pull the immutable image and record the currently running digest.
 2. Run configuration validation and a read-only database preflight.
-3. Switch the public ingest route to a bounded maintenance response `503` with
-   `Retry-After`, so SDKs retry instead of treating telemetry as accepted.
+3. Replace only `/etc/caddy/Caddyfile.d/sentrybox.caddy` with a bounded
+   maintenance response `503` with `Retry-After`, so SDKs retry instead of
+   treating telemetry as accepted.
 4. Create a consistent pre-migration SQLite backup.
 5. Start the new image; it acquires the migration lock and applies migrations.
 6. Require private readiness and public synthetic-envelope success.
-7. Restore Caddy ingest and observe metrics for ten minutes.
+7. Restore the live ingest fragment from
+   `deploy/home-dev/caddy-sentrybox.caddy`, reload Caddy, and observe metrics for
+   ten minutes.
 8. On failure, restore the previous image digest and rerun both health checks.
    Forward-compatible migrations make database reversal unnecessary; restore
    the pre-migration backup only if an integrity check proves database damage.
