@@ -144,7 +144,7 @@ test("HTTP boundary rejects path, method, event, signature, stale payload, and o
   }
 });
 
-test("production wiring can invoke only the fixed SentryBox deployment unit and cannot access SentryBox data", () => {
+test("production wiring invokes only the fixed deployment unit from an isolated Home Dev checkout", () => {
   const source = readFileSync(
     new URL("./deploy-webhook.mjs", import.meta.url),
     "utf8",
@@ -191,8 +191,27 @@ test("production wiring can invoke only the fixed SentryBox deployment unit and 
     unit,
     /^WorkingDirectory=\/home\/pbuchman\/deploy\/sentrybox$/mu,
   );
+  assert.match(
+    unit,
+    /^ExecStart=\/usr\/bin\/node --jitless deploy\/home-dev\/deploy-webhook\.mjs$/mu,
+  );
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
-  assert.match(unit, /InaccessiblePaths=.*sentrybox\/data.*docker\.sock/u);
+  assert.match(unit, /^ProtectHome=tmpfs$/mu);
+  assert.match(
+    unit,
+    /^BindReadOnlyPaths=\/home\/pbuchman\/deploy\/sentrybox$/mu,
+  );
+  assert.doesNotMatch(unit, /^Bind(?:ReadOnly)?Paths=.*\/services\//mu);
+  assert.deepEqual(unit.match(/^InaccessiblePaths=.*$/gmu), [
+    "InaccessiblePaths=",
+    "InaccessiblePaths=/var/run/docker.sock",
+  ]);
+  assert.match(unit, /^MemoryMax=128M$/mu);
+  assert.match(unit, /^MemoryDenyWriteExecute=true$/mu);
+  assert.match(
+    unit,
+    /^SystemCallFilter=@system-service pkey_alloc pkey_free pkey_mprotect$/mu,
+  );
   assert.match(
     cloudflaredUnit,
     /--token-file \/run\/credentials\/cloudflared\.service\/tunnel-token/u,
