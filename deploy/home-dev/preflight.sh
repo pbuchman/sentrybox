@@ -10,7 +10,7 @@ readonly database_operations="${script_directory}/database-operations.mjs"
 readonly candidate_image="${1:-}"
 error_hub_require_immutable_image "${candidate_image}"
 
-for executable in docker df ss; do
+for executable in docker df ss stat; do
   error_hub_require_command "${executable}"
 done
 
@@ -19,6 +19,7 @@ for required_path in \
   "${error_hub_service_root}" \
   "${error_hub_data_directory}" \
   "${error_hub_environment_file}" \
+  "${error_hub_runtime_environment_file}" \
   "${error_hub_compose_file}" \
   "${error_hub_project_config}"; do
   if [[ ! -e "${required_path}" ]]; then
@@ -26,6 +27,8 @@ for required_path in \
     exit 1
   fi
 done
+
+error_hub_require_runtime_environment
 
 error_hub_require_free_space "${error_hub_service_root}"
 

@@ -7,7 +7,7 @@ readonly script_directory
 source "${script_directory}/common.sh"
 readonly database_operations="${script_directory}/database-operations.mjs"
 
-for executable in docker curl jq; do
+for executable in docker curl jq stat; do
   error_hub_require_command "${executable}"
 done
 

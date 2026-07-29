@@ -70,6 +70,11 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.match(compose, /"127\.0\.0\.1:8141:8081"/u);
   assert.match(compose, /ERROR_HUB_PUBLIC_HOST:\s*"0\.0\.0\.0"/u);
   assert.match(compose, /ERROR_HUB_PRIVATE_HOST:\s*"0\.0\.0\.0"/u);
+  assert.match(
+    compose,
+    /env_file:\s*\n\s*-\s*"?\$\{ERROR_HUB_RUNTIME_ENV_FILE:-\/var\/lib\/sentrybox-deploy\/runtime\.env\}"?/u,
+  );
+  assert.doesNotMatch(compose, /^\s+ERROR_HUB_REQUIRED_SECRET_REFERENCES:/mu);
   assert.match(compose, /read_only:\s*true/u);
   assert.match(compose, /\/tmp:size=64m,mode=1777/u);
   assert.match(compose, /cap_drop:\s*\n\s*- ALL/u);
@@ -92,6 +97,34 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.doesNotMatch(compose, /^volumes:\s*$/mu);
   assert.doesNotMatch(compose, /\bdown\s+-v\b/u);
   assert.doesNotMatch(compose, /(?:^|[:@])latest(?:$|\s)/mu);
+});
+
+test("operator commands load deployment state explicitly", async () => {
+  const runbook = await source("docs/runbooks/project-configuration.md");
+  const composeCommands =
+    runbook.match(/sudo docker compose[\s\S]*?(?=\n```)/gu) ?? [];
+
+  assert.ok(composeCommands.length >= 6);
+  for (const command of composeCommands) {
+    assert.match(
+      command,
+      /sudo docker compose --env-file \/var\/lib\/sentrybox-deploy\/current\.env/u,
+    );
+  }
+  assert.doesNotMatch(runbook, /\/run\/config\/error-hub-projects\.json/u);
+  assert.equal(
+    Array.from(
+      runbook.matchAll(/--config \/run\/config\/sentrybox-projects\.json/gu),
+    ).length,
+    6,
+  );
+  const disableSection =
+    runbook
+      .split("## Disable Code Agent delivery")[1]
+      ?.split("## Disable legacy Sentry shadow forwarding")[0] ?? "";
+  assert.match(disableSection, /\/home\/pbuchman\/services\/sentrybox\/env/u);
+  assert.match(disableSection, /\/var\/lib\/sentrybox-deploy\/runtime\.env/u);
+  assert.match(disableSection, /remove[^.]*HMAC[^.]*name/iu);
 });
 
 test("verification is bounded and never installs packages at runtime", async () => {

@@ -22,6 +22,8 @@ readonly error_hub_data_directory="${error_hub_service_root}/data"
 readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
 readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/sentrybox/backups"
 readonly error_hub_state_directory="${error_hub_prefix}/var/lib/sentrybox-deploy"
+readonly error_hub_runtime_environment_file="${error_hub_state_directory}/runtime.env"
+readonly error_hub_initial_secret_references="LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD"
 readonly error_hub_lock_file="${error_hub_prefix}/run/lock/sentrybox-deploy.lock"
 readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
 readonly error_hub_current_state="${error_hub_state_directory}/current.env"
@@ -37,10 +39,37 @@ readonly error_hub_repository="pbuchman/sentrybox"
 readonly error_hub_workflow="Release SentryBox Image"
 readonly error_hub_image_repository="ghcr.io/pbuchman/sentrybox"
 
+# Compose reads the persistent runtime reference list through this path. Tests
+# redirect it into their disposable prefix; production uses the canonical path.
+export ERROR_HUB_RUNTIME_ENV_FILE="${error_hub_runtime_environment_file}"
+
 error_hub_require_command() {
   local eh_command_name="$1"
   if ! command -v "${eh_command_name}" >/dev/null 2>&1; then
     printf 'Required executable is unavailable: %s\n' "${eh_command_name}" >&2
+    return 1
+  fi
+}
+
+error_hub_require_runtime_environment() {
+  local eh_mode eh_owner eh_links
+  local -a eh_lines=()
+  if [[ ! -f "${error_hub_runtime_environment_file}" \
+    || -L "${error_hub_runtime_environment_file}" ]]; then
+    printf 'SentryBox runtime environment must be a regular file.\n' >&2
+    return 1
+  fi
+  eh_mode="$(stat -c '%a' "${error_hub_runtime_environment_file}")"
+  eh_owner="$(stat -c '%u' "${error_hub_runtime_environment_file}")"
+  eh_links="$(stat -c '%h' "${error_hub_runtime_environment_file}")"
+  if [[ "${eh_mode}" != "600" || "${eh_owner}" != "0" || "${eh_links}" != "1" ]]; then
+    printf 'SentryBox runtime environment must be root-owned, mode 0600, and singly linked.\n' >&2
+    return 1
+  fi
+  mapfile -t eh_lines <"${error_hub_runtime_environment_file}"
+  if (( ${#eh_lines[@]} != 1 )) \
+    || [[ ! "${eh_lines[0]}" =~ ^ERROR_HUB_REQUIRED_SECRET_REFERENCES=[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$ ]]; then
+    printf 'SentryBox runtime environment must contain exactly one valid reference list.\n' >&2
     return 1
   fi
 }
@@ -153,8 +182,9 @@ error_hub_write_state() {
 error_hub_compose_up() {
   local eh_compose_image="$1"
   local eh_compose_origin="$2"
-  error_hub_require_immutable_image "${eh_compose_image}"
-  error_hub_require_private_origin "${eh_compose_origin}"
+  error_hub_require_immutable_image "${eh_compose_image}" || return $?
+  error_hub_require_private_origin "${eh_compose_origin}" || return $?
+  error_hub_require_runtime_environment || return $?
   ERROR_HUB_IMAGE="${eh_compose_image}" \
     ERROR_HUB_PRIVATE_ORIGIN="${eh_compose_origin}" \
     docker compose --file "${error_hub_compose_file}" \

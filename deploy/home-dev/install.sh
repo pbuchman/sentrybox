@@ -61,6 +61,23 @@ chown "${runtime_uid}:${runtime_gid}" \
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 
 install -d -m 0700 "${error_hub_state_directory}"
+if [[ -e "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
+  if [[ ! -f "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
+    printf 'SentryBox runtime environment must be a regular file.\n' >&2
+    exit 1
+  fi
+  chown 0:0 "${error_hub_runtime_environment_file}"
+  chmod 0600 "${error_hub_runtime_environment_file}"
+else
+  runtime_environment_temporary="${error_hub_runtime_environment_file}.tmp.$$"
+  umask 077
+  printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' \
+    "${error_hub_initial_secret_references}" >"${runtime_environment_temporary}"
+  chown 0:0 "${runtime_environment_temporary}"
+  chmod 0600 "${runtime_environment_temporary}"
+  mv -f "${runtime_environment_temporary}" "${error_hub_runtime_environment_file}"
+fi
+error_hub_require_runtime_environment
 private_origin_file="${error_hub_state_directory}/private-origin"
 printf '%s\n' "${private_origin}" >"${private_origin_file}.tmp.$$"
 chmod 0600 "${private_origin_file}.tmp.$$"

@@ -5,6 +5,8 @@ services:
     image: ${ERROR_HUB_IMAGE:?immutable image digest required}
     user: "${ERROR_HUB_RUNTIME_UID:-1000}:${ERROR_HUB_RUNTIME_GID:-1000}"
     init: true
+    env_file:
+      - "${ERROR_HUB_RUNTIME_ENV_FILE:-/var/lib/sentrybox-deploy/runtime.env}"
     environment:
       ERROR_HUB_DATABASE_PATH: /data/error-hub.sqlite
       ERROR_HUB_ENV_FILE: /run/secrets/sentrybox-env
@@ -14,7 +16,6 @@ services:
       ERROR_HUB_PRIVATE_HOST: "0.0.0.0"
       ERROR_HUB_PRIVATE_PORT: "8081"
       ERROR_HUB_PUBLIC_INGEST_HOSTS: errors.intexuraos.cloud
-      ERROR_HUB_REQUIRED_SECRET_REFERENCES: "${ERROR_HUB_REQUIRED_SECRET_REFERENCES:-LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD}"
     ports:
       - "127.0.0.1:8140:8080"
       - "127.0.0.1:8141:8081"

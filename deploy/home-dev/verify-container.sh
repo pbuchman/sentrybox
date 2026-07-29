@@ -33,6 +33,10 @@ fi
 mkdir -p "${verify_temp}/data"
 : >"${verify_temp}/env"
 chmod 0600 "${verify_temp}/env"
+readonly verify_runtime_references="LEGACY_SENTRY_DSN_BACKEND_DEV,CODE_AGENT_HMAC_DEV"
+printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' \
+  "${verify_runtime_references}" >"${verify_temp}/runtime.env"
+chmod 0600 "${verify_temp}/runtime.env"
 
 if [[ "$#" -eq 0 ]]; then
   docker build --tag "${verify_image}" "${verify_root}"
@@ -154,8 +158,24 @@ if [[ "${exit_code}" != "0" ]]; then
   exit 1
 fi
 
-ERROR_HUB_IMAGE="ghcr.io/pbuchman/sentrybox@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
-ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
-docker compose --file "${verify_root}/deploy/home-dev/compose.yaml" config >/dev/null
+compose_config="$({
+  ERROR_HUB_IMAGE="ghcr.io/pbuchman/sentrybox@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+  ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
+  ERROR_HUB_RUNTIME_ENV_FILE="${verify_temp}/runtime.env" \
+  docker compose --file "${verify_root}/deploy/home-dev/compose.yaml" config
+})"
+if ! printf '%s\n' "${compose_config}" \
+  | grep -F "ERROR_HUB_REQUIRED_SECRET_REFERENCES: ${verify_runtime_references}" >/dev/null; then
+  printf 'Compose did not render the persistent runtime reference list.\n' >&2
+  exit 1
+fi
+if ERROR_HUB_IMAGE="ghcr.io/pbuchman/sentrybox@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+  ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
+  ERROR_HUB_RUNTIME_ENV_FILE="${verify_temp}/missing-runtime.env" \
+  docker compose --file "${verify_root}/deploy/home-dev/compose.yaml" config \
+    >/dev/null 2>&1; then
+  printf 'Compose accepted a missing persistent runtime environment file.\n' >&2
+  exit 1
+fi
 
 printf 'SentryBox container contract verified.\n'

@@ -13,7 +13,7 @@ in a repository file, SQLite column, container log, or validation output.
 
 The non-secret manifest at
 `deploy/home-dev/config.example.json` is mounted read-only in the container as
-`/run/config/error-hub-projects.json`. It defines exactly this matrix:
+`/run/config/sentrybox-projects.json`. It defines exactly this matrix:
 
 | Project | Project ID | Environment | Browser origin |
 | --- | ---: | --- | --- |
@@ -45,10 +45,10 @@ keys and localhost lookalikes remain invalid.
 Run from `/home/pbuchman/deploy/sentrybox/deploy/home-dev`:
 
 ```bash
-docker compose exec sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env exec sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json
+  --config /run/config/sentrybox-projects.json
 ```
 
 The command writes all four clear DSNs synchronously to that operator terminal
@@ -65,10 +65,10 @@ therefore cannot rotate keys implicitly or print an existing key again.
 Validate the stored non-secret state:
 
 ```bash
-docker compose exec -T sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env exec -T sentrybox node \
   scripts/admin/validate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json \
+  --config /run/config/sentrybox-projects.json \
   --webhook-mode disabled
 ```
 
@@ -85,15 +85,19 @@ been verified.
 2. For the dev cutover, add only `CODE_AGENT_HMAC_DEV` to the mode-`0600`
    credential file without printing its value. Add `CODE_AGENT_HMAC_PROD` only
    during the later production cutover.
-3. Add the matching HMAC name to `ERROR_HUB_REQUIRED_SECRET_REFERENCES`.
+3. Atomically replace `/var/lib/sentrybox-deploy/runtime.env` with a root-owned,
+   mode-`0600` regular file whose single line adds the matching HMAC name to
+   `ERROR_HUB_REQUIRED_SECRET_REFERENCES`. This file is the persistent source
+   used by normal starts, deployments, and rollbacks; do not export the value
+   only in an interactive shell.
 4. Start a one-off container with the same data/config mounts and run the
    transition with one explicit UTC baseline:
 
 ```bash
-docker compose run --rm --no-deps sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json \
+  --config /run/config/sentrybox-projects.json \
   --environment dev \
   --enable-code-agent-at 2026-07-28T13:00:00.000Z
 ```
@@ -102,10 +106,10 @@ docker compose run --rm --no-deps sentrybox node \
    same baseline:
 
 ```bash
-docker compose exec -T sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env exec -T sentrybox node \
   scripts/admin/validate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json \
+  --config /run/config/sentrybox-projects.json \
   --environment dev \
   --webhook-mode live \
   --enabled-at 2026-07-28T13:00:00.000Z
@@ -122,16 +126,19 @@ For rollback, use the same maintenance window and atomically clear only the
 selected environment's live destination fields:
 
 ```bash
-docker compose run --rm --no-deps sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json \
+  --config /run/config/sentrybox-projects.json \
   --environment dev \
   --disable-code-agent-at 2026-07-28T15:00:00.000Z
 ```
 
-Remove the matching HMAC only after disabling that environment, restart, and
-validate it with `--environment dev --webhook-mode disabled`.
+Only after disabling that environment, keep maintenance active and the service
+stopped while atomically replacing both files: remove the matching HMAC value
+from `/home/pbuchman/services/sentrybox/env` and remove the matching HMAC name
+from `/var/lib/sentrybox-deploy/runtime.env`. Then start the service and validate
+it with `--environment dev --webhook-mode disabled`.
 
 ## Disable legacy Sentry shadow forwarding
 
@@ -139,10 +146,10 @@ After the required stable observation window, permanently stop forwarding the
 selected environment to Sentry without manual SQL:
 
 ```bash
-docker compose run --rm --no-deps sentrybox node \
+sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
-  --config /run/config/error-hub-projects.json \
+  --config /run/config/sentrybox-projects.json \
   --environment dev \
   --disable-forwarding-at 2026-08-04T13:00:00.000Z
 ```
