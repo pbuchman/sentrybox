@@ -64,7 +64,11 @@ FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN mkdir /data \
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm \
+    /usr/local/bin/pnpx \
+  && mkdir /data \
   && mkdir -p /run/config \
   && chown 1000:1000 /data /run/config
 

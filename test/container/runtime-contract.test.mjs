@@ -30,6 +30,7 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
   const runtime = dockerfile.split(/\bAS runtime\b/u)[1] ?? "";
   assert.doesNotMatch(runtime, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
   assert.doesNotMatch(runtime, /\bpnpm\s+(?:install|add)\b/u);
+  assert.match(runtime, /\/usr\/local\/lib\/node_modules\/(?:npm|corepack)/u);
 });
 
 test("compose keeps both listeners on host loopback and hardens the container", async () => {
@@ -86,6 +87,7 @@ test("verification is bounded and never installs packages at runtime", async () 
     verifier,
     /Runtime image contains workspace source or test artifacts/u,
   );
+  assert.match(verifier, /Runtime image contains an unused package manager/u);
   assert.doesNotMatch(verifier, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
   assert.doesNotMatch(verifier, /\bdown\s+-v\b/u);
 });

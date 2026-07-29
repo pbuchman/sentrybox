@@ -123,6 +123,11 @@ if ! docker exec "${verify_container}" test -s /etc/ssl/certs/ca-certificates.cr
   printf 'Runtime CA certificate bundle is missing.\n' >&2
   exit 1
 fi
+if docker exec "${verify_container}" sh -c \
+  'command -v npm || command -v npx || command -v corepack || command -v yarn || command -v pnpm'; then
+  printf 'Runtime image contains an unused package manager.\n' >&2
+  exit 1
+fi
 if ! docker exec "${verify_container}" node \
   scripts/admin/validate-project-config.mjs \
   --config /run/config/error-hub-projects.json >/dev/null; then
