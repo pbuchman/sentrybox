@@ -1,0 +1,17 @@
+errors-deploy.intexuraos.cloud:80 {
+	@workflow_run {
+		method POST
+		path /github/workflow-run
+	}
+
+	handle @workflow_run {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:9003
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

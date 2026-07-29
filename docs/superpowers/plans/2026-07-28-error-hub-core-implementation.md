@@ -1,4 +1,4 @@
-# Intexura Error Hub Core Implementation Plan
+# SentryBox Core Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -18,6 +18,7 @@
 - Every database mutation that changes lifecycle state and its webhook must be atomic.
 - There is no application authentication layer. Network placement, Origin/Host checks, and Tailscale ACLs enforce private access.
 - Keep the live data directory below 5 GiB and event retention at 30 days.
+  These are fixed product safety limits; do not expose configuration overrides.
 
 ---
 
@@ -43,7 +44,7 @@
 - [ ] Run `corepack pnpm install --frozen-lockfile=false && pnpm test`; expect four failing smoke assertions.
 - [ ] Replace the smoke assertions with package identity assertions and rerun `pnpm test`; expect all four to pass.
 - [ ] Configure CI on `ubuntu-latest` only, with install, format check, lint, typecheck, test, and build jobs; do not reference a self-hosted runner.
-- [ ] Commit with `chore: scaffold error hub workspace`.
+- [ ] Commit with `chore: scaffold sentrybox workspace`.
 
 ## Task 2: Parse and validate the Sentry Envelope protocol
 
@@ -81,7 +82,7 @@ export function decompressEnvelope(input: NodeJS.ReadableStream, encoding: strin
 - [ ] Parse item lengths when supplied and newline-delimited payloads otherwise; reject ambiguous or truncated framing with a typed protocol error.
 - [ ] Preserve unknown item types in memory so the ingest route can acknowledge and discard them.
 - [ ] Add real fixtures captured from `@sentry/node@8.55.0` and `@sentry/react@8.55.0`; strip all user data before committing fixtures.
-- [ ] Run `pnpm --filter @intexura-error-hub/protocol test`; expect all parser cases to pass.
+- [ ] Run `pnpm --filter @sentrybox/protocol test`; expect all parser cases to pass.
 - [ ] Commit with `feat(protocol): accept sentry envelope v7 events`.
 
 ## Task 3: Normalize, redact, and classify accepted events
@@ -109,7 +110,7 @@ export type Admission =
 - [ ] Recursively redact configured secret keys and values matching bearer tokens, API keys, DSNs, cookies, authorization headers, emails where not structurally required, and the exact `contentPreview` key before serialization.
 - [ ] Apply the specification limits for strings, frames, breadcrumbs, collection sizes, and recursion; set `truncated=true` and record truncation reasons.
 - [ ] Extract `requestId`, `reqId`, `traceId`, and `taskId` from tags, contexts, and extras using a deterministic precedence without inventing values.
-- [ ] Run `pnpm --filter @intexura-error-hub/protocol test`; expect redaction tests to prove the forbidden fixture values are absent from the entire serialized result.
+- [ ] Run `pnpm --filter @sentrybox/protocol test`; expect redaction tests to prove the forbidden fixture values are absent from the entire serialized result.
 - [ ] Commit with `feat(protocol): normalize and redact error events`.
 
 ## Task 4: Implement deterministic grouping and lifecycle rules
@@ -140,7 +141,7 @@ export function fingerprintEvent(event: NormalizedEventInput): FingerprintResult
 - [ ] Normalize only the volatile tokens listed in the specification; keep exception type, service, application module, filename, and function identity.
 - [ ] Write failing lifecycle tests for create, repeat, resolve, manual reopen, regression after resolve, and delete/recreate.
 - [ ] Implement pure lifecycle decisions returning `created`, `repeated`, `regressed`, or `manually_reopened`, including the next generation and whether a webhook is required.
-- [ ] Run `pnpm --filter @intexura-error-hub/domain test`; expect grouping to stay constant across release/environment but differ by project.
+- [ ] Run `pnpm --filter @sentrybox/domain test`; expect grouping to stay constant across release/environment but differ by project.
 - [ ] Commit with `feat(domain): group events and model issue lifecycle`.
 
 ## Task 5: Create the SQLite schema and transactional repositories
@@ -164,7 +165,7 @@ export function fingerprintEvent(event: NormalizedEventInput): FingerprintResult
 - [ ] Implement one transaction that performs idempotency lookup, issue create/update/regression, event insert, facet update, and immutable outbox insert.
 - [ ] Store the redacted normalized payload as deterministic JSON compressed with gzip after all indexed fields have been extracted.
 - [ ] Add tests proving retries do not increment counts, two different IDs do increment one issue, regression increments generation once, and delete cascades through events/tags/facets/outbox.
-- [ ] Run `pnpm --filter @intexura-error-hub/server test -- storage`; expect a clean temporary database after every test.
+- [ ] Run `pnpm --filter @sentrybox/server test -- storage`; expect a clean temporary database after every test.
 - [ ] Commit with `feat(storage): persist issues events and outbox atomically`.
 
 ## Task 6: Build the isolated public ingest listener
@@ -191,7 +192,7 @@ export function fingerprintEvent(event: NormalizedEventInput): FingerprintResult
 - [ ] Add the migration-only bounded in-memory forwarder. Select its fixed legacy DSN from the verified environment-bound key, rewrite only transport authentication, preserve envelope item bytes/event IDs, reject client-supplied destinations, persist no raw envelope, and keep its result independent from the SDK response.
 - [ ] Test forwarding success, target-environment selection, disabled mode, queue saturation, network failure, and environment mismatch; expect metrics but no retry or raw-payload disk write.
 - [ ] Add an integration test that sends an actual v8.55 Node envelope and confirms project, release, environment, service, level, and occurrence count in SQLite.
-- [ ] Run `pnpm --filter @intexura-error-hub/server test -- ingest`; expect all responses and headers to match the transport contract.
+- [ ] Run `pnpm --filter @sentrybox/server test -- ingest`; expect all responses and headers to match the transport contract.
 - [ ] Commit with `feat(ingest): expose write-only sentry envelope endpoint`.
 
 ## Task 7: Deliver Sentry-compatible Code Agent webhooks
@@ -224,7 +225,7 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 
 - [ ] Implement the exact retry schedule and HTTP classification from the specification, with request timeout, stable `X-Error-Hub-Delivery`, and no payload logging.
 - [ ] Prove in tests that repeated occurrences create no delivery, a resolved issue regression creates one new generation delivery, retries use byte-identical bodies/signatures, and dead letters remain inspectable.
-- [ ] Run `pnpm --filter @intexura-error-hub/server test -- webhooks`; expect no network calls outside the local test server.
+- [ ] Run `pnpm --filter @sentrybox/server test -- webhooks`; expect no network calls outside the local test server.
 - [ ] Commit with `feat(webhooks): deliver code agent compatible alerts`.
 
 ## Task 8: Implement the private operator and Sentry-read APIs
@@ -250,7 +251,7 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 - [ ] Implement only the five Sentry REST read endpoints in section 11.3 and return structured 404 for the remainder.
 - [ ] Match the Sentry field shape required by `get_issue_details` and `search_issue_events`, including exception entries, frames, breadcrumbs, contexts, tags, release, environment, occurrence counts, and stable permalinks.
 - [ ] Add a compatibility test that launches pinned `@sentry/mcp-server@0.37.0` against the private listener and exercises both tools over seeded data.
-- [ ] Run `pnpm --filter @intexura-error-hub/server test -- api`; expect private mutations to fail with an unapproved Host/Origin and pass with the configured private origin.
+- [ ] Run `pnpm --filter @sentrybox/server test -- api`; expect private mutations to fail with an unapproved Host/Origin and pass with the configured private origin.
 - [ ] Commit with `feat(api): expose private operator and worker evidence APIs`.
 
 ## Task 9: Add log correlation, retention, and health safety
@@ -268,10 +269,10 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 
 - [ ] Write failing query-builder tests for exact trace/request/task IDs, service/environment/time fallback, escaped LogQL values, browser-only events, and the ±2 minute boundary.
 - [ ] Return a typed correlation result with `confidence: "exact_identifier" | "time_message_fallback" | "not_applicable"`; the UI must never label fallback as exact.
-- [ ] Write failing retention tests using a tiny injected budget for 30-day expiry, 4 GiB/3.6 GiB logical thresholds, the 4.75 GiB physical stop, bounded batches, retained count/first-last/facet recomputation, orphan issue cleanup, outbox cleanup, checkpoint, and incremental vacuum.
+- [ ] Write failing retention tests using a tiny injected budget for 30-day expiry, 4 GiB/3.6 GiB logical thresholds, the 4.75 GiB physical stop, bounded batches, retained count/first-last/facet recomputation, orphan issue cleanup, outbox cleanup, terminal `webhook_redrives` cleanup independent of the original outbox state, checkpoint, and incremental vacuum.
 - [ ] Make ingest readiness depend on the storage safety state; retention failures must not silently delete newer data or fill the filesystem.
 - [ ] Expose private health and Prometheus data for accepted/discarded/rejected events, parse latency, issue grouping, database bytes, oldest event, retention runs, and outbox states.
-- [ ] Run `pnpm --filter @intexura-error-hub/server test -- retention logs health`; expect deterministic behavior without inspecting the developer machine disk.
+- [ ] Run `pnpm --filter @sentrybox/server test -- retention logs health`; expect deterministic behavior without inspecting the developer machine disk.
 - [ ] Commit with `feat(operations): correlate logs and enforce storage budget`.
 
 ## Task 10: Build the focused responsive UI
@@ -303,8 +304,8 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 - [ ] Refresh relative labels every 30 seconds while keeping exact UTC text and `<time datetime>` stable.
 - [ ] Put exception/application frames before metadata, then facets, log locator, breadcrumbs, redacted context, occurrences, delivery state, and normalized JSON.
 - [ ] Add keyboard, reduced-motion, focus, contrast, screen-reader, loading, error, and destructive-confirmation tests.
-- [ ] Run `pnpm --filter @intexura-error-hub/web test`; expect all component tests to pass.
-- [ ] Run `pnpm --filter @intexura-error-hub/web exec playwright test --project=chromium`; expect desktop and 390 px mobile operator flows to pass.
+- [ ] Run `pnpm --filter @sentrybox/web test`; expect all component tests to pass.
+- [ ] Run `pnpm --filter @sentrybox/web exec playwright test --project=chromium`; expect desktop and 390 px mobile operator flows to pass.
 - [ ] Commit with `feat(web): add private issue triage interface`.
 
 ## Task 11: Wire the single runtime and prove end-to-end behavior
@@ -326,7 +327,7 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 - [ ] Add fixture assertions that no debug/info payload and no forbidden redaction value exists anywhere in the database or export.
 - [ ] Run `pnpm lint && pnpm typecheck && pnpm test && pnpm build`; expect zero failures and a server distribution containing the private UI assets.
 - [ ] Run the full end-to-end suite twice to expose leaked ports, database handles, timers, or non-idempotent migrations.
-- [ ] Commit with `feat: complete error hub runtime`.
+- [ ] Commit with `feat: complete sentrybox runtime`.
 
 ## Endpoint Changes
 
@@ -349,7 +350,7 @@ export type DeliveryResult = 'delivered' | 'retry' | 'dead_letter';
 
 ### Unchanged
 
-- External Code Agent endpoint `POST /api/code/webhooks/sentry`; the Hub is its
+- External Code Agent endpoint `POST /api/code/webhooks/sentry`; SentryBox is its
   client and does not own or modify the route in this plan.
 
 ## Completion gate

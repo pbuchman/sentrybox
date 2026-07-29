@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "publicBaseUrl": "https://errors.intexuraos.cloud",
+  "projects": [
+    {
+      "id": 1,
+      "slug": "intexuraos-backend",
+      "name": "IntexuraOS Backend",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "slug": "intexuraos-web",
+      "name": "IntexuraOS Web",
+      "enabled": true
+    }
+  ],
+  "ingestKeys": [
+    {
+      "id": "intexuraos-backend-dev",
+      "projectId": 1,
+      "environment": "dev",
+      "allowedOrigins": [
+        "http://localhost:3000",
+        "https://dev.intexuraos.cloud"
+      ],
+      "forwarding": {
+        "mode": "shadow",
+        "environment": "dev",
+        "secretRef": "LEGACY_SENTRY_DSN_BACKEND_DEV"
+      },
+      "codeAgent": {
+        "mode": "disabled",
+        "environment": "dev",
+        "targetUrl": "https://dev.intexuraos.cloud/api/code/webhooks/sentry",
+        "secretRef": "CODE_AGENT_HMAC_DEV",
+        "enabledAt": null
+      }
+    },
+    {
+      "id": "intexuraos-backend-prod",
+      "projectId": 1,
+      "environment": "prod",
+      "allowedOrigins": ["https://intexuraos.cloud"],
+      "forwarding": {
+        "mode": "shadow",
+        "environment": "prod",
+        "secretRef": "LEGACY_SENTRY_DSN_BACKEND_PROD"
+      },
+      "codeAgent": {
+        "mode": "disabled",
+        "environment": "prod",
+        "targetUrl": "https://intexuraos.cloud/api/code/webhooks/sentry",
+        "secretRef": "CODE_AGENT_HMAC_PROD",
+        "enabledAt": null
+      }
+    },
+    {
+      "id": "intexuraos-web-dev",
+      "projectId": 2,
+      "environment": "dev",
+      "allowedOrigins": [
+        "http://localhost:3000",
+        "https://dev.intexuraos.cloud"
+      ],
+      "forwarding": {
+        "mode": "shadow",
+        "environment": "dev",
+        "secretRef": "LEGACY_SENTRY_DSN_WEB_DEV"
+      },
+      "codeAgent": {
+        "mode": "disabled",
+        "environment": "dev",
+        "targetUrl": "https://dev.intexuraos.cloud/api/code/webhooks/sentry",
+        "secretRef": "CODE_AGENT_HMAC_DEV",
+        "enabledAt": null
+      }
+    },
+    {
+      "id": "intexuraos-web-prod",
+      "projectId": 2,
+      "environment": "prod",
+      "allowedOrigins": ["https://intexuraos.cloud"],
+      "forwarding": {
+        "mode": "shadow",
+        "environment": "prod",
+        "secretRef": "LEGACY_SENTRY_DSN_WEB_PROD"
+      },
+      "codeAgent": {
+        "mode": "disabled",
+        "environment": "prod",
+        "targetUrl": "https://intexuraos.cloud/api/code/webhooks/sentry",
+        "secretRef": "CODE_AGENT_HMAC_PROD",
+        "enabledAt": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{"event_id":"33333333333333333333333333333333","sdk":{"name":"fixture","version":"1.0.0"}}
+{"type":"event"}
+{"message":"event payload"}
+{"type":"client_report","length":4}
+a
+b!
+{"type":"future_item"}
+opaque payload

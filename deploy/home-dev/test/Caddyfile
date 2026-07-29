@@ -1,0 +1,7 @@
+{
+	auto_https off
+	admin off
+}
+
+import /config/caddy-sentrybox.caddy
+import /config/caddy-sentrybox-deploy.caddy

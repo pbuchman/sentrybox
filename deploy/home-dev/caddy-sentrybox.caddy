@@ -1,0 +1,26 @@
+errors.intexuraos.cloud:80 {
+	@ingest {
+		method POST OPTIONS
+		path_regexp envelope ^/api/[0-9]+/envelope/$
+	}
+
+	handle @ingest {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8140
+	}
+
+	@liveness {
+		method GET
+		path /health/live
+	}
+
+	handle @liveness {
+		reverse_proxy 127.0.0.1:8140
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

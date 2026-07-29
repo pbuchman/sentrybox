@@ -1,0 +1,42 @@
+{
+  "name": "sentrybox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=22.22.2 <23"
+  },
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm run test:dependency-contracts && pnpm -r run test && pnpm run test:admin && pnpm run test:ops",
+    "test:admin": "node --test scripts/admin/*.test.mjs",
+    "test:ops": "node --test deploy/home-dev/*.test.mjs test/container/*.test.mjs test/ci/*.test.mjs",
+    "test:dependency-contracts": "node --test test/dependencies/*.test.mjs",
+    "test:integration": "pnpm -r run test:integration",
+    "build": "pnpm --filter @sentrybox/domain build && pnpm --filter @sentrybox/protocol build && pnpm --filter @sentrybox/web build && pnpm --filter @sentrybox/server build"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@sentry/node": "8.55.0",
+    "eslint": "9.39.1",
+    "node-gyp": "13.0.1",
+    "prettier": "3.7.4",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.49.0",
+    "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "@hono/node-server": "2.0.12",
+      "minimatch@3.1.5>brace-expansion": "5.0.8",
+      "minimatch@9.0.9>brace-expansion": "5.0.8"
+    },
+    "patchedDependencies": {
+      "brace-expansion@5.0.8": "patches/brace-expansion@5.0.8.patch"
+    }
+  }
+}

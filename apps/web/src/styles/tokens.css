@@ -1,0 +1,49 @@
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  src: url("/fonts/Atkinson-Hyperlegible.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrains-Mono.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --canvas: #f5f7fa;
+  --surface: #ffffff;
+  --surface-subtle: #eef2f5;
+  --ink: #17212b;
+  --muted: #637381;
+  --border: #cad3dc;
+  --border-strong: #8b9aa8;
+  --warn: #a86516;
+  --warn-subtle: #fff4e5;
+  --error: #b8322a;
+  --error-deep: #8f251f;
+  --error-subtle: #fff0ef;
+  --resolved: #23745d;
+  --resolved-subtle: #eaf7f2;
+  --focus: #1668c7;
+  --focus-subtle: #e7f1fc;
+  --shadow: 0 8px 24px rgb(23 33 43 / 10%);
+  --font-interface: "Atkinson Hyperlegible", Arial, sans-serif;
+  --font-code: "JetBrains Mono", ui-monospace, monospace;
+  --radius-small: 4px;
+  --radius: 8px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  color: var(--ink);
+  font-family: var(--font-interface);
+  font-synthesis: none;
+}
