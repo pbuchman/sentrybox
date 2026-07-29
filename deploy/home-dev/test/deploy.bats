@@ -32,6 +32,8 @@ setup() {
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy"
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox-maintenance.caddy" \
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox-deploy.caddy" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy"
   cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
@@ -272,19 +274,29 @@ EOF
 printf 'caddy %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 printf 'caddy-env XDG_CONFIG_HOME=%s XDG_DATA_HOME=%s\n' \
   "${XDG_CONFIG_HOME:-}" "${XDG_DATA_HOME:-}" >>"${ERROR_HUB_COMMAND_LOG}"
+if [ "${ERROR_HUB_FAKE_MAINTENANCE_VALIDATE_FAIL:-0}" = 1 ] \
+  && grep -q 'temporarily unavailable' \
+    "${ERROR_HUB_TEST_ROOT}/etc/caddy/Caddyfile.d/sentrybox.caddy"; then
+  exit 1
+fi
 exit 0
 EOF
 
   cat >"${fixture_root}/fake-bin/systemctl" <<'EOF'
 #!/bin/sh
 printf 'systemctl %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
-if [ "${ERROR_HUB_FAKE_CADDY_RESTORE_FAIL:-0}" = 1 ] && [ "$*" = 'reload caddy' ]; then
+if [ "$*" = 'reload caddy' ]; then
   count_file="${ERROR_HUB_FAKE_STATE}/caddy-reload-count"
   count=0
   [ -f "${count_file}" ] && count="$(cat "${count_file}")"
   count=$((count + 1))
   printf '%s\n' "${count}" >"${count_file}"
-  [ "${count}" -ge 2 ] && exit 1
+  cp "${ERROR_HUB_TEST_ROOT}/etc/caddy/Caddyfile.d/sentrybox.caddy" \
+    "${ERROR_HUB_FAKE_STATE}/caddy-reload-${count}.caddy"
+  if [ "${ERROR_HUB_FAKE_CADDY_RESTORE_FAIL:-0}" = 1 ] \
+    && [ "${count}" -ge 2 ]; then
+    exit 1
+  fi
 fi
 exit 0
 EOF
@@ -1002,4 +1014,250 @@ EOF
   run grep '^InaccessiblePaths=' "${webhook_unit}"
   [ "${status}" -eq 0 ]
   [ "${output}" = $'InaccessiblePaths=\nInaccessiblePaths=/var/run/docker.sock' ]
+}
+
+@test "deploy installs the versioned maintenance fragment before runtime mutation" {
+  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  cat >"${maintenance_fragment}" <<'EOF'
+errors.intexuraos.cloud:80 {
+	handle {
+		header Retry-After "121"
+		respond "fixture maintenance route" 503
+	}
+}
+EOF
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -eq 0 ]
+  cmp "${maintenance_fragment}" \
+    "${fixture_root}/fake-state/caddy-reload-1.caddy"
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/fake-state/caddy-reload-2.caddy"
+}
+
+@test "maintenance window holds the deploy lock and restores normal routing after command failure" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  cat >"${maintenance_fragment}" <<'EOF'
+errors.intexuraos.cloud:80 {
+	handle {
+		header Retry-After "120"
+		respond "temporarily unavailable" 503
+	}
+}
+EOF
+  probe="${fixture_root}/maintenance-probe.sh"
+  cat >"${probe}" <<'EOF'
+#!/bin/sh
+grep -F 'header Retry-After "120"' \
+  "${ERROR_HUB_TEST_ROOT}/etc/caddy/Caddyfile.d/sentrybox.caddy" >/dev/null
+exec 8>"${ERROR_HUB_TEST_ROOT}/run/lock/sentrybox-deploy.lock"
+if flock -n 8; then
+  printf 'maintenance command did not inherit deploy lock protection\n' >&2
+  exit 64
+fi
+exit 37
+EOF
+  chmod +x "${probe}"
+
+  run "${repository_root}/deploy/home-dev/maintenance-window.sh" -- "${probe}"
+
+  [ "${status}" -eq 37 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  [ "$(grep -c '^caddy validate ' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  maintenance_validate_line="$(grep -n '^caddy validate ' "${ERROR_HUB_COMMAND_LOG}" | sed -n '1p' | cut -d: -f1)"
+  maintenance_reload_line="$(grep -n '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}" | sed -n '1p' | cut -d: -f1)"
+  normal_validate_line="$(grep -n '^caddy validate ' "${ERROR_HUB_COMMAND_LOG}" | sed -n '2p' | cut -d: -f1)"
+  normal_reload_line="$(grep -n '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}" | sed -n '2p' | cut -d: -f1)"
+  [ "${maintenance_validate_line}" -lt "${maintenance_reload_line}" ]
+  [ "${maintenance_reload_line}" -lt "${normal_validate_line}" ]
+  [ "${normal_validate_line}" -lt "${normal_reload_line}" ]
+}
+
+@test "maintenance validation failure never reloads the invalid route and still restores normal routing" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  cat >"${maintenance_fragment}" <<'EOF'
+errors.intexuraos.cloud:80 {
+	handle {
+		header Retry-After "120"
+		respond "temporarily unavailable" 503
+	}
+}
+EOF
+  export ERROR_HUB_FAKE_MAINTENANCE_VALIDATE_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/maintenance-window.sh" -- true
+
+  [ "${status}" -ne 0 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  [ "$(grep -c '^caddy validate ' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/fake-state/caddy-reload-1.caddy"
+}
+
+@test "maintenance window rejects lock contention before changing the live route" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${maintenance_fragment}"
+  lock="${fixture_root}/run/lock/sentrybox-deploy.lock"
+  exec 8>"${lock}"
+  flock -n 8
+
+  run "${repository_root}/deploy/home-dev/maintenance-window.sh" -- true
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"already in progress"* ]]
+  [ ! -e "${fixture_root}/fake-state/caddy-reload-1.caddy" ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+}
+
+@test "maintenance window terminates a blocking command before restoring routing on TERM" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  blocker="${fixture_root}/maintenance-blocker.sh"
+  cat >"${blocker}" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$$" >"${ERROR_HUB_FAKE_STATE}/maintenance-child-pid"
+trap 'exit 143' TERM
+while :; do
+  sleep 0.05
+done
+EOF
+  chmod +x "${blocker}"
+
+  run bash -c '
+    wrapper="$1"
+    blocker="$2"
+    child_file="$3"
+    "$wrapper" -- "$blocker" & wrapper_pid=$!
+    for _ in $(seq 1 200); do
+      [ -s "$child_file" ] && break
+      sleep 0.01
+    done
+    [ -s "$child_file" ] || { kill -TERM "$wrapper_pid"; wait "$wrapper_pid"; exit 90; }
+    child_pid="$(cat "$child_file")"
+    kill -TERM "$wrapper_pid"
+    for _ in $(seq 1 200); do
+      kill -0 "$wrapper_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    if kill -0 "$wrapper_pid" 2>/dev/null; then
+      kill -TERM "$child_pid" 2>/dev/null || true
+      wait "$wrapper_pid" 2>/dev/null || true
+      exit 91
+    fi
+    wait "$wrapper_pid"
+    wrapper_status=$?
+    kill -0 "$child_pid" 2>/dev/null && exit 92
+    exit "$wrapper_status"
+  ' _ "${repository_root}/deploy/home-dev/maintenance-window.sh" \
+    "${blocker}" "${fixture_root}/fake-state/maintenance-child-pid"
+
+  [ "${status}" -eq 143 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+}
+
+@test "maintenance window lets a command interrupted during stop finish service recovery" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  blocker="${fixture_root}/maintenance-delayed-recovery.sh"
+  cat >"${blocker}" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >"${ERROR_HUB_FAKE_STATE}/maintenance-child-pid"
+service_recovery_required=0
+recover_service() {
+  exit_status=$?
+  trap - EXIT
+  if [ "${service_recovery_required}" -eq 1 ]; then
+    : >"${ERROR_HUB_FAKE_STATE}/maintenance-recovery-started"
+    sleep 5.5
+    : >"${ERROR_HUB_FAKE_STATE}/maintenance-recovery-complete"
+  fi
+  exit "${exit_status}"
+}
+trap recover_service EXIT
+service_recovery_required=1
+: >"${ERROR_HUB_FAKE_STATE}/maintenance-stop-started"
+sleep 300
+EOF
+  chmod +x "${blocker}"
+
+  run bash -c '
+    wrapper="$1"
+    blocker="$2"
+    child_file="$3"
+    recovery_file="$4"
+    stop_file="$5"
+    recovery_started_file="$6"
+    "$wrapper" -- "$blocker" & wrapper_pid=$!
+    for _ in $(seq 1 200); do
+      [ -s "$child_file" ] && [ -e "$stop_file" ] && break
+      sleep 0.01
+    done
+    [ -s "$child_file" ] && [ -e "$stop_file" ] \
+      || { kill -TERM "$wrapper_pid"; wait "$wrapper_pid"; exit 90; }
+    child_pid="$(cat "$child_file")"
+    kill -TERM "$wrapper_pid"
+    for _ in $(seq 1 200); do
+      [ -e "$recovery_started_file" ] && break
+      sleep 0.01
+    done
+    [ -e "$recovery_started_file" ] \
+      || { kill -KILL -- "-$child_pid" 2>/dev/null || true; wait "$wrapper_pid"; exit 94; }
+    kill -TERM "$wrapper_pid"
+    sleep 0.2
+    kill -0 "$wrapper_pid" 2>/dev/null || exit 95
+    grep -F "temporarily unavailable" \
+      "${ERROR_HUB_TEST_ROOT}/etc/caddy/Caddyfile.d/sentrybox.caddy" >/dev/null \
+      || exit 96
+    for _ in $(seq 1 800); do
+      kill -0 "$wrapper_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    if kill -0 "$wrapper_pid" 2>/dev/null; then
+      kill -KILL -- "-$child_pid" 2>/dev/null || true
+      wait "$wrapper_pid" 2>/dev/null || true
+      exit 91
+    fi
+    wait "$wrapper_pid"
+    wrapper_status=$?
+    [ -e "$recovery_file" ] || exit 92
+    kill -0 "$child_pid" 2>/dev/null && exit 93
+    exit "$wrapper_status"
+  ' _ "${repository_root}/deploy/home-dev/maintenance-window.sh" \
+    "${blocker}" "${fixture_root}/fake-state/maintenance-child-pid" \
+    "${fixture_root}/fake-state/maintenance-recovery-complete" \
+    "${fixture_root}/fake-state/maintenance-stop-started" \
+    "${fixture_root}/fake-state/maintenance-recovery-started"
+
+  [ "${status}" -eq 143 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+}
+
+@test "maintenance window prioritizes a normal-route restoration failure" {
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  export ERROR_HUB_FAKE_CADDY_RESTORE_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/maintenance-window.sh" -- \
+    sh -c 'exit 37'
+
+  [ "${status}" -eq 70 ]
+  [[ "${output}" == *"Normal Caddy routing could not be restored"* ]]
+  [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
 }

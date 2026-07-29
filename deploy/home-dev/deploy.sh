@@ -31,18 +31,7 @@ previous_image=""
 private_origin=""
 
 restore_normal_caddy() {
-  local route_status=0
-  install -m 0644 \
-    "${error_hub_checkout}/deploy/home-dev/caddy-sentrybox.caddy" \
-    "${error_hub_caddy_fragment}" || route_status=$?
-  if (( route_status == 0 )); then
-    error_hub_validate_caddy >/dev/null \
-      || route_status=$?
-  fi
-  if (( route_status == 0 )); then
-    systemctl reload caddy || route_status=$?
-  fi
-  return "${route_status}"
+  error_hub_apply_caddy_fragment "${error_hub_caddy_normal_source}"
 }
 
 cleanup() {
@@ -179,38 +168,8 @@ readonly had_previous previous_image private_origin
 ERROR_HUB_PRIVATE_ORIGIN="${private_origin}" \
   "${script_directory}/preflight.sh" "${resolved_image}"
 
-maintenance_file="${error_hub_state_directory}/caddy-maintenance.caddy"
-cat >"${maintenance_file}" <<'CADDY'
-errors.intexuraos.cloud:80 {
-	@ingest {
-		method POST OPTIONS
-		path_regexp envelope ^/api/[0-9]+/envelope/$
-	}
-
-	handle @ingest {
-		header Retry-After "120"
-		respond "temporarily unavailable" 503
-	}
-
-	@liveness {
-		method GET
-		path /health/live
-	}
-
-	handle @liveness {
-		reverse_proxy 127.0.0.1:8140
-	}
-
-	handle {
-		respond "not found" 404
-	}
-}
-CADDY
-install -m 0644 "${maintenance_file}" "${error_hub_caddy_fragment}"
-rm -f "${maintenance_file}"
 maintenance_active=1
-error_hub_validate_caddy >/dev/null
-systemctl reload caddy
+error_hub_apply_caddy_fragment "${error_hub_caddy_maintenance_source}"
 
 backup_image="${resolved_image}"
 if (( had_previous == 1 )); then
