@@ -32,6 +32,8 @@ setup() {
     "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/config.example.json"
   cp "${repository_root}/deploy/home-dev/caddy-error-hub.caddy" \
     "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/caddy-error-hub.caddy"
+  cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
+    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/database-operations.mjs"
   cp "${repository_root}/deploy/home-dev/caddy-error-hub.caddy" \
     "${fixture_root}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
   printf '{ import Caddyfile.d/*.caddy }\n' >"${fixture_root}/etc/caddy/Caddyfile"
@@ -123,6 +125,17 @@ if [ "$1" = image ] && [ "$2" = inspect ]; then
   exit 0
 fi
 if [ "$1" = run ]; then
+  if printf '%s' "$*" | grep -q 'synthetic-prepare'; then
+    printf '%s\n' '{"version":1,"keyId":5,"projectId":1,"publicKey":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","dsn":"https://dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd@errors.intexuraos.cloud/1","eventId":"cccccccccccccccccccccccccccccccc","envelope":"synthetic-envelope"}'
+    exit 0
+  fi
+  if printf '%s' "$*" | grep -q 'synthetic-verify'; then
+    [ "${ERROR_HUB_FAKE_SYNTHETIC_VERIFY_FAIL:-0}" = 1 ] && exit 1
+    exit 0
+  fi
+  if printf '%s' "$*" | grep -q 'synthetic-cleanup'; then
+    exit 0
+  fi
   if [ "${ERROR_HUB_FAKE_BACKUP_FAIL:-0}" = 1 ] && printf '%s' "$*" | grep -q '/backup'; then
     exit 1
   fi
@@ -156,12 +169,64 @@ EOF
   cat >"${fixture_root}/fake-bin/curl" <<'EOF'
 #!/bin/sh
 printf 'curl %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+if [ "${ERROR_HUB_FAKE_READINESS_BLOCK:-0}" = 1 ]; then
+  count=0
+  [ -f "${ERROR_HUB_FAKE_STATE}/compose-up-count" ] && count="$(cat "${ERROR_HUB_FAKE_STATE}/compose-up-count")"
+  if [ "${count}" -eq 1 ]; then
+    : >"${ERROR_HUB_FAKE_STATE}/readiness-blocked"
+    sleep 0.4
+  fi
+fi
 if [ "${ERROR_HUB_FAKE_READINESS_FAIL:-0}" = 1 ]; then
   count=0
   [ -f "${ERROR_HUB_FAKE_STATE}/compose-up-count" ] && count="$(cat "${ERROR_HUB_FAKE_STATE}/compose-up-count")"
   [ "${count}" -eq 1 ] && exit 22
 fi
+headers_file=''
+output_file=''
+request_method='GET'
+request_url=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dump-header) headers_file="$2"; shift 2 ;;
+    --output) output_file="$2"; shift 2 ;;
+    --request) request_method="$2"; shift 2 ;;
+    http://*|https://*) request_url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+if printf '%s' "${request_url}" | grep -q '/api/1/envelope/'; then
+  cors_origin='https://deployment-health.invalid'
+  [ "${ERROR_HUB_FAKE_CORS_FAIL:-0}" = 1 ] && cors_origin='https://wrong.invalid'
+  if [ "${request_method}" = 'OPTIONS' ]; then
+    [ -z "${headers_file}" ] || printf '%s\n' \
+      'HTTP/2 204' \
+      "access-control-allow-origin: ${cors_origin}" \
+      'access-control-allow-methods: POST, OPTIONS' \
+      'access-control-allow-headers: Content-Type, Content-Encoding, X-Sentry-Auth' \
+      >"${headers_file}"
+    printf '204'
+  else
+    [ -z "${headers_file}" ] || printf '%s\n' \
+      'HTTP/2 200' \
+      "access-control-allow-origin: ${cors_origin}" \
+      >"${headers_file}"
+    [ -z "${output_file}" ] || printf '%s\n' \
+      '{"id":"cccccccccccccccccccccccccccccccc"}' >"${output_file}"
+    printf '200'
+  fi
+fi
 exit 0
+EOF
+
+  cat >"${fixture_root}/fake-bin/mv" <<'EOF'
+#!/bin/sh
+for argument in "$@"; do destination="${argument}"; done
+if [ "${ERROR_HUB_FAKE_STATE_WRITE_FAIL:-0}" = 1 ] \
+  && printf '%s' "${destination}" | grep -q '/current.env$'; then
+  exit 1
+fi
+exec /bin/mv "$@"
 EOF
 
   cat >"${fixture_root}/fake-bin/caddy" <<'EOF'
@@ -235,6 +300,50 @@ EOF
   [ "${status}" -eq 0 ]
 }
 
+@test "health checks exercise public CORS authenticated envelope parsing and persistence with cleanup" {
+  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
+
+  [ "${status}" -eq 0 ]
+  run grep -F 'OPTIONS --header Host: errors.intexuraos.cloud' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'http://127.0.0.1:8140/api/1/envelope/?sentry_version=7&sentry_key=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'Origin: https://deployment-health.invalid' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'X-Sentry-Auth: Sentry sentry_version=7' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'synthetic-verify' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "failed synthetic persistence verification still removes the non-production fixture" {
+  export ERROR_HUB_FAKE_SYNTHETIC_VERIFY_FAIL=1
+  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
+
+  [ "${status}" -ne 0 ]
+  verify_line="$(grep -n 'synthetic-verify' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  cleanup_line="$(grep -n 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  [ -n "${verify_line}" ]
+  [ -n "${cleanup_line}" ]
+  [ "${verify_line}" -lt "${cleanup_line}" ]
+}
+
+@test "synthetic public check rejects an invalid CORS response and still cleans up" {
+  export ERROR_HUB_FAKE_CORS_FAIL=1
+  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
+
+  [ "${status}" -ne 0 ]
+  run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
 @test "deploy lock rejects contention before consuming the webhook request" {
   lock="${fixture_root}/run/lock/intexura-error-hub-deploy.lock"
   exec 8>"${lock}"
@@ -245,6 +354,18 @@ EOF
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"already in progress"* ]]
   [ -f "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+}
+
+@test "deploy marks only the canonical checkout as safe for root Git operations" {
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -eq 0 ]
+  canonical_checkout="${fixture_root}/home/pbuchman/deploy/intexura-error-hub"
+  run grep -F "git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} fetch --quiet origin main" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run sh -c "grep '^git ' '${ERROR_HUB_COMMAND_LOG}' | grep -vF 'git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} '"
+  [ "${status}" -ne 0 ]
 }
 
 @test "deploy rejects wrong webhook identity and removes the claimed request" {
@@ -287,7 +408,8 @@ EOF
 
 @test "terminated deployment removes its claimed request and reports signal failure" {
   export ERROR_HUB_FAKE_BLOCK_FETCH=1
-  run timeout -s TERM 0.05 "${repository_root}/deploy/home-dev/deploy.sh"
+  run timeout --preserve-status -s TERM 0.05 \
+    "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -eq 143 ]
   [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
@@ -432,6 +554,48 @@ EOF
     "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
   [ "${status}" -eq 0 ]
   [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+}
+
+@test "failed current state commit rolls the runtime back before restoring the checkout" {
+  write_runtime_state
+  export ERROR_HUB_FAKE_STATE_WRITE_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  [ -n "${rollback_line}" ]
+  [ -n "${checkout_line}" ]
+  [ "${rollback_line}" -lt "${checkout_line}" ]
+  run find "${fixture_root}/var/lib/intexura-error-hub-deploy" -name 'current.env.tmp.*' -print
+  [ -z "${output}" ]
+}
+
+@test "termination after runtime switch rolls back before restoring the checkout" {
+  write_runtime_state
+  export ERROR_HUB_FAKE_READINESS_BLOCK=1
+
+  run bash -c '
+    "$1" & deploy_pid=$!
+    for _ in $(seq 1 200); do
+      [ -f "$2" ] && break
+      sleep 0.01
+    done
+    [ -f "$2" ] || { kill -TERM "${deploy_pid}"; wait "${deploy_pid}"; exit 1; }
+    kill -TERM "${deploy_pid}"
+    wait "${deploy_pid}"
+  ' _ "${repository_root}/deploy/home-dev/deploy.sh" \
+    "${fixture_root}/fake-state/readiness-blocked"
+
+  [ "${status}" -eq 143 ]
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  [ -n "${rollback_line}" ]
+  [ -n "${checkout_line}" ]
+  [ "${rollback_line}" -lt "${checkout_line}" ]
 }
 
 @test "installed systemd units use fixed scripts, state, timers, and no webhook Docker access" {

@@ -1,11 +1,17 @@
+import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const require = createRequire(dependencyAnchor());
 const Database = require("better-sqlite3");
+
+const SYNTHETIC_ENVIRONMENT = "deployment-health";
+const SYNTHETIC_ORIGIN = "https://deployment-health.invalid";
+const SYNTHETIC_RELEASE = "error-hub-deployment-health";
+const SYNTHETIC_TITLE = "Error Hub deployment health check";
 
 export function validatePreflightDatabase(filename) {
   const database = openReadonly(filename);
@@ -67,6 +73,181 @@ export function validateRollbackDatabase(filename, currentMigrationVersion) {
   } finally {
     database.close();
   }
+}
+
+export function prepareSyntheticPublicCheck(filename, contextPath) {
+  if (existsSync(contextPath)) {
+    throw new Error("synthetic public check context already exists");
+  }
+  const publicKey = randomBytes(32).toString("hex");
+  const eventId = randomBytes(16).toString("hex");
+  const database = new Database(filename, { fileMustExist: true });
+  database.pragma("foreign_keys = ON");
+  try {
+    return database.transaction(() => {
+      const project = database
+        .prepare(
+          "SELECT id FROM projects WHERE enabled = 1 ORDER BY id LIMIT 1",
+        )
+        .get();
+      if (project === undefined || !Number.isSafeInteger(project.id)) {
+        throw new Error("synthetic public check requires an enabled project");
+      }
+      const now = new Date().toISOString();
+      const inserted = database
+        .prepare(
+          `INSERT INTO project_ingest_keys (
+             project_id, environment, public_key_hash, cors_origins_json,
+             forwarding_mode, forwarding_secret_ref, webhook_mode,
+             webhook_target_url, webhook_secret_ref, enabled_at, created_at,
+             updated_at
+           ) VALUES (?, ?, ?, ?, 'disabled', NULL, 'disabled', NULL, NULL,
+                     NULL, ?, ?)`,
+        )
+        .run(
+          project.id,
+          SYNTHETIC_ENVIRONMENT,
+          createHash("sha256").update(publicKey, "utf8").digest(),
+          JSON.stringify([SYNTHETIC_ORIGIN]),
+          now,
+          now,
+        );
+      const projectId = Number(project.id);
+      const keyId = Number(inserted.lastInsertRowid);
+      const dsn = `https://${publicKey}@errors.intexuraos.cloud/${String(projectId)}`;
+      const event = {
+        event_id: eventId,
+        environment: SYNTHETIC_ENVIRONMENT,
+        release: SYNTHETIC_RELEASE,
+        level: "warning",
+        message: SYNTHETIC_TITLE,
+        fingerprint: [SYNTHETIC_RELEASE, eventId],
+      };
+      const payload = JSON.stringify(event);
+      const envelope = [
+        JSON.stringify({
+          event_id: eventId,
+          dsn,
+          sdk: { name: "sentry.javascript.node", version: "8.55.0" },
+        }),
+        JSON.stringify({ type: "event", length: Buffer.byteLength(payload) }),
+        payload,
+        "",
+      ].join("\n");
+      const context = {
+        version: 1,
+        keyId,
+        projectId,
+        publicKey,
+        dsn,
+        eventId,
+        envelope,
+      };
+      writeFileSync(contextPath, `${JSON.stringify(context)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      return context;
+    })();
+  } catch (error) {
+    rmSync(contextPath, { force: true });
+    throw error;
+  } finally {
+    database.close();
+  }
+}
+
+export function verifySyntheticPublicCheck(filename, contextPath) {
+  const context = syntheticContext(contextPath);
+  const database = openReadonly(filename);
+  try {
+    const rows = database
+      .prepare(
+        `SELECT e.environment, e.release, e.level, e.title,
+                i.status, i.occurrence_count,
+                o.destination_mode, o.state, o.cause
+         FROM events AS e
+         INNER JOIN issues AS i
+           ON i.id = e.issue_id AND i.project_id = e.project_id
+         LEFT JOIN webhook_outbox AS o
+           ON o.issue_id = i.id AND o.project_id = i.project_id
+         WHERE e.project_id = ? AND e.event_id = ?`,
+      )
+      .all(context.projectId, context.eventId);
+    if (rows.length !== 1) {
+      throw new Error("synthetic envelope was not persisted exactly once");
+    }
+    const event = rows[0];
+    if (
+      event.environment !== SYNTHETIC_ENVIRONMENT ||
+      event.release !== SYNTHETIC_RELEASE ||
+      event.level !== "warn" ||
+      event.title !== SYNTHETIC_TITLE ||
+      event.status !== "unresolved" ||
+      event.occurrence_count !== 1 ||
+      event.destination_mode !== "disabled" ||
+      event.state !== "suppressed" ||
+      event.cause !== "created"
+    ) {
+      throw new Error("synthetic envelope persistence contract is invalid");
+    }
+  } finally {
+    database.close();
+  }
+}
+
+export function cleanupSyntheticPublicCheck(filename, contextPath) {
+  if (!existsSync(contextPath)) return;
+  const context = syntheticContext(contextPath);
+  const database = new Database(filename, { fileMustExist: true });
+  database.pragma("foreign_keys = ON");
+  try {
+    database.transaction(() => {
+      const issues = database
+        .prepare(
+          `SELECT DISTINCT issue_id
+           FROM events WHERE project_id = ? AND event_id = ?`,
+        )
+        .all(context.projectId, context.eventId);
+      if (issues.length === 1) {
+        database
+          .prepare("DELETE FROM issues WHERE id = ? AND project_id = ?")
+          .run(issues[0].issue_id, context.projectId);
+      }
+      database
+        .prepare(
+          `DELETE FROM project_ingest_keys
+           WHERE id = ? AND project_id = ? AND environment = ?`,
+        )
+        .run(context.keyId, context.projectId, SYNTHETIC_ENVIRONMENT);
+    })();
+    rmSync(contextPath);
+  } finally {
+    database.close();
+  }
+}
+
+function syntheticContext(contextPath) {
+  const parsed = JSON.parse(readFileSync(contextPath, "utf8"));
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    parsed.version !== 1 ||
+    !Number.isSafeInteger(parsed.keyId) ||
+    parsed.keyId <= 0 ||
+    !Number.isSafeInteger(parsed.projectId) ||
+    parsed.projectId <= 0 ||
+    typeof parsed.publicKey !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(parsed.publicKey) ||
+    typeof parsed.eventId !== "string" ||
+    !/^[0-9a-f]{32}$/u.test(parsed.eventId) ||
+    typeof parsed.envelope !== "string" ||
+    parsed.envelope.length === 0
+  ) {
+    throw new Error("synthetic public check context is invalid");
+  }
+  return parsed;
 }
 
 function openReadonly(filename) {
@@ -138,7 +319,40 @@ async function runCli() {
     );
     return;
   }
+  if (command === "synthetic-prepare") {
+    const context = prepareSyntheticPublicCheck(
+      "/data/error-hub.sqlite",
+      requiredSyntheticContextPath(),
+    );
+    process.stdout.write(`${JSON.stringify(context)}\n`);
+    return;
+  }
+  if (command === "synthetic-verify") {
+    verifySyntheticPublicCheck(
+      "/data/error-hub.sqlite",
+      requiredSyntheticContextPath(),
+    );
+    return;
+  }
+  if (command === "synthetic-cleanup") {
+    cleanupSyntheticPublicCheck(
+      "/data/error-hub.sqlite",
+      requiredSyntheticContextPath(),
+    );
+    return;
+  }
   throw new Error("unknown database deployment operation");
+}
+
+function requiredSyntheticContextPath() {
+  const value = process.argv[3];
+  if (
+    typeof value !== "string" ||
+    !/^\/state\/synthetic-public-check\.[0-9]+\.json$/u.test(value)
+  ) {
+    throw new Error("synthetic public check context path is invalid");
+  }
+  return value;
 }
 
 function isDirectExecution() {

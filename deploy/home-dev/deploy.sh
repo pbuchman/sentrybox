@@ -25,6 +25,10 @@ migration_probe="${error_hub_state_directory}/migration-probe.sqlite"
 original_checkout_sha=""
 checkout_changed=0
 deployment_committed=0
+runtime_changed=0
+had_previous=0
+previous_image=""
+private_origin=""
 
 restore_normal_caddy() {
   local route_status=0
@@ -46,9 +50,23 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   rm -f "${claimed_request}" "${migration_probe}" "${migration_probe}-wal" "${migration_probe}-shm"
+  if (( runtime_changed == 1 && deployment_committed == 0 )); then
+    runtime_restore_status=0
+    if (( had_previous == 1 )); then
+      "${script_directory}/rollback.sh" || runtime_restore_status=$?
+    else
+      ERROR_HUB_IMAGE="${resolved_image:-}" \
+        ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
+        docker compose --file "${error_hub_compose_file}" \
+          stop --timeout 30 error-hub >/dev/null || runtime_restore_status=$?
+    fi
+    if (( exit_status == 0 && runtime_restore_status != 0 )); then
+      exit_status="${runtime_restore_status}"
+    fi
+  fi
   if (( checkout_changed == 1 && deployment_committed == 0 )) \
     && [[ -n "${original_checkout_sha}" ]]; then
-    git -C "${error_hub_checkout}" checkout --quiet --detach "${original_checkout_sha}"
+    error_hub_git checkout --quiet --detach "${original_checkout_sha}"
     checkout_restore_status=$?
     if (( exit_status == 0 && checkout_restore_status != 0 )); then
       exit_status="${checkout_restore_status}"
@@ -104,7 +122,7 @@ readonly request_sha
 error_hub_require_sha "${request_sha}"
 error_hub_require_free_space "${error_hub_service_root}"
 
-repository_remote="$(git -C "${error_hub_checkout}" remote get-url origin)"
+repository_remote="$(error_hub_git remote get-url origin)"
 readonly repository_remote
 case "${repository_remote}" in
   https://github.com/pbuchman/intexura-error-hub.git|git@github.com:pbuchman/intexura-error-hub.git) ;;
@@ -113,22 +131,22 @@ case "${repository_remote}" in
     exit 1
     ;;
 esac
-if [[ -n "$(git -C "${error_hub_checkout}" status --porcelain --untracked-files=normal)" ]]; then
+if [[ -n "$(error_hub_git status --porcelain --untracked-files=normal)" ]]; then
   printf 'Canonical Error Hub deployment checkout must be clean.\n' >&2
   exit 1
 fi
-original_checkout_sha="$(git -C "${error_hub_checkout}" rev-parse HEAD)"
+original_checkout_sha="$(error_hub_git rev-parse HEAD)"
 error_hub_require_sha "${original_checkout_sha}"
 readonly original_checkout_sha
-git -C "${error_hub_checkout}" fetch --quiet origin main
-remote_main="$(git -C "${error_hub_checkout}" rev-parse origin/main)"
+error_hub_git fetch --quiet origin main
+remote_main="$(error_hub_git rev-parse origin/main)"
 readonly remote_main
 if [[ "${remote_main}" != "${request_sha}" ]]; then
   printf 'Verified workflow SHA is not the current origin/main commit.\n' >&2
   exit 1
 fi
-git -C "${error_hub_checkout}" cat-file -e "${request_sha}^{commit}"
-git -C "${error_hub_checkout}" checkout --quiet --detach "${request_sha}"
+error_hub_git cat-file -e "${request_sha}^{commit}"
+error_hub_git checkout --quiet --detach "${request_sha}"
 checkout_changed=1
 
 readonly release_tag="${error_hub_image_repository}:sha-${request_sha}"
@@ -139,9 +157,6 @@ resolved_image="$(
 readonly resolved_image
 error_hub_require_immutable_image "${resolved_image}"
 
-had_previous=0
-previous_image=""
-private_origin=""
 if [[ -f "${error_hub_current_state}" ]]; then
   error_hub_read_state "${error_hub_current_state}"
   had_previous=1
@@ -235,20 +250,12 @@ if (( had_previous == 1 )) && [[ -f "${error_hub_database}" ]]; then
 fi
 
 deployment_status=0
+runtime_changed=1
 error_hub_compose_up "${resolved_image}" "${private_origin}" || deployment_status=$?
 if (( deployment_status == 0 )); then
-  error_hub_health_checks "${private_origin}" || deployment_status=$?
+  error_hub_health_checks "${private_origin}" "${resolved_image}" || deployment_status=$?
 fi
 if (( deployment_status != 0 )); then
-  if (( had_previous == 1 )); then
-    if ! "${script_directory}/rollback.sh"; then
-      printf 'New image failed health checks and automatic rollback also failed.\n' >&2
-    fi
-  else
-    ERROR_HUB_IMAGE="${resolved_image}" \
-      ERROR_HUB_PRIVATE_ORIGIN="${private_origin}" \
-      docker compose --file "${error_hub_compose_file}" stop --timeout 30 error-hub >/dev/null || true
-  fi
   printf 'New Error Hub image failed deployment health checks.\n' >&2
   exit "${deployment_status}"
 fi
@@ -256,15 +263,6 @@ fi
 normal_route_status=0
 restore_normal_caddy || normal_route_status=$?
 if (( normal_route_status != 0 )); then
-  if (( had_previous == 1 )); then
-    if ! "${script_directory}/rollback.sh"; then
-      printf 'Normal ingest routing failed and automatic rollback also failed.\n' >&2
-    fi
-  else
-    ERROR_HUB_IMAGE="${resolved_image}" \
-      ERROR_HUB_PRIVATE_ORIGIN="${private_origin}" \
-      docker compose --file "${error_hub_compose_file}" stop --timeout 30 error-hub >/dev/null || true
-  fi
   printf 'Normal Caddy ingest routing could not be restored; deployment was not committed.\n' >&2
   exit "${normal_route_status}"
 fi

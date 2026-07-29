@@ -7,7 +7,7 @@ readonly script_directory
 source "${script_directory}/common.sh"
 readonly database_operations="${script_directory}/database-operations.mjs"
 
-for executable in docker curl; do
+for executable in docker curl jq; do
   error_hub_require_command "${executable}"
 done
 
@@ -62,7 +62,7 @@ if (( restart_status != 0 )); then
   exit "${restart_status}"
 fi
 
-error_hub_health_checks "${previous_origin}"
+error_hub_health_checks "${previous_origin}" "${previous_image}"
 error_hub_write_state \
   "${error_hub_current_state}" \
   "${previous_image}" \
