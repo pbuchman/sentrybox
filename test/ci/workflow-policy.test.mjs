@@ -246,6 +246,23 @@ test("main-only release publishes one immutable SentryBox amd64 tag with attesta
   assert.match(workflow, /Refuse to overwrite an existing commit tag/u);
   assert.match(
     workflow,
+    /--request GET[\s\S]*?manifests\/sha-\$GITHUB_SHA/u,
+    "GHCR manifest existence checks must consume the response body; HEAD can fail with curl error 18",
+  );
+  assert.doesNotMatch(workflow, /--request HEAD/u);
+  for (const mediaType of [
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+  ]) {
+    assert.ok(
+      workflow.includes(mediaType),
+      `GHCR existence check is missing ${mediaType}`,
+    );
+  }
+  assert.match(
+    workflow,
     /manifests\/sha-\$GITHUB_SHA[\s\S]*?404\)[\s\S]*?200\)/u,
   );
   assert.match(workflow, /steps\.publish\.outputs\.digest/u);
