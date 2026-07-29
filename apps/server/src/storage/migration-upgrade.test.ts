@@ -344,6 +344,92 @@ describe("ordered database migration upgrade", () => {
     expect(historicalRows(database)).toEqual(before);
     expectRetentionPlans(database);
   });
+
+  it("upgrades populated v5 directly to v6 with accounting backfill and live triggers", () => {
+    const database = openDatabase(":memory:");
+    databases.push(database);
+    database.exec(migrationSql("001_initial.sql"));
+    insertV1Rows(database);
+    for (const name of [
+      "002_webhook_delivery.sql",
+      "003_due_frontier.sql",
+      "004_private_api_order.sql",
+      "005_retention_indexes.sql",
+    ]) {
+      database.exec(migrationSql(name));
+    }
+    insertEvent(database, "historical-event", 3);
+    database
+      .prepare(
+        `INSERT INTO schema_migrations(version, name, checksum, applied_at)
+         VALUES (1, '001_initial', ?, ?),
+                (2, '002_webhook_delivery', ?, ?),
+                (3, '003_due_frontier', ?, ?),
+                (4, '004_private_api_order', ?, ?),
+                (5, '005_retention_indexes', ?, ?)`,
+      )
+      .run(
+        ORIGINAL_001_SHA256,
+        APPLIED_AT,
+        ORIGINAL_002_SHA256,
+        APPLIED_AT,
+        ORIGINAL_003_SHA256,
+        APPLIED_AT,
+        ORIGINAL_004_SHA256,
+        APPLIED_AT,
+        ORIGINAL_005_SHA256,
+        APPLIED_AT,
+      );
+    database.pragma("user_version = 5");
+    const before = database.prepare("SELECT * FROM events ORDER BY id").all();
+
+    migrateDatabase(database, "2026-07-28T10:10:00.000Z");
+
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
+    expect(database.prepare("SELECT * FROM events ORDER BY id").all()).toEqual(
+      before,
+    );
+    expect(
+      database
+        .prepare(
+          `SELECT version, name, checksum
+           FROM schema_migrations
+           WHERE version = 6`,
+        )
+        .get(),
+    ).toEqual({
+      version: 6,
+      name: "006_retention_accounting",
+      checksum: migrationChecksum("006_retention_accounting.sql"),
+    });
+    expect(retentionAccounting(database)).toMatchObject({
+      logical_payload_bytes: 3,
+      mutation_revision: 0,
+      reconciliation_cursor_id: -1,
+    });
+
+    insertEvent(database, "trigger-event", 5);
+    expect(retentionAccounting(database)).toMatchObject({
+      logical_payload_bytes: 8,
+      mutation_revision: 1,
+    });
+    database
+      .prepare(
+        "UPDATE events SET compressed_payload_bytes = 7 WHERE event_id = ?",
+      )
+      .run("trigger-event");
+    expect(retentionAccounting(database)).toMatchObject({
+      logical_payload_bytes: 10,
+      mutation_revision: 2,
+    });
+    database
+      .prepare("DELETE FROM events WHERE event_id = ?")
+      .run("trigger-event");
+    expect(retentionAccounting(database)).toMatchObject({
+      logical_payload_bytes: 3,
+      mutation_revision: 3,
+    });
+  });
 });
 
 function migrationSql(name: string): string {
@@ -503,6 +589,47 @@ function insertV1Rows(database: ErrorHubDatabase): void {
        )`,
     )
     .run(Buffer.from('{"action":"triggered"}'), APPLIED_AT, APPLIED_AT);
+}
+
+function insertEvent(
+  database: ErrorHubDatabase,
+  eventId: string,
+  compressedPayloadBytes: number,
+): void {
+  database
+    .prepare(
+      `INSERT INTO events(
+         event_id, issue_id, project_id, issue_generation, environment,
+         release, service, level, platform, title, message, exception_type,
+         culprit, occurred_at, received_at, request_id, trace_id, task_id,
+         fingerprint_version, fingerprint, payload_gzip, payload_bytes,
+         compressed_payload_bytes, truncated
+       ) VALUES (
+         ?, 1, 1, 1, 'dev', NULL, 'api', 'error', 'node',
+         'failure', 'failure', 'Error', NULL, ?, ?, NULL, NULL, NULL,
+         1, ?, ?, ?, ?, 0
+       )`,
+    )
+    .run(
+      eventId,
+      APPLIED_AT,
+      APPLIED_AT,
+      "a".repeat(64),
+      Buffer.alloc(compressedPayloadBytes),
+      compressedPayloadBytes,
+      compressedPayloadBytes,
+    );
+}
+
+function retentionAccounting(database: ErrorHubDatabase): unknown {
+  return database
+    .prepare(
+      `SELECT logical_payload_bytes, mutation_revision,
+              reconciliation_cursor_id
+       FROM retention_accounting
+       WHERE singleton = 1`,
+    )
+    .get();
 }
 
 function historicalRows(database: ErrorHubDatabase): unknown {

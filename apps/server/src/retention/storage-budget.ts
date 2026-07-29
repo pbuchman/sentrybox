@@ -80,6 +80,14 @@ export class StorageSafetyState {
     };
   }
 
+  public beginVerification(): void {
+    this.#snapshot = {
+      ...this.#snapshot,
+      acceptingIngest: false,
+      retentionKnownSuccessful: false,
+    };
+  }
+
   public observeUsage(
     physicalUsage: PhysicalStorageUsage,
     logicalPayloadBytes: number,

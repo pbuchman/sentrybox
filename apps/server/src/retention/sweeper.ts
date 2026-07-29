@@ -7,6 +7,7 @@ import {
 import {
   readRetentionStorageAccounting,
   reconcileRetentionAccountingStep,
+  type RetentionStorageAccountingSnapshot,
 } from "./accounting.js";
 
 export type RetentionRemovalReason = "age" | "budget";
@@ -61,6 +62,10 @@ interface EventCandidate {
   readonly compressed_payload_bytes: number;
 }
 
+interface PublishedStorageSample extends RetentionStorageAccountingSnapshot {
+  readonly physical: PhysicalStorageUsage;
+}
+
 export class RetentionSweeper {
   readonly #database: ErrorHubDatabase;
   readonly #clock: () => Date;
@@ -104,35 +109,44 @@ export class RetentionSweeper {
     let oldest: string | null = null;
     let stoppedAtHardLimit = false;
     try {
-      reconcileRetentionAccountingStep(this.#database, this.#config.batchSize);
-      ({ logicalPayloadBytes: logical, oldestEventReceivedAt: oldest } =
-        readRetentionStorageAccounting(this.#database));
-      physical = await this.sampleAndPublish(logical, oldest);
+      this.#operations.storageSafety.beginVerification();
+      for (;;) {
+        const reconciliation = reconcileRetentionAccountingStep(
+          this.#database,
+          this.#config.batchSize,
+        );
+        if (reconciliation.complete) break;
+        await this.#yieldControl();
+      }
+      ({
+        physical,
+        logicalPayloadBytes: logical,
+        oldestEventReceivedAt: oldest,
+      } = await this.sampleAndPublish());
       if (this.isPhysicalCritical(physical)) {
-        physical = await this.emergencyReclaimAndResample(logical, oldest);
+        ({
+          physical,
+          logicalPayloadBytes: logical,
+          oldestEventReceivedAt: oldest,
+        } = await this.emergencyReclaimAndResample());
       }
       stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
       const ageCutoff = new Date(
         now.getTime() - this.#config.eventAgeMs,
       ).toISOString();
-      let refreshAgeAccounting = false;
       while (!stoppedAtHardLimit) {
-        if (refreshAgeAccounting) {
-          ({ logicalPayloadBytes: logical, oldestEventReceivedAt: oldest } =
-            readRetentionStorageAccounting(this.#database));
-        }
         const candidates = this.selectAgeCandidates(ageCutoff);
         if (candidates.length === 0) break;
         this.deleteEventBatch(candidates, "age");
         removedEvents.age += candidates.length;
         batches += 1;
-        ({ logical, oldest } = this.accountAfterEventBatch(
-          logical,
-          candidates,
-        ));
-        physical = await this.afterBatch(logical, oldest);
+        this.verifyEventBatchAccounting(logical, candidates);
+        ({
+          physical,
+          logicalPayloadBytes: logical,
+          oldestEventReceivedAt: oldest,
+        } = await this.afterBatch());
         stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
-        refreshAgeAccounting = true;
       }
 
       if (!stoppedAtHardLimit && logical > this.#config.logicalHighBytes) {
@@ -147,16 +161,13 @@ export class RetentionSweeper {
           this.deleteEventBatch(candidates, "budget");
           removedEvents.budget += candidates.length;
           batches += 1;
-          ({ logical, oldest } = this.accountAfterEventBatch(
-            logical,
-            candidates,
-          ));
-          physical = await this.afterBatch(logical, oldest);
+          this.verifyEventBatchAccounting(logical, candidates);
+          ({
+            physical,
+            logicalPayloadBytes: logical,
+            oldestEventReceivedAt: oldest,
+          } = await this.afterBatch());
           stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
-          if (!stoppedAtHardLimit) {
-            ({ logicalPayloadBytes: logical, oldestEventReceivedAt: oldest } =
-              readRetentionStorageAccounting(this.#database));
-          }
         }
       }
 
@@ -164,25 +175,30 @@ export class RetentionSweeper {
         now.getTime() - this.#config.deliveryTtlMs,
       ).toISOString();
       if (!stoppedAtHardLimit) {
-        const redriveCleanup = await this.cleanupTerminalRedrives(
-          deliveryCutoff,
-          logical,
-          oldest,
-        );
+        const redriveCleanup =
+          await this.cleanupTerminalRedrives(deliveryCutoff);
         removedRedrives += redriveCleanup.removed;
         batches += redriveCleanup.batches;
-        physical = redriveCleanup.physical ?? physical;
+        if (redriveCleanup.sample !== null) {
+          ({
+            physical,
+            logicalPayloadBytes: logical,
+            oldestEventReceivedAt: oldest,
+          } = redriveCleanup.sample);
+        }
         stoppedAtHardLimit = redriveCleanup.stoppedAtHardLimit;
       }
       if (!stoppedAtHardLimit) {
-        const outboxCleanup = await this.cleanupDeliveredOutbox(
-          deliveryCutoff,
-          logical,
-          oldest,
-        );
+        const outboxCleanup = await this.cleanupDeliveredOutbox(deliveryCutoff);
         removedOutbox += outboxCleanup.removed;
         batches += outboxCleanup.batches;
-        physical = outboxCleanup.physical ?? physical;
+        if (outboxCleanup.sample !== null) {
+          ({
+            physical,
+            logicalPayloadBytes: logical,
+            oldestEventReceivedAt: oldest,
+          } = outboxCleanup.sample);
+        }
         stoppedAtHardLimit = outboxCleanup.stoppedAtHardLimit;
       }
 
@@ -192,11 +208,17 @@ export class RetentionSweeper {
         this.#incrementalVacuum(this.#config.incrementalVacuumPages);
       }
 
-      ({ logicalPayloadBytes: logical, oldestEventReceivedAt: oldest } =
-        readRetentionStorageAccounting(this.#database));
-      physical = await this.sampleAndPublish(logical, oldest);
+      ({
+        physical,
+        logicalPayloadBytes: logical,
+        oldestEventReceivedAt: oldest,
+      } = await this.sampleAndPublish());
       if (this.isPhysicalCritical(physical)) {
-        physical = await this.emergencyReclaimAndResample(logical, oldest);
+        ({
+          physical,
+          logicalPayloadBytes: logical,
+          oldestEventReceivedAt: oldest,
+        } = await this.emergencyReclaimAndResample());
       }
       if (this.isPhysicalCritical(physical)) {
         this.#operations.storageSafety.markFailure(
@@ -216,6 +238,9 @@ export class RetentionSweeper {
           logical,
           oldest,
         );
+      }
+      if (logical > this.#config.logicalHighBytes) {
+        throw new Error("logical payload usage changed after cleanup");
       }
       this.#operations.storageSafety.markSuccess(now, removedEvents);
       this.#operations.metrics.recordRetention("success", removedEvents);
@@ -371,11 +396,7 @@ export class RetentionSweeper {
       .run(...issueIds);
   }
 
-  private cleanupDeliveredOutbox(
-    cutoff: string,
-    logical: number,
-    oldest: string | null,
-  ): Promise<CleanupRowsResult> {
+  private cleanupDeliveredOutbox(cutoff: string): Promise<CleanupRowsResult> {
     return this.cleanupRows(
       `SELECT id
        FROM webhook_outbox INDEXED BY idx_outbox_retention_delivered
@@ -384,16 +405,10 @@ export class RetentionSweeper {
        LIMIT ?`,
       "webhook_outbox",
       cutoff,
-      logical,
-      oldest,
     );
   }
 
-  private cleanupTerminalRedrives(
-    cutoff: string,
-    logical: number,
-    oldest: string | null,
-  ): Promise<CleanupRowsResult> {
+  private cleanupTerminalRedrives(cutoff: string): Promise<CleanupRowsResult> {
     return this.cleanupRows(
       `SELECT id
        FROM webhook_redrives INDEXED BY idx_webhook_redrives_retention_terminal
@@ -402,8 +417,6 @@ export class RetentionSweeper {
        LIMIT ?`,
       "webhook_redrives",
       cutoff,
-      logical,
-      oldest,
     );
   }
 
@@ -411,12 +424,10 @@ export class RetentionSweeper {
     selectSql: string,
     table: "webhook_outbox" | "webhook_redrives",
     cutoff: string,
-    logical: number,
-    oldest: string | null,
   ): Promise<CleanupRowsResult> {
     let removed = 0;
     let batches = 0;
-    let physical: PhysicalStorageUsage | null = null;
+    let sample: PublishedStorageSample | null = null;
     for (;;) {
       const ids = (
         this.#database
@@ -424,7 +435,7 @@ export class RetentionSweeper {
           .all(cutoff, this.#config.batchSize) as { id: number }[]
       ).map((row) => row.id);
       if (ids.length === 0) {
-        return { removed, batches, physical, stoppedAtHardLimit: false };
+        return { removed, batches, sample, stoppedAtHardLimit: false };
       }
       this.#database
         .transaction(() => {
@@ -438,47 +449,49 @@ export class RetentionSweeper {
         .immediate();
       removed += ids.length;
       batches += 1;
-      physical = await this.afterBatch(logical, oldest);
-      if (this.isHardPhysicalLimit(physical)) {
-        return { removed, batches, physical, stoppedAtHardLimit: true };
+      sample = await this.afterBatch();
+      if (this.isHardPhysicalLimit(sample.physical)) {
+        return { removed, batches, sample, stoppedAtHardLimit: true };
       }
     }
   }
 
-  private async afterBatch(
-    logical: number,
-    oldest: string | null,
-  ): Promise<PhysicalStorageUsage> {
-    let physical = await this.sampleAndPublish(logical, oldest);
-    if (this.isPhysicalCritical(physical)) {
-      physical = await this.emergencyReclaimAndResample(logical, oldest);
+  private async afterBatch(): Promise<PublishedStorageSample> {
+    let sample = await this.sampleAndPublish();
+    if (this.isPhysicalCritical(sample.physical)) {
+      sample = await this.emergencyReclaimAndResample();
     }
     await this.#yieldControl();
-    return physical;
+    return this.publishFreshAccounting(sample.physical);
   }
 
-  private async sampleAndPublish(
-    logical: number,
-    oldest: string | null,
-  ): Promise<PhysicalStorageUsage> {
+  private async sampleAndPublish(): Promise<PublishedStorageSample> {
     const physical = await this.#readPhysicalUsage();
-    this.#operations.storageSafety.observeUsage(physical, logical, oldest);
-    return physical;
+    return this.publishFreshAccounting(physical);
   }
 
-  private async emergencyReclaimAndResample(
-    logical: number,
-    oldest: string | null,
-  ): Promise<PhysicalStorageUsage> {
+  private publishFreshAccounting(
+    physical: PhysicalStorageUsage,
+  ): PublishedStorageSample {
+    const accounting = readRetentionStorageAccounting(this.#database);
+    this.#operations.storageSafety.observeUsage(
+      physical,
+      accounting.logicalPayloadBytes,
+      accounting.oldestEventReceivedAt,
+    );
+    return { physical, ...accounting };
+  }
+
+  private async emergencyReclaimAndResample(): Promise<PublishedStorageSample> {
     validateCheckpoint(this.#emergencyCheckpoint());
     this.#incrementalVacuum(this.#config.incrementalVacuumPages);
-    return this.sampleAndPublish(logical, oldest);
+    return this.sampleAndPublish();
   }
 
-  private accountAfterEventBatch(
+  private verifyEventBatchAccounting(
     previousLogical: number,
     candidates: readonly EventCandidate[],
-  ): { readonly logical: number; readonly oldest: string | null } {
+  ): void {
     const removedBytes = candidates.reduce(
       (total, candidate) =>
         safeIntegerSum(total, candidate.compressed_payload_bytes),
@@ -492,7 +505,6 @@ export class RetentionSweeper {
     if (accounting.logicalPayloadBytes !== logical) {
       throw new Error("retention logical accounting changed unexpectedly");
     }
-    return { logical, oldest: accounting.oldestEventReceivedAt };
   }
 
   private isPhysicalCritical(physical: PhysicalStorageUsage): boolean {
@@ -513,7 +525,7 @@ export class RetentionSweeper {
 interface CleanupRowsResult {
   readonly removed: number;
   readonly batches: number;
-  readonly physical: PhysicalStorageUsage | null;
+  readonly sample: PublishedStorageSample | null;
   readonly stoppedAtHardLimit: boolean;
 }
 
