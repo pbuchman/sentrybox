@@ -12,7 +12,7 @@ Sentry-compatible webhooks.
   deletion.
 - Project, release, environment, service, and severity facets.
 - Private UI and read APIs, with public write-only ingest.
-- Configurable retention and storage-budget controls for self-hosted use.
+- Thirty-day retention with a hard 5 GiB storage budget.
 
 ## IntexuraOS Home Dev integration
 
