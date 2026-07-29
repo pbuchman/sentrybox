@@ -49,13 +49,13 @@ if [[ "$#" -eq 3 && "$1" == "serve" && "$2" == "status" && "$3" == "--json" ]]; 
   exit 0
 fi
 
-if [[ "$#" -eq 4 && "$1" == "serve" && "$2" == "--bg" && "$3" == "--https=8443" && "$4" == "http://127.0.0.1:8141" ]]; then
+if [[ "$#" -eq 5 && "$1" == "serve" && "$2" == "--yes" && "$3" == "--bg" && "$4" == "--https=8443" && "$5" == "http://127.0.0.1:8141" ]]; then
   printf '%s\n' "serve apply" >>"${FAKE_CALL_LOG}"
   : >"${FAKE_SERVE_STATE}"
   exit 0
 fi
 
-if [[ "$#" -eq 3 && "$1" == "serve" && "$2" == "--https=8443" && "$3" == "off" ]]; then
+if [[ "$#" -eq 4 && "$1" == "serve" && "$2" == "--yes" && "$3" == "--https=8443" && "$4" == "off" ]]; then
   printf '%s\n' "serve rollback" >>"${FAKE_CALL_LOG}"
   rm -f "${FAKE_SERVE_STATE}"
   exit 0
