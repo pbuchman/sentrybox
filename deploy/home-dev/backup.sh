@@ -12,6 +12,25 @@ error_hub_require_command docker
 error_hub_require_command mktemp
 readonly final_backup="${error_hub_backup_directory}/predeploy.sqlite"
 
+record_disabled_backup_state() {
+  local state_temporary
+  error_hub_require_root_private_directory \
+    "${error_hub_state_directory}" "SentryBox deployment state directory"
+  umask 077
+  state_temporary="$(mktemp "${error_hub_backup_state_file}.tmp.XXXXXX")"
+  if ! printf '%s\n' \
+    'VERSION=1' \
+    "CHECKED_AT_EPOCH=$(date +%s)" \
+    'STATUS=disabled_degraded' \
+    'REASON=no_external_target' >"${state_temporary}"; then
+    rm -f -- "${state_temporary}"
+    return 1
+  fi
+  error_hub_publish_root_private_file \
+    "${state_temporary}" "${error_hub_backup_state_file}" \
+    "SentryBox backup state"
+}
+
 require_safe_snapshot() {
   local snapshot="$1"
   local description="$2"
@@ -82,6 +101,10 @@ finalize_retained_snapshot() (
 )
 
 if [[ "${mode}" == "scheduled" ]]; then
+  for scheduled_command in chown date flock stat; do
+    error_hub_require_command "${scheduled_command}"
+  done
+  record_disabled_backup_state
   error_hub_require_command flock
   mkdir -p "$(dirname "${error_hub_lock_file}")"
   exec 9>"${error_hub_lock_file}"

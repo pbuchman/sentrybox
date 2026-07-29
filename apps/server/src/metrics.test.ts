@@ -34,6 +34,36 @@ afterEach(() => {
 });
 
 describe("ErrorHubMetrics", () => {
+  it("exposes the outcome of only the latest retention run", () => {
+    const metrics = new ErrorHubMetrics();
+
+    let rendered = metrics.render({ database, storage });
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="success"} 0',
+    );
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="failure"} 0',
+    );
+
+    metrics.recordRetention("failure", { age: 0, budget: 0 });
+    rendered = metrics.render({ database, storage });
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="success"} 0',
+    );
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="failure"} 1',
+    );
+
+    metrics.recordRetention("success", { age: 1, budget: 0 });
+    rendered = metrics.render({ database, storage });
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="success"} 1',
+    );
+    expect(rendered).toContain(
+      'sentrybox_retention_last_run{outcome="failure"} 0',
+    );
+  });
+
   it("keeps counters monotonic across every fixed-cardinality outcome", () => {
     const metrics = new ErrorHubMetrics();
     metrics.recordIngest("accepted");

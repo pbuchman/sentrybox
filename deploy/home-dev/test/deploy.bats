@@ -24,6 +24,7 @@ setup() {
     "${fixture_root}/home/pbuchman/services/sentrybox/backups" \
     "${fixture_root}/run/lock" \
     "${fixture_root}/var/lib/sentrybox-deploy"
+  chmod 0700 "${fixture_root}/var/lib/sentrybox-deploy"
   : >"${ERROR_HUB_COMMAND_LOG}"
 
   cp "${repository_root}/deploy/home-dev/compose.yaml" \
@@ -361,6 +362,7 @@ EOF
   [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/backups")" = 700 ]
   [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = 700 ]
   [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = '0:0' ]
+  [ "$(stat -c '%a:%u:%g' "${fixture_root}/var/lib/sentrybox-deploy")" = '700:0:0' ]
   run find "${fixture_root}/home/pbuchman/services/sentrybox/deploy" -mindepth 1 -print
   [ "${status}" -eq 0 ]
   [ -z "${output}" ]
@@ -397,6 +399,21 @@ EOF
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
+}
+
+@test "install rejects a linked deployment state directory without mutating its target" {
+  state_directory="${fixture_root}/var/lib/sentrybox-deploy"
+  mv "${state_directory}" "${state_directory}.target"
+  chmod 0755 "${state_directory}.target"
+  ln -s "${state_directory}.target" "${state_directory}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"deployment state directory must be a regular directory"* ]]
+  [ -L "${state_directory}" ]
+  [ "$(stat -c '%a' "${state_directory}.target")" = 755 ]
 }
 
 @test "failed staged unit verification leaves installed unit and Caddy assets unchanged" {
@@ -823,6 +840,26 @@ EOF
   [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
 }
 
+@test "direct rollback rejects permissive or multiply linked deployment state" {
+  write_runtime_state
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+
+  chmod 0644 "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"Deployment state must be root-owned, mode 0600, and singly linked"* ]]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+
+  rm "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  ln "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"Deployment state must be root-owned, mode 0600, and singly linked"* ]]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+}
+
 @test "predeploy backup uses SQLite online backup and removes unknown snapshots" {
   write_runtime_state
   printf 'live-database\n' \
@@ -861,6 +898,11 @@ EOF
   run grep -F -- '--user 1000:1000' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = '1000:1000' ]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  [ "$(stat -c '%a:%u:%g:%h' "${backup_state}")" = '600:0:0:1' ]
+  grep -Fx 'STATUS=disabled_degraded' "${backup_state}"
+  grep -Fx 'REASON=no_external_target' "${backup_state}"
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
   run grep -E 'src=.*/backups/\.retained-finalize\.[A-Za-z0-9]+,dst=/retained' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
@@ -911,6 +953,7 @@ EOF
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   [ -f "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success" ]
+  [ "$(stat -c '%a:%u:%g:%h' "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success")" = '600:0:0:1' ]
   run grep -F 'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
@@ -1241,6 +1284,8 @@ EOF
   deploy_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy.service"
   runtime_unit="${fixture_root}/etc/systemd/system/sentrybox.service"
   backup_timer="${fixture_root}/etc/systemd/system/sentrybox-backup.timer"
+  monitor_timer="${fixture_root}/etc/systemd/system/sentrybox-monitor.timer"
+  monitor_unit="${fixture_root}/etc/systemd/system/sentrybox-monitor.service"
   restore_timer="${fixture_root}/etc/systemd/system/sentrybox-restore-test.timer"
   restore_unit="${fixture_root}/etc/systemd/system/sentrybox-restore-test.service"
   run grep -F 'StateDirectory=sentrybox-deploy' "${deploy_unit}"
@@ -1266,6 +1311,40 @@ EOF
   [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${backup_timer}"
   [ "${status}" -eq 0 ]
+  run grep -Fx 'ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh' \
+    "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'StandardOutput=journal' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'StandardError=journal' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'StateDirectory=sentrybox-deploy' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'ReadWritePaths=/var/lib/sentrybox-deploy' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'NoNewPrivileges=true' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'CapabilityBoundingSet=' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'ProtectSystem=strict' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'ProtectHome=tmpfs' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx \
+    'BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'PrivateTmp=true' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'TimeoutStartSec=30s' "${monitor_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'OnUnitActiveSec=5min' "${monitor_timer}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'RandomizedDelaySec=30s' "${monitor_timer}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'AccuracySec=30s' "${monitor_timer}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'Persistent=true' "${monitor_timer}"
+  [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${restore_timer}"
   [ "${status}" -eq 0 ]
   run grep -F 'ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh' "${restore_unit}"
@@ -1275,6 +1354,8 @@ EOF
   run grep -R -E 'deploy-request\.json.*(docker\.sock|/data)|sentrybox-deploy-webhook.*docker\.sock' \
     "${fixture_root}/etc/systemd/system"
   [ "${status}" -ne 0 ]
+  run grep -F 'sentrybox-monitor.timer' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
 }
 
 @test "deployment webhook runs Node jitless with only its checkout visible under home" {

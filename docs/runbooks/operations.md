@@ -6,8 +6,11 @@ Run the Home Dev operational check from the canonical checkout as root:
 sudo /home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
 ```
 
-The command exits `0` only when all checks are healthy. It exits non-zero for
-an alert and sends a structured record to the host journal with
+The installed `sentrybox-monitor.timer` runs this check every five minutes,
+with a bounded 30-second randomized delay. The oneshot service writes only to
+the host journal and has no separate log file. The command exits `0` only when
+all checks are healthy. It exits non-zero for an alert and sends a structured
+record to the host journal with
 `SENTRYBOX_COMPONENT=operations`, `SENTRYBOX_CHECK=home_dev`, and a sanitized
 `SENTRYBOX_ALERTS` value. This is the private operator alert surface: inspect
 it only on the Home Dev host or through an already-authorized private journal
@@ -22,24 +25,38 @@ sudo journalctl --output=json --since '26 hours ago' \
 ```
 
 The monitor reads only the private Tailscale `/health/ready` and `/metrics`
-endpoints plus metadata on the bounded pre-deployment snapshot and restore
-success marker. It alerts for:
+endpoints plus root-private operational state under
+`/var/lib/sentrybox-deploy`. It alerts for:
 
 - failed readiness;
 - physical data above `4.5 GiB` (`4,831,838,208` bytes);
 - physical data at or above `4.75 GiB` (`5,100,273,664` bytes), where ingest
   must be disabled by the runtime;
-- any retention failure, dead-letter webhook, or two or more `429` or `503`
-  ingest responses in the current runtime;
-- a pre-deployment snapshot older than 26 hours; and
+- a failed latest retention run or any dead-letter webhook;
+- a delta of two or more application-generated `429` or `503` ingest
+  responses since the previous five-minute observation; and
+- external backup status `disabled/degraded`; and
 - a successful restore test older than 35 days.
+
+The application counters do not include `429` or `503` responses generated at
+the Caddy or another proxy edge. The monitor stores the prior application
+counter values and observation timestamp atomically in a root-owned, mode
+`0600`, singly linked file. Its first observation establishes a baseline;
+counter decreases are treated as runtime resets, and gaps over ten minutes
+re-establish the baseline rather than accumulating an unbounded total.
+The latest-retention gauge likewise prevents an old failure from keeping the
+check failed after a later retention run succeeds.
 
 The current Home Dev installation intentionally has no external backup target.
 Its daily backup unit is therefore expected to report `disabled/degraded` and
-exit non-zero instead of creating unbounded root-filesystem snapshots. Treat a
-`backup_stale` alert as an explicit recovery-readiness gap until an approved
-encrypted external destination is supplied; do not add GCS, R2, or another
-storage target ad hoc.
+exit non-zero instead of creating unbounded root-filesystem snapshots. It
+records that outcome separately in root-private `backup.state`; the local
+`predeploy.sqlite` rollback snapshot is never treated as external backup
+success, regardless of its modification time. With no transport configured,
+the backup job never creates `backup.success`, so
+`backup_disabled_degraded` is the expected monitor result. A future success
+marker may be published only after a real off-host upload and checksum
+verification. Do not add GCS, R2, or another storage target ad hoc.
 
 ## Response sequence
 
@@ -51,11 +68,12 @@ storage target ad hoc.
 3. For retention, dead-letter, or repeated-response alerts, inspect the
    private UI and the existing private Code Agent workflow. Treat a dead-letter
    as a delivery incident rather than retrying it by copying a webhook body.
-4. For backup or restore age alerts, follow
+4. For backup or restore alerts, follow
    [backup and recovery](backup-and-recovery.md). A failed restore test must
    not be "fixed" by writing its success marker or restoring over live data.
-5. Before closing an incident, re-run the monitor and require its structured
-   success record with `SENTRYBOX_ALERTS=none`.
+5. Before closing an incident, re-run the monitor. Until an approved external
+   backup target exists, require that all alerts except the documented
+   `backup_disabled_degraded` condition are cleared.
 
 ## Journal hygiene
 

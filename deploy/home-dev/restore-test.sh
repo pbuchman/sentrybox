@@ -130,8 +130,10 @@ exec 7<&-
 restore_success_temporary="$(
   mktemp "${error_hub_state_directory}/.restore-test-success.XXXXXX"
 )"
-chmod 0600 "${restore_success_temporary}"
-mv -f "${restore_success_temporary}" "${error_hub_state_directory}/restore-test.success"
+printf 'validated\n' >"${restore_success_temporary}"
+error_hub_publish_root_private_file \
+  "${restore_success_temporary}" "${error_hub_restore_success_file}" \
+  "SentryBox restore-test success marker"
 restore_success_temporary=""
 
 printf 'Pre-deployment SentryBox backup passed restore validation.\n'

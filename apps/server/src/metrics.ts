@@ -25,6 +25,7 @@ export class ErrorHubMetrics {
     "duplicate",
   ] as const);
   readonly #retention = fixedCounter(["success", "failure"] as const);
+  readonly #retentionLastRun = fixedCounter(["success", "failure"] as const);
   readonly #retentionRemoved = fixedCounter(["age", "budget"] as const);
   readonly #dispatch = fixedCounter([
     "delivered",
@@ -74,6 +75,8 @@ export class ErrorHubMetrics {
     removed: { readonly age: number; readonly budget: number },
   ): void {
     increment(this.#retention, outcome, 1);
+    this.#retentionLastRun.success = outcome === "success" ? 1 : 0;
+    this.#retentionLastRun.failure = outcome === "failure" ? 1 : 0;
     increment(this.#retentionRemoved, "age", removed.age);
     increment(this.#retentionRemoved, "budget", removed.budget);
   }
@@ -135,6 +138,12 @@ export class ErrorHubMetrics {
       "sentrybox_retention_runs_total",
       "outcome",
       this.#retention,
+    );
+    appendGauge(
+      lines,
+      "sentrybox_retention_last_run",
+      "outcome",
+      this.#retentionLastRun,
     );
     appendCounter(
       lines,

@@ -73,10 +73,18 @@ chown "${runtime_uid}:${runtime_gid}" \
   "${error_hub_backup_directory}"
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 
-install -d -m 0700 "${error_hub_state_directory}"
+if [[ -L "${error_hub_state_directory}" \
+  || ( -e "${error_hub_state_directory}" \
+    && ! -d "${error_hub_state_directory}" ) ]]; then
+  printf 'SentryBox deployment state directory must be a regular directory.\n' >&2
+  exit 1
+fi
+install -d -o 0 -g 0 -m 0700 "${error_hub_state_directory}"
 if [[ -e "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
-  if [[ ! -f "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
-    printf 'SentryBox runtime environment must be a regular file.\n' >&2
+  if [[ ! -f "${error_hub_runtime_environment_file}" \
+    || -L "${error_hub_runtime_environment_file}" \
+    || "$(stat -c '%h' "${error_hub_runtime_environment_file}")" != "1" ]]; then
+    printf 'SentryBox runtime environment must be a regular, singly linked file.\n' >&2
     exit 1
   fi
   chown 0:0 "${error_hub_runtime_environment_file}"
@@ -92,9 +100,11 @@ else
 fi
 error_hub_require_runtime_environment
 private_origin_file="${error_hub_state_directory}/private-origin"
-printf '%s\n' "${private_origin}" >"${private_origin_file}.tmp.$$"
-chmod 0600 "${private_origin_file}.tmp.$$"
-mv -f "${private_origin_file}.tmp.$$" "${private_origin_file}"
+private_origin_temporary="$(mktemp "${private_origin_file}.tmp.XXXXXX")"
+printf '%s\n' "${private_origin}" >"${private_origin_temporary}"
+error_hub_publish_root_private_file \
+  "${private_origin_temporary}" "${private_origin_file}" \
+  "SentryBox private origin"
 
 readonly systemd_directory="${error_hub_prefix}/etc/systemd/system"
 install -d -m 0755 "${systemd_directory}"
@@ -142,6 +152,8 @@ for unit in \
   sentrybox-deploy-webhook.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.service \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.service \
   sentrybox-restore-test.timer; do
   install -m 0644 "${script_directory}/${unit}" \
@@ -154,6 +166,8 @@ systemd-analyze verify \
   "${install_staging}/units/sentrybox-deploy-webhook.service" \
   "${install_staging}/units/sentrybox-backup.service" \
   "${install_staging}/units/sentrybox-backup.timer" \
+  "${install_staging}/units/sentrybox-monitor.service" \
+  "${install_staging}/units/sentrybox-monitor.timer" \
   "${install_staging}/units/sentrybox-restore-test.service" \
   "${install_staging}/units/sentrybox-restore-test.timer"
 (
@@ -175,6 +189,8 @@ for unit in \
   sentrybox-deploy-webhook.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.service \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.service \
   sentrybox-restore-test.timer; do
   install -m 0644 "${install_staging}/units/${unit}" \
@@ -185,6 +201,7 @@ systemctl daemon-reload
 systemctl enable \
   sentrybox.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.timer >/dev/null
 
 error_hub_validate_caddy >/dev/null
