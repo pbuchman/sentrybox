@@ -37,14 +37,16 @@ Agent HMAC references. All Code Agent destinations start in `disabled` mode.
 Run from `/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev`:
 
 ```bash
-docker compose exec -T error-hub node \
+docker compose exec error-hub node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json
 ```
 
-The command commits all two projects and four key hashes in one SQLite
-transaction, then prints the four clear DSNs to that operator terminal once.
+The command writes all four clear DSNs synchronously to that operator terminal
+inside the same SQLite transaction and commits only after the write succeeds.
+If the terminal disconnects, the transaction rolls back and the command can be
+retried without losing the generated keys.
 Copy them directly to their intended Home Dev configuration or production
 secret entry. Do not redirect the output to a file or paste it into an issue,
 commit, deployment log, or chat.
@@ -72,10 +74,10 @@ Do this only after the shadow phase and the Code Agent reservation fix have
 been verified.
 
 1. Put public ingest into the checked-in maintenance route and stop the Hub.
-2. Add `CODE_AGENT_HMAC_DEV` and `CODE_AGENT_HMAC_PROD` to the mode-`0600`
-   credential file without printing their values.
-3. Set `ERROR_HUB_REQUIRED_SECRET_REFERENCES` to the four legacy Sentry
-   references plus those two HMAC references.
+2. For the dev cutover, add only `CODE_AGENT_HMAC_DEV` to the mode-`0600`
+   credential file without printing its value. Add `CODE_AGENT_HMAC_PROD` only
+   during the later production cutover.
+3. Add the matching HMAC name to `ERROR_HUB_REQUIRED_SECRET_REFERENCES`.
 4. Start a one-off container with the same data/config mounts and run the
    transition with one explicit UTC baseline:
 
@@ -84,6 +86,7 @@ docker compose run --rm --no-deps error-hub node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
+  --environment dev \
   --enable-code-agent-at 2026-07-28T13:00:00.000Z
 ```
 
@@ -95,28 +98,50 @@ docker compose exec -T error-hub node \
   scripts/admin/validate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
+  --environment dev \
   --webhook-mode live \
   --enabled-at 2026-07-28T13:00:00.000Z
 ```
 
-The transition is atomic. It fails if any destination is missing, already
-live, cross-environment, or does not match the manifest.
+The transition changes exactly the two destinations in the selected
+environment and is atomic. Production remains disabled during the dev phase.
+Repeat with `--environment prod` and a new production baseline only at the
+production cutover. A missing HMAC reference makes readiness return `503`.
 
 ## Disable Code Agent delivery
 
-For rollback, use the same maintenance window and atomically clear all four
-live destination fields:
+For rollback, use the same maintenance window and atomically clear only the
+selected environment's live destination fields:
 
 ```bash
 docker compose run --rm --no-deps error-hub node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
+  --environment dev \
   --disable-code-agent-at 2026-07-28T15:00:00.000Z
 ```
 
-Restart with only the four legacy forwarding references in the credential file
-and required-reference list, then validate with `--webhook-mode disabled`.
+Remove the matching HMAC only after disabling that environment, restart, and
+validate it with `--environment dev --webhook-mode disabled`.
+
+## Disable legacy Sentry shadow forwarding
+
+After the required stable observation window, permanently stop forwarding the
+selected environment to Sentry without manual SQL:
+
+```bash
+docker compose run --rm --no-deps error-hub node \
+  scripts/admin/generate-project-config.mjs \
+  --database /data/error-hub.sqlite \
+  --config /run/config/error-hub-projects.json \
+  --environment dev \
+  --disable-forwarding-at 2026-08-04T13:00:00.000Z
+```
+
+Validate with `--environment dev --forwarding-mode disabled`, then remove only
+the two matching legacy DSN references from the credential file and required
+reference list. Repeat for `prod` only after its independent stability window.
 
 ## Environment-mismatch acceptance check
 

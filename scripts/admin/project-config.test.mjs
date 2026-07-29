@@ -9,8 +9,10 @@ import test from "node:test";
 import { URL } from "node:url";
 
 import {
+  applyAndWriteProjectConfiguration,
   applyProjectConfiguration,
   disableCodeAgentDestinations,
+  disableLegacyForwarding,
   enableCodeAgentDestinations,
   openAdminDatabase,
   validateStoredProjectConfiguration,
@@ -277,6 +279,35 @@ test("the CLI prints generated DSNs once and never reveals them on a retry", () 
   }
 });
 
+test("a failed one-time DSN write rolls back every generated key", () => {
+  const database = fixtureDatabase();
+  let keyByte = 20;
+
+  assert.throws(
+    () =>
+      applyAndWriteProjectConfiguration({
+        database,
+        configuration: CONFIG,
+        createdAt: CREATED_AT,
+        randomBytes: () => Buffer.alloc(16, keyByte++),
+        writeOutput: () => {
+          throw new Error("operator output disconnected");
+        },
+      }),
+    /operator output disconnected/u,
+  );
+  assert.equal(
+    database.prepare("SELECT count(*) AS count FROM projects").get().count,
+    0,
+  );
+  assert.equal(
+    database.prepare("SELECT count(*) AS count FROM project_ingest_keys").get()
+      .count,
+    0,
+  );
+  database.close();
+});
+
 test("live activation atomically uses the environment-bound target and one explicit baseline", () => {
   const database = fixtureDatabase();
   let byte = 10;
@@ -291,6 +322,7 @@ test("live activation atomically uses the environment-bound target and one expli
     database,
     configuration: CONFIG,
     enabledAt: ENABLED_AT,
+    environment: "dev",
   });
 
   const rows = database
@@ -301,15 +333,33 @@ test("live activation atomically uses the environment-bound target and one expli
        ORDER BY project_id, environment`,
     )
     .all();
-  assert.ok(rows.every(({ webhook_mode }) => webhook_mode === "live"));
-  assert.ok(rows.every(({ enabled_at }) => enabled_at === ENABLED_AT));
+  assert.ok(
+    rows
+      .filter(({ environment }) => environment === "dev")
+      .every(
+        ({ webhook_mode, enabled_at }) =>
+          webhook_mode === "live" && enabled_at === ENABLED_AT,
+      ),
+  );
+  assert.ok(
+    rows
+      .filter(({ environment }) => environment === "prod")
+      .every(
+        ({
+          webhook_mode,
+          enabled_at,
+          webhook_target_url,
+          webhook_secret_ref,
+        }) =>
+          webhook_mode === "disabled" &&
+          enabled_at === null &&
+          webhook_target_url === null &&
+          webhook_secret_ref === null,
+      ),
+  );
   assert.equal(
     rows.find(({ environment }) => environment === "dev").webhook_target_url,
     "https://dev.intexuraos.cloud/api/code/webhooks/sentry",
-  );
-  assert.equal(
-    rows.find(({ environment }) => environment === "prod").webhook_target_url,
-    "https://intexuraos.cloud/api/code/webhooks/sentry",
   );
   assert.throws(
     () =>
@@ -317,21 +367,15 @@ test("live activation atomically uses the environment-bound target and one expli
         database,
         configuration: CONFIG,
         enabledAt: "2026-07-28T14:00:00.000Z",
+        environment: "dev",
       }),
     /already live/u,
-  );
-  assert.doesNotThrow(() =>
-    validateStoredProjectConfiguration({
-      database,
-      configuration: CONFIG,
-      expectedWebhookMode: "live",
-      enabledAt: ENABLED_AT,
-    }),
   );
   disableCodeAgentDestinations({
     database,
     configuration: CONFIG,
     disabledAt: "2026-07-28T15:00:00.000Z",
+    environment: "dev",
   });
   assert.doesNotThrow(() =>
     validateStoredProjectConfiguration({
@@ -339,6 +383,97 @@ test("live activation atomically uses the environment-bound target and one expli
       configuration: CONFIG,
       expectedWebhookMode: "disabled",
     }),
+  );
+  database.close();
+});
+
+test("the CLI requires an explicit environment for Code Agent activation", () => {
+  const script = new URL("./generate-project-config.mjs", import.meta.url)
+    .pathname;
+  const common = [
+    script,
+    "--database",
+    "/does/not/matter.sqlite",
+    "--config",
+    "/does/not/matter.json",
+    "--enable-code-agent-at",
+    ENABLED_AT,
+  ];
+
+  const missing = spawnSync(process.execPath, common, { encoding: "utf8" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /--environment is required/u);
+
+  const invalid = spawnSync(
+    process.execPath,
+    [...common, "--environment", "qa"],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /--environment must be dev or prod/u);
+});
+
+test("legacy shadow forwarding can be disabled atomically for one environment", () => {
+  const database = fixtureDatabase();
+  let keyByte = 30;
+  applyProjectConfiguration({
+    database,
+    configuration: CONFIG,
+    createdAt: CREATED_AT,
+    randomBytes: () => Buffer.alloc(16, keyByte++),
+  });
+
+  disableLegacyForwarding({
+    database,
+    configuration: CONFIG,
+    environment: "dev",
+    disabledAt: "2026-08-04T13:00:00.000Z",
+  });
+
+  const rows = database
+    .prepare(
+      `SELECT environment, forwarding_mode, forwarding_secret_ref
+       FROM project_ingest_keys
+       ORDER BY project_id, environment`,
+    )
+    .all();
+  assert.ok(
+    rows
+      .filter(({ environment }) => environment === "dev")
+      .every(
+        ({ forwarding_mode, forwarding_secret_ref }) =>
+          forwarding_mode === "disabled" && forwarding_secret_ref === null,
+      ),
+  );
+  assert.ok(
+    rows
+      .filter(({ environment }) => environment === "prod")
+      .every(
+        ({ forwarding_mode, forwarding_secret_ref }) =>
+          forwarding_mode === "shadow" &&
+          typeof forwarding_secret_ref === "string",
+      ),
+  );
+  assert.doesNotThrow(() =>
+    validateStoredProjectConfiguration({
+      database,
+      configuration: CONFIG,
+      environment: "dev",
+      expectedWebhookMode: "disabled",
+      expectedForwardingMode: "disabled",
+    }),
+  );
+  assert.throws(
+    () =>
+      disableLegacyForwarding({
+        database,
+        configuration: CONFIG,
+        environment: "dev",
+        disabledAt: "2026-08-04T14:00:00.000Z",
+      }),
+    /not in shadow mode/u,
   );
   database.close();
 });

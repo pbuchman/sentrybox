@@ -73,6 +73,49 @@ describe("HealthStatusService", () => {
     });
   });
 
+  it("fails readiness when an active delivery references an unavailable secret", async () => {
+    database
+      .prepare(
+        `INSERT INTO projects (id, slug, name, enabled, created_at, updated_at)
+         VALUES (1, 'intexuraos-backend', 'Backend', 1, ?, ?)`,
+      )
+      .run(NOW, NOW);
+    database
+      .prepare(
+        `INSERT INTO project_ingest_keys (
+           project_id, environment, public_key_hash, cors_origins_json,
+           forwarding_mode, forwarding_secret_ref, webhook_mode,
+           webhook_target_url, webhook_secret_ref, enabled_at, created_at,
+           updated_at
+         ) VALUES (1, 'dev', ?, '["https://dev.intexuraos.cloud"]',
+                   'disabled', NULL, 'live',
+                   'https://dev.intexuraos.cloud/api/code/webhooks/sentry',
+                   'CODE_AGENT_HMAC_DEV', ?, ?, ?)`,
+      )
+      .run(Buffer.alloc(32, 1), NOW, NOW, NOW);
+    await successfulRetention();
+
+    const missingSecret = new HealthStatusService({
+      database,
+      operations,
+      secrets: { references: () => [] },
+    });
+    expect(missingSecret.readiness()).toMatchObject({
+      ready: false,
+      checks: { secretsConfigured: false },
+    });
+
+    const configuredSecret = new HealthStatusService({
+      database,
+      operations,
+      secrets: { references: () => ["CODE_AGENT_HMAC_DEV"] },
+    });
+    expect(configuredSecret.readiness()).toMatchObject({
+      ready: true,
+      checks: { secretsConfigured: true },
+    });
+  });
+
   it("requires a later successful run and resample before recovering from critical or failed storage", async () => {
     const critical = physical({
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,

@@ -1,4 +1,5 @@
 import type { ErrorHubDatabase } from "../storage/database.js";
+import type { SecretStore } from "../secrets.js";
 import { CURRENT_MIGRATION_VERSION } from "../storage/migrate.js";
 import {
   type RetentionConfig,
@@ -14,6 +15,7 @@ export interface ReadinessChecks {
   readonly physicalWithinLimit: boolean;
   readonly freeSpaceAvailable: boolean;
   readonly ingestAccepting: boolean;
+  readonly secretsConfigured: boolean;
 }
 
 export interface ReadinessResult {
@@ -24,17 +26,20 @@ export interface ReadinessResult {
 export interface HealthStatusServiceOptions {
   readonly database: ErrorHubDatabase;
   readonly operations: OperationsContext;
+  readonly secrets?: Pick<SecretStore, "references">;
 }
 
 export class HealthStatusService {
   readonly #database: ErrorHubDatabase;
   readonly #safetyState: StorageSafetyState;
   readonly #config: RetentionConfig;
+  readonly #secrets: Pick<SecretStore, "references"> | undefined;
 
   public constructor(options: HealthStatusServiceOptions) {
     this.#database = options.database;
     this.#safetyState = options.operations.storageSafety;
     this.#config = options.operations.retentionConfig;
+    this.#secrets = options.secrets;
   }
 
   public liveness(): { readonly status: "ok" } {
@@ -59,6 +64,7 @@ export class HealthStatusService {
         physical !== null &&
         physical.freeBytes >= this.#config.minimumFreeBytes,
       ingestAccepting: snapshot.acceptingIngest,
+      secretsConfigured: activeSecretsConfigured(this.#database, this.#secrets),
     };
     return {
       ready: Object.values(checks).every((value) => value === true),
@@ -173,6 +179,34 @@ function sqliteReadWrite(database: ErrorHubDatabase): boolean {
         return false;
       }
     }
+    return false;
+  }
+}
+
+function activeSecretsConfigured(
+  database: ErrorHubDatabase,
+  secrets: Pick<SecretStore, "references"> | undefined,
+): boolean {
+  try {
+    const rows = database
+      .prepare(
+        `SELECT forwarding_secret_ref AS secret_ref
+         FROM project_ingest_keys
+         WHERE forwarding_mode = 'shadow'
+         UNION ALL
+         SELECT webhook_secret_ref AS secret_ref
+         FROM project_ingest_keys
+         WHERE webhook_mode = 'live'`,
+      )
+      .all() as { readonly secret_ref: string | null }[];
+    if (rows.length === 0) return true;
+    if (secrets === undefined) return false;
+    const available = new Set(secrets.references());
+    return rows.every(
+      ({ secret_ref }) =>
+        typeof secret_ref === "string" && available.has(secret_ref),
+    );
+  } catch {
     return false;
   }
 }

@@ -362,6 +362,10 @@ async function runCli() {
         database,
         configuration,
         expectedWebhookMode: args.webhookMode,
+        ...(args.environment === null ? {} : { environment: args.environment }),
+        ...(args.forwardingMode === null
+          ? {}
+          : { expectedForwardingMode: args.forwardingMode }),
         ...(args.enabledAt === null ? {} : { enabledAt: args.enabledAt }),
       });
     } finally {
@@ -376,6 +380,8 @@ function parseArguments(argv) {
   let database = null;
   let webhookMode = "disabled";
   let enabledAt = null;
+  let environment = null;
+  let forwardingMode = null;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[index + 1];
@@ -385,7 +391,15 @@ function parseArguments(argv) {
     else if (flag === "--webhook-mode") {
       webhookMode = enumValue(value, ["disabled", "live"], "webhook mode");
     } else if (flag === "--enabled-at") enabledAt = value;
-    else throw new Error(`unknown argument: ${flag}`);
+    else if (flag === "--environment") {
+      environment = enumValue(value, ENVIRONMENTS, "environment");
+    } else if (flag === "--forwarding-mode") {
+      forwardingMode = enumValue(
+        value,
+        ["disabled", "shadow"],
+        "forwarding mode",
+      );
+    } else throw new Error(`unknown argument: ${flag}`);
     index += 1;
   }
   if (config === null) throw new Error("--config is required");
@@ -395,7 +409,14 @@ function parseArguments(argv) {
   if (webhookMode === "disabled" && enabledAt !== null) {
     throw new Error("--enabled-at is valid only for live validation");
   }
-  return { config, database, webhookMode, enabledAt };
+  return {
+    config,
+    database,
+    webhookMode,
+    enabledAt,
+    environment,
+    forwardingMode,
+  };
 }
 
 function isDirectExecution() {

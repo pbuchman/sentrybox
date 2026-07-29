@@ -13,6 +13,7 @@ RUN apt-get update \
 RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/brace-expansion@5.0.8.patch patches/brace-expansion@5.0.8.patch
 COPY tsconfig.json tsconfig.base.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json

@@ -27,6 +27,21 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
   assert.match(dockerfile, /scripts\/admin\/generate-project-config\.mjs/u);
   assert.match(dockerfile, /scripts\/admin\/validate-project-config\.mjs/u);
 
+  const patchCopy = dockerfile.indexOf(
+    "COPY patches/brace-expansion@5.0.8.patch patches/brace-expansion@5.0.8.patch",
+  );
+  const frozenInstall = dockerfile.indexOf(
+    "RUN pnpm install --frozen-lockfile",
+  );
+  assert.ok(
+    patchCopy >= 0,
+    "the patched dependency must be copied into the build context",
+  );
+  assert.ok(
+    patchCopy < frozenInstall,
+    "the patched dependency must be copied before the frozen install",
+  );
+
   const runtime = dockerfile.split(/\bAS runtime\b/u)[1] ?? "";
   assert.doesNotMatch(runtime, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
   assert.doesNotMatch(runtime, /\bpnpm\s+(?:install|add)\b/u);

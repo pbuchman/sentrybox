@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes as secureRandomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
@@ -102,8 +102,27 @@ export function applyProjectConfiguration(options) {
   };
 }
 
+export function applyAndWriteProjectConfiguration(options) {
+  if (typeof options.writeOutput !== "function") {
+    throw new TypeError("one-time DSN output writer is required");
+  }
+  const configure = options.database.transaction(() => {
+    const result = applyProjectConfiguration(options);
+    const lines = ["Generated DSNs (only clear-text output; store them now):"];
+    for (const entry of result.dsns) {
+      lines.push(`${entry.id}=${entry.dsn}`);
+    }
+    options.writeOutput(`${lines.join("\n")}\n`);
+  });
+  configure();
+}
+
 export function enableCodeAgentDestinations(options) {
   const configuration = validateProjectConfiguration(options.configuration);
+  const environment = codeAgentEnvironment(options.environment);
+  const ingestKeys = configuration.ingestKeys.filter(
+    (key) => key.environment === environment,
+  );
   const enabledAt = timestamp(
     options.enabledAt,
     "Code Agent baseline timestamp",
@@ -115,7 +134,7 @@ export function enableCodeAgentDestinations(options) {
        FROM project_ingest_keys
        WHERE project_id = ? AND environment = ?`,
     );
-    for (const key of configuration.ingestKeys) {
+    for (const key of ingestKeys) {
       const current = select.get(key.projectId, key.environment);
       if (current === undefined) {
         throw new Error("configured ingest key is missing");
@@ -130,6 +149,7 @@ export function enableCodeAgentDestinations(options) {
       database: options.database,
       configuration,
       expectedWebhookMode: "disabled",
+      environment,
     });
     const update = options.database.prepare(
       `UPDATE project_ingest_keys
@@ -137,7 +157,7 @@ export function enableCodeAgentDestinations(options) {
            webhook_secret_ref = ?, enabled_at = ?, updated_at = ?
        WHERE project_id = ? AND environment = ? AND webhook_mode = 'disabled'`,
     );
-    for (const key of configuration.ingestKeys) {
+    for (const key of ingestKeys) {
       const result = update.run(
         key.codeAgent.targetUrl,
         key.codeAgent.secretRef,
@@ -156,6 +176,10 @@ export function enableCodeAgentDestinations(options) {
 
 export function disableCodeAgentDestinations(options) {
   const configuration = validateProjectConfiguration(options.configuration);
+  const environment = codeAgentEnvironment(options.environment);
+  const ingestKeys = configuration.ingestKeys.filter(
+    (key) => key.environment === environment,
+  );
   const disabledAt = timestamp(
     options.disabledAt,
     "Code Agent disable timestamp",
@@ -168,7 +192,7 @@ export function disableCodeAgentDestinations(options) {
        WHERE project_id = ? AND environment = ?`,
     );
     const baselines = new Set();
-    for (const key of configuration.ingestKeys) {
+    for (const key of ingestKeys) {
       const current = select.get(key.projectId, key.environment);
       if (current === undefined) {
         throw new Error("configured ingest key is missing");
@@ -192,6 +216,7 @@ export function disableCodeAgentDestinations(options) {
       configuration,
       expectedWebhookMode: "live",
       enabledAt: baseline,
+      environment,
     });
     const update = options.database.prepare(
       `UPDATE project_ingest_keys
@@ -199,7 +224,7 @@ export function disableCodeAgentDestinations(options) {
            webhook_secret_ref = NULL, enabled_at = NULL, updated_at = ?
        WHERE project_id = ? AND environment = ? AND webhook_mode = 'live'`,
     );
-    for (const key of configuration.ingestKeys) {
+    for (const key of ingestKeys) {
       const result = update.run(disabledAt, key.projectId, key.environment);
       if (result.changes !== 1) {
         throw new Error("Code Agent destination disable was not applied");
@@ -209,8 +234,61 @@ export function disableCodeAgentDestinations(options) {
   transaction();
 }
 
+export function disableLegacyForwarding(options) {
+  const configuration = validateProjectConfiguration(options.configuration);
+  const environment = codeAgentEnvironment(options.environment);
+  const disabledAt = timestamp(
+    options.disabledAt,
+    "legacy forwarding disable timestamp",
+  );
+  const ingestKeys = configuration.ingestKeys.filter(
+    (key) => key.environment === environment,
+  );
+  const transaction = options.database.transaction(() => {
+    assertConfigurationSchema(options.database);
+    const select = options.database.prepare(
+      `SELECT forwarding_mode, forwarding_secret_ref
+       FROM project_ingest_keys
+       WHERE project_id = ? AND environment = ?`,
+    );
+    for (const key of ingestKeys) {
+      const current = select.get(key.projectId, key.environment);
+      if (current === undefined) {
+        throw new Error("configured ingest key is missing");
+      }
+      if (
+        current.forwarding_mode !== "shadow" ||
+        current.forwarding_secret_ref !== key.forwarding.secretRef
+      ) {
+        throw new Error("legacy forwarding destination is not in shadow mode");
+      }
+    }
+    const update = options.database.prepare(
+      `UPDATE project_ingest_keys
+       SET forwarding_mode = 'disabled', forwarding_secret_ref = NULL,
+           updated_at = ?
+       WHERE project_id = ? AND environment = ?
+         AND forwarding_mode = 'shadow'`,
+    );
+    for (const key of ingestKeys) {
+      const result = update.run(disabledAt, key.projectId, key.environment);
+      if (result.changes !== 1) {
+        throw new Error("legacy forwarding transition was not applied");
+      }
+    }
+  });
+  transaction();
+}
+
 export function validateStoredProjectConfiguration(options) {
   const configuration = validateProjectConfiguration(options.configuration);
+  const environment =
+    options.environment === undefined
+      ? null
+      : codeAgentEnvironment(options.environment);
+  const expectedIngestKeys = configuration.ingestKeys.filter(
+    (key) => environment === null || key.environment === environment,
+  );
   const expectedMode = enumValue(
     options.expectedWebhookMode,
     ["disabled", "live"],
@@ -220,6 +298,14 @@ export function validateStoredProjectConfiguration(options) {
     options.enabledAt === undefined
       ? null
       : timestamp(options.enabledAt, "expected Code Agent baseline");
+  const expectedForwardingMode =
+    options.expectedForwardingMode === undefined
+      ? null
+      : enumValue(
+          options.expectedForwardingMode,
+          ["disabled", "shadow"],
+          "expected forwarding mode",
+        );
   if (expectedMode === "disabled" && expectedEnabledAt !== null) {
     throw new TypeError("disabled validation cannot include a baseline");
   }
@@ -252,21 +338,23 @@ export function validateStoredProjectConfiguration(options) {
     }
   }
 
-  const rows = options.database
-    .prepare(
-      `SELECT project_id, environment, public_key_hash, cors_origins_json,
-              forwarding_mode, forwarding_secret_ref, webhook_mode,
-              webhook_target_url, webhook_secret_ref, enabled_at
-       FROM project_ingest_keys
-       ORDER BY project_id, environment`,
-    )
-    .all();
-  if (rows.length !== configuration.ingestKeys.length) {
+  const selectRows = `SELECT project_id, environment, public_key_hash,
+                             cors_origins_json, forwarding_mode,
+                             forwarding_secret_ref, webhook_mode,
+                             webhook_target_url, webhook_secret_ref, enabled_at
+                      FROM project_ingest_keys
+                      ${environment === null ? "" : "WHERE environment = ?"}
+                      ORDER BY project_id, environment`;
+  const rows =
+    environment === null
+      ? options.database.prepare(selectRows).all()
+      : options.database.prepare(selectRows).all(environment);
+  if (rows.length !== expectedIngestKeys.length) {
     throw new Error("stored ingest key count does not match configuration");
   }
   const hashes = new Set();
   const expectedKeys = new Map(
-    configuration.ingestKeys.map((key) => [
+    expectedIngestKeys.map((key) => [
       `${String(key.projectId)}\0${key.environment}`,
       key,
     ]),
@@ -291,9 +379,11 @@ export function validateStoredProjectConfiguration(options) {
     hashes.add(hash);
     if (
       row.cors_origins_json !== JSON.stringify(key.allowedOrigins) ||
-      row.forwarding_mode !== key.forwarding.mode ||
+      row.forwarding_mode !== (expectedForwardingMode ?? key.forwarding.mode) ||
       row.forwarding_secret_ref !==
-        (key.forwarding.mode === "shadow" ? key.forwarding.secretRef : null) ||
+        ((expectedForwardingMode ?? key.forwarding.mode) === "shadow"
+          ? key.forwarding.secretRef
+          : null) ||
       row.webhook_mode !== expectedMode
     ) {
       throw new Error("stored ingest key does not match configuration");
@@ -390,6 +480,10 @@ function enumValue(value, values, field) {
   return value;
 }
 
+function codeAgentEnvironment(value) {
+  return enumValue(value, ["dev", "prod"], "Code Agent environment");
+}
+
 function moduleAnchor() {
   const workspacePackage = new URL(
     "../../apps/server/package.json",
@@ -405,6 +499,8 @@ function parseArguments(argv) {
   let config = null;
   let enableCodeAgentAt = null;
   let disableCodeAgentAt = null;
+  let disableForwardingAt = null;
+  let environment = null;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[index + 1];
@@ -413,6 +509,8 @@ function parseArguments(argv) {
     else if (flag === "--config") config = value;
     else if (flag === "--enable-code-agent-at") enableCodeAgentAt = value;
     else if (flag === "--disable-code-agent-at") disableCodeAgentAt = value;
+    else if (flag === "--disable-forwarding-at") disableForwardingAt = value;
+    else if (flag === "--environment") environment = value;
     else throw new Error(`unknown argument: ${flag}`);
     index += 1;
   }
@@ -421,7 +519,32 @@ function parseArguments(argv) {
   if (enableCodeAgentAt !== null && disableCodeAgentAt !== null) {
     throw new Error("enable and disable actions are mutually exclusive");
   }
-  return { database, config, enableCodeAgentAt, disableCodeAgentAt };
+  if (
+    disableForwardingAt !== null &&
+    (enableCodeAgentAt !== null || disableCodeAgentAt !== null)
+  ) {
+    throw new Error("forwarding and Code Agent changes are mutually exclusive");
+  }
+  const changesCodeAgent =
+    enableCodeAgentAt !== null || disableCodeAgentAt !== null;
+  const changesEnvironment = changesCodeAgent || disableForwardingAt !== null;
+  if (changesEnvironment && environment === null) {
+    throw new Error("--environment is required for delivery changes");
+  }
+  if (environment !== null && environment !== "dev" && environment !== "prod") {
+    throw new Error("--environment must be dev or prod");
+  }
+  if (!changesEnvironment && environment !== null) {
+    throw new Error("--environment is valid only for delivery changes");
+  }
+  return {
+    database,
+    config,
+    enableCodeAgentAt,
+    disableCodeAgentAt,
+    disableForwardingAt,
+    environment,
+  };
 }
 
 function isDirectExecution() {
@@ -442,6 +565,7 @@ async function runCli() {
         database,
         configuration,
         enabledAt: args.enableCodeAgentAt,
+        environment: args.environment,
       });
       process.stdout.write(
         `Code Agent destinations enabled at ${new Date(args.enableCodeAgentAt).toISOString()}.\n`,
@@ -453,23 +577,31 @@ async function runCli() {
         database,
         configuration,
         disabledAt: args.disableCodeAgentAt,
+        environment: args.environment,
       });
       process.stdout.write(
         `Code Agent destinations disabled at ${new Date(args.disableCodeAgentAt).toISOString()}.\n`,
       );
       return;
     }
-    const result = applyProjectConfiguration({
+    if (args.disableForwardingAt !== null) {
+      disableLegacyForwarding({
+        database,
+        configuration,
+        disabledAt: args.disableForwardingAt,
+        environment: args.environment,
+      });
+      process.stdout.write(
+        `Legacy forwarding disabled for ${args.environment} at ${new Date(args.disableForwardingAt).toISOString()}.\n`,
+      );
+      return;
+    }
+    applyAndWriteProjectConfiguration({
       database,
       configuration,
       createdAt: new Date().toISOString(),
+      writeOutput: (output) => writeFileSync(process.stdout.fd, output),
     });
-    process.stdout.write(
-      "Generated DSNs (only clear-text output; store them now):\n",
-    );
-    for (const entry of result.dsns) {
-      process.stdout.write(`${entry.id}=${entry.dsn}\n`);
-    }
   } finally {
     database.close();
   }
