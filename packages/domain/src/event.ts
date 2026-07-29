@@ -1,4 +1,4 @@
-import type { NormalizedEventInput } from "@intexura-error-hub/protocol";
+import type { NormalizedEventInput } from "@sentrybox/protocol";
 import { fingerprintEvent, type FingerprintResult } from "./fingerprint.js";
 
 export interface ScopedIssueInput {

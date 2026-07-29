@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import type { BuildOutboxInput } from "../public-app.js";
 import type { SecretStore } from "../secrets.js";
 import type { OutboxDraft } from "../storage/outbox-repository.js";

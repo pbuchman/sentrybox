@@ -1,5 +1,5 @@
 {
-  "name": "@intexura-error-hub/protocol",
+  "name": "@sentrybox/protocol",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -18,7 +18,7 @@
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint packages/protocol",
-    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/protocol",
+    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @sentrybox/protocol",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir packages/protocol/test/integration",
     "build": "pnpm --dir ../.. exec tsc --build packages/protocol/tsconfig.json"
   },

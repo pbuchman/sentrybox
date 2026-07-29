@@ -1,5 +1,5 @@
 {
-  "name": "@intexura-error-hub/web",
+  "name": "@sentrybox/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -23,7 +23,7 @@
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build apps/web/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint apps/web",
-    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/web",
+    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @sentrybox/web",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir apps/web/test/integration",
     "build": "pnpm --dir ../.. exec tsc --build apps/web/tsconfig.json && pnpm exec vite build",
     "dev": "pnpm exec vite",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedEventInput } from "@intexura-error-hub/protocol";
+import type { NormalizedEventInput } from "@sentrybox/protocol";
 import {
   fingerprintEvent,
   normalizeMessageTemplate,

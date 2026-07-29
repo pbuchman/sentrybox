@@ -1,6 +1,6 @@
 import { gzipSync, gunzipSync } from "node:zlib";
-import type { FingerprintResult } from "@intexura-error-hub/domain";
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { FingerprintResult } from "@sentrybox/domain";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import type { ErrorHubDatabase } from "./database.js";
 
 export interface EncodedNormalizedPayload {

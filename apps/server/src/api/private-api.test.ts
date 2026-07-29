@@ -1,5 +1,5 @@
 import { gunzipSync } from "node:zlib";
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrivateApp } from "../private-app.js";
 import { createOperationsContext } from "../operations.js";

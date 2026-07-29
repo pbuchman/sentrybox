@@ -265,9 +265,9 @@ function OperatorHeader({ state }: { readonly state: ListState | null }) {
     <header className="operator-header">
       <a className="brand" href="/">
         <span className="brand-mark" aria-hidden="true">
-          IH
+          SB
         </span>
-        <span>Intexura Error Hub</span>
+        <span>SentryBox</span>
       </a>
       <div className="header-evidence" aria-live="polite">
         <span>

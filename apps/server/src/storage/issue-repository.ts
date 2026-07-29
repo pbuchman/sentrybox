@@ -4,8 +4,8 @@ import {
   decideResolve,
   type FingerprintResult,
   type IssueSnapshot,
-} from "@intexura-error-hub/domain";
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+} from "@sentrybox/domain";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import type { ErrorHubDatabase } from "./database.js";
 import { EventRepository } from "./event-repository.js";
 import {

@@ -3,11 +3,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      "@intexura-error-hub/domain": new URL(
+      "@sentrybox/domain": new URL(
         "./packages/domain/src/index.ts",
         import.meta.url,
       ).pathname,
-      "@intexura-error-hub/protocol": new URL(
+      "@sentrybox/protocol": new URL(
         "./packages/protocol/src/index.ts",
         import.meta.url,
       ).pathname,
@@ -17,7 +17,7 @@ export default defineConfig({
     projects: [
       {
         test: {
-          name: "@intexura-error-hub/server",
+          name: "@sentrybox/server",
           include: [
             "apps/server/src/**/*.test.ts",
             "apps/server/test/**/*.test.ts",
@@ -26,7 +26,7 @@ export default defineConfig({
       },
       {
         test: {
-          name: "@intexura-error-hub/web",
+          name: "@sentrybox/web",
           include: [
             "apps/web/src/**/*.test.ts",
             "apps/web/src/**/*.test.tsx",
@@ -38,7 +38,7 @@ export default defineConfig({
       },
       {
         test: {
-          name: "@intexura-error-hub/domain",
+          name: "@sentrybox/domain",
           include: [
             "packages/domain/src/**/*.test.ts",
             "packages/domain/test/**/*.test.ts",
@@ -47,7 +47,7 @@ export default defineConfig({
       },
       {
         test: {
-          name: "@intexura-error-hub/protocol",
+          name: "@sentrybox/protocol",
           include: [
             "packages/protocol/src/**/*.test.ts",
             "packages/protocol/test/**/*.test.ts",

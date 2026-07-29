@@ -33,7 +33,7 @@ RUN sqlite_dir=/workspace/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/
   && /workspace/node_modules/.bin/node-gyp rebuild --release --force_build=1 --nodedir=/usr/local
 
 RUN pnpm build \
-  && pnpm --filter @intexura-error-hub/server deploy --legacy --prod /opt/error-hub \
+  && pnpm --filter @sentrybox/server deploy --legacy --prod /opt/error-hub \
   && rm -rf /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/prebuilds \
     /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build \
   && mkdir -p /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release \
@@ -46,7 +46,7 @@ RUN pnpm build \
     -name "*.test.js" -o -name "*.test.d.ts" -o -name "*.test.d.ts.map" \
     -o -name "*.d.ts" -o -name "*.d.ts.map" -o -name "*.js.map" \
     -o -name "tsconfig.tsbuildinfo" \) -delete \
-  && for package_dir in /opt/error-hub/node_modules/.pnpm/@intexura-error-hub+*/node_modules/@intexura-error-hub/*; do \
+  && for package_dir in /opt/error-hub/node_modules/.pnpm/@sentrybox+*/node_modules/@sentrybox/*; do \
     rm -rf "${package_dir}/src" "${package_dir}/test" "${package_dir}/tsconfig.json"; \
     find "${package_dir}/dist" -type f \( \
       -name "*.test.js" -o -name "*.d.ts" -o -name "*.d.ts.map" \

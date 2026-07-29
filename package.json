@@ -1,5 +1,5 @@
 {
-  "name": "intexura-error-hub",
+  "name": "sentrybox",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "test:ops": "node --test deploy/home-dev/*.test.mjs test/container/*.test.mjs test/ci/*.test.mjs",
     "test:dependency-contracts": "node --test test/dependencies/*.test.mjs",
     "test:integration": "pnpm -r run test:integration",
-    "build": "pnpm --filter @intexura-error-hub/domain build && pnpm --filter @intexura-error-hub/protocol build && pnpm --filter @intexura-error-hub/web build && pnpm --filter @intexura-error-hub/server build"
+    "build": "pnpm --filter @sentrybox/domain build && pnpm --filter @sentrybox/protocol build && pnpm --filter @sentrybox/web build && pnpm --filter @sentrybox/server build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",

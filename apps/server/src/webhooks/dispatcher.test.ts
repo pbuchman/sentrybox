@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FingerprintResult } from "@intexura-error-hub/domain";
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { FingerprintResult } from "@sentrybox/domain";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { IssueRepository } from "../storage/issue-repository.js";

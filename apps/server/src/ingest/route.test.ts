@@ -3,7 +3,7 @@ import { gzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
+import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@sentrybox/protocol";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { EventRepository } from "../storage/event-repository.js";
 import { IssueRepository } from "../storage/issue-repository.js";

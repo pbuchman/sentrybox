@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from "@intexura-error-hub/protocol";
+import type { NormalizedEvent } from "@sentrybox/protocol";
 import type { ErrorHubDatabase } from "../storage/database.js";
 import {
   EventRepository,

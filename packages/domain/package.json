@@ -1,5 +1,5 @@
 {
-  "name": "@intexura-error-hub/domain",
+  "name": "@sentrybox/domain",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "node": ">=22.13 <23"
   },
   "dependencies": {
-    "@intexura-error-hub/protocol": "workspace:*"
+    "@sentrybox/protocol": "workspace:*"
   },
   "exports": {
     ".": {
@@ -21,7 +21,7 @@
   "scripts": {
     "typecheck": "pnpm --dir ../.. exec tsc --build packages/domain/tsconfig.json",
     "lint": "pnpm --dir ../.. exec eslint packages/domain",
-    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/domain",
+    "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @sentrybox/domain",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir packages/domain/test/integration",
     "build": "pnpm --dir ../.. exec tsc --build packages/domain/tsconfig.json"
   }

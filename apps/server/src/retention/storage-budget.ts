@@ -1,4 +1,4 @@
-import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
+import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@sentrybox/protocol";
 
 export interface RetentionConfig {
   readonly eventAgeMs: number;

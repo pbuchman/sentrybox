@@ -4,7 +4,7 @@ import type {
   FastifyReply,
   FastifyRequest,
 } from "fastify";
-import { EnvelopeProtocolError } from "@intexura-error-hub/protocol";
+import { EnvelopeProtocolError } from "@sentrybox/protocol";
 
 export type SentryErrorStatus = 400 | 413 | 429 | 500 | 503;
 

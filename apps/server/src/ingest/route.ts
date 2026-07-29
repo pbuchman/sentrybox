@@ -1,12 +1,12 @@
 import { Readable } from "node:stream";
-import { fingerprintEvent } from "@intexura-error-hub/domain";
+import { fingerprintEvent } from "@sentrybox/domain";
 import {
   decompressEnvelope,
   normalizeEvent,
   parseEnvelope,
   type NormalizedEvent,
   type NormalizedEventInput,
-} from "@intexura-error-hub/protocol";
+} from "@sentrybox/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { PublicAppOptions, PublicIngestLimits } from "../public-app.js";
 import { SentryHttpError, sendSentryError } from "../http/sentry-errors.js";

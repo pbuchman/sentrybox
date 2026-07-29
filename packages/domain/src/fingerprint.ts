@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NormalizedEventInput } from "@intexura-error-hub/protocol";
+import type { NormalizedEventInput } from "@sentrybox/protocol";
 import { normalizeMessageTemplate } from "./message-normalization.js";
 
 export interface FingerprintResult {

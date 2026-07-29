@@ -149,6 +149,7 @@ describe("issue list", () => {
     expect(
       await screen.findByRole("heading", { name: /issues/i }),
     ).not.toBeNull();
+    expect(screen.getByRole("link", { name: "SentryBox" })).not.toBeNull();
     expect(screen.getByText("Shown 1 · Unresolved shown 1")).not.toBeNull();
     expect(screen.getByText(/Storage 1\.8 \/ 5 GiB/)).not.toBeNull();
     expect(screen.getByRole("link", { name: issue.title })).not.toBeNull();

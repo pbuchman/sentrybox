@@ -42,10 +42,10 @@ importers:
 
   apps/server:
     dependencies:
-      '@intexura-error-hub/domain':
+      '@sentrybox/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@intexura-error-hub/protocol':
+      '@sentrybox/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       better-sqlite3:
@@ -110,7 +110,7 @@ importers:
 
   packages/domain:
     dependencies:
-      '@intexura-error-hub/protocol':
+      '@sentrybox/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
