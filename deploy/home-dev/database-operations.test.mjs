@@ -176,15 +176,15 @@ test("synthetic public check uses an isolated non-production key, verifies persi
            id, project_id, title, status, occurrence_count
          ) VALUES (99, 1, ?, 'unresolved', 1)`,
       )
-      .run("Error Hub deployment health check");
+      .run("SentryBox deployment health check");
     current.database
       .prepare(
         `INSERT INTO events(
            id, event_id, issue_id, project_id, environment, release, level,
            title
          ) VALUES (99, ?, 99, 1, 'deployment-health',
-                   'error-hub-deployment-health', 'warn',
-                   'Error Hub deployment health check')`,
+                   'sentrybox-deployment-health', 'warn',
+                   'SentryBox deployment health check')`,
       )
       .run(context.eventId);
     current.database

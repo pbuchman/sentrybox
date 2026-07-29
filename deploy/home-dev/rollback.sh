@@ -24,7 +24,7 @@ if [[ -f "${error_hub_database}" ]]; then
   docker run --rm --interactive \
     --read-only \
     --tmpfs /tmp:size=16m,mode=1777 \
-    --label error-hub-check=rollback-integrity \
+    --label sentrybox-check=rollback-integrity \
     --mount "type=bind,src=${error_hub_data_directory},dst=/data,readonly" \
     --entrypoint node \
     "${previous_image}" \

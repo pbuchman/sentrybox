@@ -83,7 +83,7 @@ export type NormalizationResult =
   | { readonly accepted: true; readonly event: NormalizedEvent };
 
 const MAX_DIAGNOSTIC_STRING_BYTES = MAX_TAG_VALUE_BYTES;
-const DUMMY_URL_ORIGIN = "https://error-hub.invalid";
+const DUMMY_URL_ORIGIN = "https://sentrybox.invalid";
 const REQUEST_HEADERS = new Set([
   "content-type",
   "host",

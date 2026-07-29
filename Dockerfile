@@ -33,31 +33,31 @@ RUN sqlite_dir=/workspace/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/
   && /workspace/node_modules/.bin/node-gyp rebuild --release --force_build=1 --nodedir=/usr/local
 
 RUN pnpm build \
-  && pnpm --filter @sentrybox/server deploy --legacy --prod /opt/error-hub \
-  && rm -rf /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/prebuilds \
-    /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build \
-  && mkdir -p /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release \
+  && pnpm --filter @sentrybox/server deploy --legacy --prod /opt/sentrybox \
+  && rm -rf /opt/sentrybox/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/prebuilds \
+    /opt/sentrybox/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build \
+  && mkdir -p /opt/sentrybox/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release \
   && install -m 0555 \
     /workspace/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
-    /opt/error-hub/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
-  && rm -rf /opt/error-hub/src /opt/error-hub/test /opt/error-hub/dist/test \
-    /opt/error-hub/tsconfig.json \
-  && find /opt/error-hub/dist -type f \( \
+    /opt/sentrybox/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+  && rm -rf /opt/sentrybox/src /opt/sentrybox/test /opt/sentrybox/dist/test \
+    /opt/sentrybox/tsconfig.json \
+  && find /opt/sentrybox/dist -type f \( \
     -name "*.test.js" -o -name "*.test.d.ts" -o -name "*.test.d.ts.map" \
     -o -name "*.d.ts" -o -name "*.d.ts.map" -o -name "*.js.map" \
     -o -name "tsconfig.tsbuildinfo" \) -delete \
-  && for package_dir in /opt/error-hub/node_modules/.pnpm/@sentrybox+*/node_modules/@sentrybox/*; do \
+  && for package_dir in /opt/sentrybox/node_modules/.pnpm/@sentrybox+*/node_modules/@sentrybox/*; do \
     rm -rf "${package_dir}/src" "${package_dir}/test" "${package_dir}/tsconfig.json"; \
     find "${package_dir}/dist" -type f \( \
       -name "*.test.js" -o -name "*.d.ts" -o -name "*.d.ts.map" \
       -o -name "*.js.map" -o -name "tsconfig.tsbuildinfo" \) -delete; \
   done \
-  && mkdir -p /opt/error-hub/scripts/admin \
+  && mkdir -p /opt/sentrybox/scripts/admin \
   && install -m 0444 \
     /workspace/scripts/admin/generate-project-config.mjs \
     /workspace/scripts/admin/validate-project-config.mjs \
-    /opt/error-hub/scripts/admin/ \
-  && cp /workspace/LICENSE /opt/error-hub/LICENSE
+    /opt/sentrybox/scripts/admin/ \
+  && cp /workspace/LICENSE /opt/sentrybox/LICENSE
 
 FROM ${NODE_IMAGE} AS runtime
 
@@ -74,7 +74,7 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack 
   && chown 1000:1000 /data /run/config
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=1000:1000 /opt/error-hub/ ./
+COPY --from=builder --chown=1000:1000 /opt/sentrybox/ ./
 
 USER 1000:1000
 EXPOSE 8080 8081

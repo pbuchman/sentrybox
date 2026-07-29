@@ -16,6 +16,7 @@ fi
 
 readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/sentrybox"
 readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/sentrybox"
+readonly error_hub_deploy_credentials_directory="${error_hub_service_root}/deploy"
 readonly error_hub_environment_file="${error_hub_service_root}/env"
 readonly error_hub_data_directory="${error_hub_service_root}/data"
 readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
@@ -28,7 +29,9 @@ readonly error_hub_previous_state="${error_hub_state_directory}/previous.env"
 readonly error_hub_compose_file="${error_hub_checkout}/deploy/home-dev/compose.yaml"
 readonly error_hub_project_config="${error_hub_checkout}/deploy/home-dev/config.example.json"
 readonly error_hub_database_operations="${error_hub_checkout}/deploy/home-dev/database-operations.mjs"
-readonly error_hub_caddy_fragment="${error_hub_prefix}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+readonly error_hub_caddy_directory="${error_hub_prefix}/etc/caddy/Caddyfile.d"
+readonly error_hub_caddy_fragment="${error_hub_caddy_directory}/sentrybox.caddy"
+readonly error_hub_caddy_deploy_fragment="${error_hub_caddy_directory}/sentrybox-deploy.caddy"
 readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
 readonly error_hub_repository="pbuchman/sentrybox"
 readonly error_hub_workflow="Release SentryBox Image"
@@ -169,7 +172,7 @@ error_hub_synthetic_database_operation() {
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --tmpfs /tmp:size=16m,mode=1777 \
-    --label "error-hub-check=${eh_synthetic_command}" \
+    --label "sentrybox-check=${eh_synthetic_command}" \
     --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
     --mount "type=bind,src=${error_hub_state_directory},dst=/state" \
     --entrypoint node \

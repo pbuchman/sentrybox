@@ -100,42 +100,42 @@ export class ErrorHubMetrics {
     const lines: string[] = [];
     appendCounter(
       lines,
-      "error_hub_ingest_events_total",
+      "sentrybox_ingest_events_total",
       "outcome",
       this.#ingest,
     );
     lines.push(
-      "# TYPE error_hub_parse_duration_seconds summary",
-      `error_hub_parse_duration_seconds_count ${String(this.#parseDurationCount)}`,
-      `error_hub_parse_duration_seconds_sum ${metricNumber(this.#parseDurationSum)}`,
+      "# TYPE sentrybox_parse_duration_seconds summary",
+      `sentrybox_parse_duration_seconds_count ${String(this.#parseDurationCount)}`,
+      `sentrybox_parse_duration_seconds_sum ${metricNumber(this.#parseDurationSum)}`,
     );
-    appendCounter(lines, "error_hub_grouping_total", "outcome", this.#grouping);
+    appendCounter(lines, "sentrybox_grouping_total", "outcome", this.#grouping);
     lines.push(
-      "# TYPE error_hub_storage_physical_bytes gauge",
-      `error_hub_storage_physical_bytes ${metricNumber(snapshot.physicalUsage?.totalBytes ?? 0)}`,
-      "# TYPE error_hub_storage_logical_bytes gauge",
-      `error_hub_storage_logical_bytes ${metricNumber(snapshot.logicalPayloadBytes ?? 0)}`,
-      "# TYPE error_hub_oldest_event_timestamp_seconds gauge",
-      `error_hub_oldest_event_timestamp_seconds ${metricNumber(timestampSeconds(snapshot.oldestEventReceivedAt))}`,
+      "# TYPE sentrybox_storage_physical_bytes gauge",
+      `sentrybox_storage_physical_bytes ${metricNumber(snapshot.physicalUsage?.totalBytes ?? 0)}`,
+      "# TYPE sentrybox_storage_logical_bytes gauge",
+      `sentrybox_storage_logical_bytes ${metricNumber(snapshot.logicalPayloadBytes ?? 0)}`,
+      "# TYPE sentrybox_oldest_event_timestamp_seconds gauge",
+      `sentrybox_oldest_event_timestamp_seconds ${metricNumber(timestampSeconds(snapshot.oldestEventReceivedAt))}`,
     );
     appendCounter(
       lines,
-      "error_hub_retention_runs_total",
+      "sentrybox_retention_runs_total",
       "outcome",
       this.#retention,
     );
     appendCounter(
       lines,
-      "error_hub_retention_removed_events_total",
+      "sentrybox_retention_removed_events_total",
       "reason",
       this.#retentionRemoved,
     );
-    appendGauge(lines, "error_hub_outbox_deliveries", "state", outbox);
-    appendGauge(lines, "error_hub_webhook_redrives", "state", redrives);
-    appendCounter(lines, "error_hub_dispatch_total", "outcome", this.#dispatch);
+    appendGauge(lines, "sentrybox_outbox_deliveries", "state", outbox);
+    appendGauge(lines, "sentrybox_webhook_redrives", "state", redrives);
+    appendCounter(lines, "sentrybox_dispatch_total", "outcome", this.#dispatch);
     appendCounter(
       lines,
-      "error_hub_physical_monitor_samples_total",
+      "sentrybox_physical_monitor_samples_total",
       "outcome",
       this.#physicalMonitor,
     );

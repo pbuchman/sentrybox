@@ -32,10 +32,10 @@ setup() {
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy"
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox-deploy.caddy" \
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy"
   cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/database-operations.mjs"
-  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
-    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   printf '{ import Caddyfile.d/*.caddy }\n' >"${fixture_root}/etc/caddy/Caddyfile"
   printf 'LEGACY_SENTRY_DSN_BACKEND_DEV=redacted\n' \
     >"${fixture_root}/home/pbuchman/services/sentrybox/env"
@@ -292,9 +292,38 @@ EOF
   [ -f "${fixture_root}/home/pbuchman/services/sentrybox/env" ]
   [ -d "${fixture_root}/home/pbuchman/services/sentrybox/data" ]
   [ -d "${fixture_root}/home/pbuchman/services/sentrybox/backups" ]
+  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/deploy" ]
   [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/env")" = 600 ]
   [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/data")" = 700 ]
   [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/backups")" = 700 ]
+  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = 700 ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = '0:0' ]
+  run find "${fixture_root}/home/pbuchman/services/sentrybox/deploy" -mindepth 1 -print
+  [ "${status}" -eq 0 ]
+  [ -z "${output}" ]
+  [ -f "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy" ]
+  [ -f "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy" ]
+  [ "$(stat -c '%a' "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy")" = 644 ]
+  [ "$(stat -c '%a' "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy")" = 644 ]
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  cmp "${repository_root}/deploy/home-dev/caddy-sentrybox-deploy.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy"
+  [ -f "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
+  [ ! -e "${fixture_root}/etc/systemd/system/cloudflared.service" ]
+  run grep -F "caddy validate --config ${fixture_root}/etc/caddy/Caddyfile" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'systemctl reload caddy' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  caddy_validate_line="$(grep -n -F "caddy validate --config ${fixture_root}/etc/caddy/Caddyfile" \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  caddy_reload_line="$(grep -n -F 'systemctl reload caddy' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  [ "${caddy_validate_line}" -lt "${caddy_reload_line}" ]
+  run grep -E 'systemctl (enable|start).*sentrybox-deploy-webhook' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
@@ -389,7 +418,7 @@ EOF
   [ -f "${context_file}" ]
   run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  run grep -F 'error-hub-check=preflight-integrity' "${ERROR_HUB_COMMAND_LOG}"
+  run grep -F 'sentrybox-check=preflight-integrity' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
 
   unset ERROR_HUB_FAKE_SYNTHETIC_CLEANUP_FAIL
@@ -398,7 +427,7 @@ EOF
   [ "${status}" -eq 0 ]
   [ ! -e "${context_file}" ]
   cleanup_line="$(grep -n 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
-  preflight_line="$(grep -n 'error-hub-check=preflight-integrity' "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  preflight_line="$(grep -n 'sentrybox-check=preflight-integrity' "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
   [ -n "${cleanup_line}" ]
   [ -n "${preflight_line}" ]
   [ "${cleanup_line}" -lt "${preflight_line}" ]

@@ -72,7 +72,7 @@ export function registerExportRoutes(
       request.raw,
       reply,
       filteredBatchReader(database, parseFilters(request.query), batchSize),
-      "error-hub-export.ndjson.gz",
+      "sentrybox-export.ndjson.gz",
       options.onBatch,
     ),
   );

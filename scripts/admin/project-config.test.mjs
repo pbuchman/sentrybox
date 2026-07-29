@@ -275,6 +275,25 @@ test("duplicate generated keys abort the entire configuration transaction", () =
   database.close();
 });
 
+test("project configuration identifies missing SentryBox migrations", () => {
+  const database = openAdminDatabase(":memory:");
+  let generatedKey = 0;
+  try {
+    assert.throws(
+      () =>
+        applyProjectConfiguration({
+          database,
+          configuration: CONFIG,
+          createdAt: CREATED_AT,
+          randomBytes: () => Buffer.alloc(16, (generatedKey += 1)),
+        }),
+      /SentryBox database migrations must run/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("the CLI prints generated DSNs once and never reveals them on a retry", () => {
   const directory = mkdtempSync(join(tmpdir(), "error-hub-project-config-"));
   const databasePath = join(directory, "error-hub.sqlite");

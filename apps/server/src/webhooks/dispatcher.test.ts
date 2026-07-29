@@ -342,7 +342,7 @@ describe("webhook lifecycle and dispatch", () => {
         database,
         storage: new StorageSafetyState(DEFAULT_RETENTION_CONFIG),
       }),
-    ).toContain('error_hub_dispatch_total{outcome="dead_letter"} 3');
+    ).toContain('sentrybox_dispatch_total{outcome="dead_letter"} 3');
   });
 
   it("dispatches a bounded batch from a large all-normal due backlog", async () => {
@@ -705,7 +705,7 @@ describe("webhook lifecycle and dispatch", () => {
     const storage = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
 
     expect(metrics.render({ database, storage })).toContain(
-      'error_hub_dispatch_total{outcome="stale_lease"} 2',
+      'sentrybox_dispatch_total{outcome="stale_lease"} 2',
     );
   });
 

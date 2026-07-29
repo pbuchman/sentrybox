@@ -195,7 +195,7 @@ describe("physical safety monitor and unmeasured ingest headroom", () => {
         storage: operations.storageSafety,
       }),
     ).toContain(
-      'error_hub_physical_monitor_samples_total{outcome="failure"} 1',
+      'sentrybox_physical_monitor_samples_total{outcome="failure"} 1',
     );
 
     await expect(

@@ -83,11 +83,11 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.match(compose, /\/home\/pbuchman\/services\/sentrybox\/data:\/data/u);
   assert.match(
     compose,
-    /\/home\/pbuchman\/services\/sentrybox\/env:\/run\/secrets\/error-hub-env:ro/u,
+    /\/home\/pbuchman\/services\/sentrybox\/env:\/run\/secrets\/sentrybox-env:ro/u,
   );
   assert.match(
     compose,
-    /\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/config\.example\.json:\/run\/config\/error-hub-projects\.json:ro/u,
+    /\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/config\.example\.json:\/run\/config\/sentrybox-projects\.json:ro/u,
   );
   assert.doesNotMatch(compose, /^volumes:\s*$/mu);
   assert.doesNotMatch(compose, /\bdown\s+-v\b/u);
@@ -102,7 +102,12 @@ test("verification is bounded and never installs packages at runtime", async () 
   assert.match(verifier, /health\/live/u);
   assert.match(verifier, /health\/ready/u);
   assert.match(verifier, /--max-time/u);
-  assert.match(verifier, /\/tmp\/error-hub-write-test/u);
+  assert.match(verifier, /verify_container="sentrybox-verify-\$\$"/u);
+  assert.match(verifier, /verify\.sentrybox\.invalid:8443/u);
+  assert.match(verifier, /mktemp -d \/tmp\/sentrybox-container\.XXXXXX/u);
+  assert.match(verifier, /\/tmp\/sentrybox-write-test/u);
+  assert.match(verifier, /dst=\/run\/secrets\/sentrybox-env/u);
+  assert.match(verifier, /dst=\/run\/config\/sentrybox-projects\.json/u);
   assert.match(verifier, /\/etc\/ssl\/certs\/ca-certificates\.crt/u);
   assert.match(verifier, /docker inspect/u);
   assert.match(verifier, /docker stop/u);
@@ -113,4 +118,45 @@ test("verification is bounded and never installs packages at runtime", async () 
   assert.match(verifier, /Runtime image contains an unused package manager/u);
   assert.doesNotMatch(verifier, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
   assert.doesNotMatch(verifier, /\bdown\s+-v\b/u);
+});
+
+test("active runtime artifacts do not expose the retired product name", async () => {
+  const runtimeArtifacts = [
+    "Dockerfile",
+    "apps/server/src/api/exports.ts",
+    "apps/server/src/ingest/project-auth.ts",
+    "apps/server/src/ingest/route.ts",
+    "apps/server/src/main.ts",
+    "apps/server/src/metrics.ts",
+    "apps/server/src/runtime.ts",
+    "apps/server/src/static-ui.ts",
+    "apps/server/src/storage/database.ts",
+    "apps/web/src/main.tsx",
+    "deploy/home-dev/backup.sh",
+    "deploy/home-dev/common.sh",
+    "deploy/home-dev/compose.yaml",
+    "deploy/home-dev/database-operations.mjs",
+    "deploy/home-dev/deploy.sh",
+    "deploy/home-dev/preflight.sh",
+    "deploy/home-dev/rollback.sh",
+    "deploy/home-dev/verify-container.sh",
+    "packages/protocol/src/normalize.ts",
+    "scripts/admin/generate-project-config.mjs",
+  ];
+
+  for (const path of runtimeArtifacts) {
+    const contents = (await source(path)).replaceAll("error-hub.sqlite", "");
+    assert.doesNotMatch(
+      contents,
+      /Error Hub|error-hub/iu,
+      `${path} contains an active retired product identifier`,
+    );
+    if (path === "apps/server/src/metrics.ts") {
+      assert.doesNotMatch(
+        contents,
+        /error_hub/iu,
+        `${path} exposes the retired Prometheus namespace`,
+      );
+    }
+  }
 });

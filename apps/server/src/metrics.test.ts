@@ -64,29 +64,30 @@ describe("ErrorHubMetrics", () => {
     const rendered = metrics.render({ database, storage });
 
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="accepted"} 2',
+      'sentrybox_ingest_events_total{outcome="accepted"} 2',
     );
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="discarded"} 1',
+      'sentrybox_ingest_events_total{outcome="discarded"} 1',
     );
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="rejected"} 1',
+      'sentrybox_ingest_events_total{outcome="rejected"} 1',
     );
     expect(rendered).toContain(
-      'error_hub_grouping_total{outcome="duplicate"} 1',
+      'sentrybox_grouping_total{outcome="duplicate"} 1',
     );
     expect(rendered).toContain(
-      'error_hub_retention_removed_events_total{reason="age"} 2',
+      'sentrybox_retention_removed_events_total{reason="age"} 2',
     );
     expect(rendered).toContain(
-      'error_hub_retention_removed_events_total{reason="budget"} 3',
+      'sentrybox_retention_removed_events_total{reason="budget"} 3',
     );
     expect(rendered).toContain(
-      'error_hub_dispatch_total{outcome="stale_lease"} 1',
+      'sentrybox_dispatch_total{outcome="stale_lease"} 1',
     );
-    expect(rendered).toContain("error_hub_parse_duration_seconds_count 1");
-    expect(rendered).toContain("error_hub_storage_physical_bytes 135");
-    expect(rendered).toContain("error_hub_storage_logical_bytes 321");
+    expect(rendered).toContain("sentrybox_parse_duration_seconds_count 1");
+    expect(rendered).toContain("sentrybox_storage_physical_bytes 135");
+    expect(rendered).toContain("sentrybox_storage_logical_bytes 321");
+    expect(rendered).not.toContain("error_hub_");
   });
 
   it("renders only the documented finite label sets and valid escaped Prometheus text", () => {

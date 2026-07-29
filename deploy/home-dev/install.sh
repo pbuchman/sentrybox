@@ -58,6 +58,7 @@ chown "${runtime_uid}:${runtime_gid}" \
   "${error_hub_environment_file}" \
   "${error_hub_data_directory}" \
   "${error_hub_backup_directory}"
+install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 
 install -d -m 0700 "${error_hub_state_directory}"
 private_origin_file="${error_hub_state_directory}/private-origin"
@@ -67,9 +68,17 @@ mv -f "${private_origin_file}.tmp.$$" "${private_origin_file}"
 
 readonly systemd_directory="${error_hub_prefix}/etc/systemd/system"
 install -d -m 0755 "${systemd_directory}"
+install -d -m 0755 "${error_hub_caddy_directory}"
+install -m 0644 \
+  "${script_directory}/caddy-sentrybox.caddy" \
+  "${error_hub_caddy_fragment}"
+install -m 0644 \
+  "${script_directory}/caddy-sentrybox-deploy.caddy" \
+  "${error_hub_caddy_deploy_fragment}"
 for unit in \
   sentrybox.service \
   sentrybox-deploy.service \
+  sentrybox-deploy-webhook.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
   sentrybox-restore-test.service \
@@ -82,5 +91,8 @@ systemctl enable \
   sentrybox.service \
   sentrybox-backup.timer \
   sentrybox-restore-test.timer >/dev/null
+
+caddy validate --config "${error_hub_caddy_config}" >/dev/null
+systemctl reload caddy
 
 printf 'SentryBox Home Dev service assets installed.\n'

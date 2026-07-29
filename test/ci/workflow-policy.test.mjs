@@ -150,6 +150,37 @@ test("CI executes the Home Dev network contract with pinned Caddy", async () => 
   assert.doesNotMatch(routeVerifier, /caddy:latest/u);
 });
 
+test("CI and release isolate Alpine deploy tests and run network contracts on the host", async () => {
+  for (const path of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/release-image.yml",
+  ]) {
+    const workflow = await source(path);
+    assert.match(workflow, /sudo apt-get install --yes bats shellcheck/u);
+    assert.match(
+      workflow,
+      /shellcheck deploy\/home-dev\/configure-tailscale\.sh/u,
+    );
+    assert.match(
+      workflow,
+      /bats deploy\/home-dev\/test\/network-contract\.bats/u,
+    );
+    assert.match(
+      workflow,
+      /shellcheck deploy\/home-dev\/configure-tailscale\.sh deploy\/home-dev\/verify-container\.sh deploy\/home-dev\/test\/verify-caddy-routes\.sh deploy\/home-dev\/test\/read-http-request\.sh/u,
+    );
+    assert.match(
+      workflow,
+      /-c 'apk add --no-cache jq >\/dev\/null && bats deploy\/home-dev\/test\/deploy\.bats'/u,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /\bbats deploy\/home-dev\/test(?=$|['"\s])/mu,
+      `${path} executes the complete Bats directory inside Alpine`,
+    );
+  }
+});
+
 test("main-only release publishes one immutable SentryBox amd64 tag with attestations", async () => {
   const workflow = await source(".github/workflows/release-image.yml");
 

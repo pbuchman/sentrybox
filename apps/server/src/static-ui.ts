@@ -46,7 +46,7 @@ export function registerStaticUi(
 function decodedPathname(request: FastifyRequest): string | null {
   try {
     return decodeURIComponent(
-      new URL(request.raw.url ?? "", "http://error-hub.invalid").pathname,
+      new URL(request.raw.url ?? "", "http://sentrybox.invalid").pathname,
     );
   } catch {
     return null;

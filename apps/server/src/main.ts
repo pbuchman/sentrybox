@@ -109,7 +109,7 @@ function isDirectExecution(): boolean {
 if (isDirectExecution()) {
   void runMain().catch((error: unknown) => {
     process.stderr.write(
-      `${error instanceof Error ? error.message : "Error Hub startup failed"}\n`,
+      `${error instanceof Error ? error.message : "SentryBox startup failed"}\n`,
     );
     process.exitCode = 1;
   });

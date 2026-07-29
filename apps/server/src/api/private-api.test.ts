@@ -858,9 +858,9 @@ describe("private operator API", () => {
     const metrics = await privateGet("/metrics");
     expect(metrics.statusCode).toBe(200);
     expect(metrics.headers["content-type"]).toContain("text/plain");
-    expect(metrics.body).toContain("error_hub_storage_physical_bytes 135");
+    expect(metrics.body).toContain("sentrybox_storage_physical_bytes 135");
     expect(metrics.body).toContain(
-      'error_hub_outbox_deliveries{state="dead_letter"} 1',
+      'sentrybox_outbox_deliveries{state="dead_letter"} 1',
     );
 
     expect((await privateGet("/health/live")).json()).toEqual({ status: "ok" });

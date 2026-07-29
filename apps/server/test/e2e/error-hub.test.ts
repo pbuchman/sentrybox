@@ -427,6 +427,9 @@ describe("Error Hub real-network end to end", () => {
         runtime,
         "/api/export?release=fixture-node%401.1.0",
       );
+      expect(exported.headers.get("content-disposition")).toContain(
+        "filename=sentrybox-export.ndjson.gz",
+      );
       const exportedEvents = parseGzipNdjson(await exported.arrayBuffer());
       expect(exportedEvents).toEqual([
         expect.objectContaining({ id: nodeSecondId }),

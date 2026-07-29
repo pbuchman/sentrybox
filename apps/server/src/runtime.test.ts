@@ -170,7 +170,7 @@ describe("Error Hub runtime", () => {
     expect(statusText).not.toContain(failureSecret);
     const metrics = await runtimePrivateRequest(runtime, "/metrics");
     expect(await metrics.text()).toContain(
-      'error_hub_physical_monitor_samples_total{outcome="failure"}',
+      'sentrybox_physical_monitor_samples_total{outcome="failure"}',
     );
     const endpoint = new URL(
       `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`,

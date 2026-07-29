@@ -448,7 +448,7 @@ function assertConfigurationSchema(database) {
       .get(table);
     if (row === undefined) {
       throw new Error(
-        "Error Hub database migrations must run before project configuration",
+        "SentryBox database migrations must run before project configuration",
       );
     }
   }

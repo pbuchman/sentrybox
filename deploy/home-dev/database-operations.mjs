@@ -10,8 +10,8 @@ const Database = require("better-sqlite3");
 
 const SYNTHETIC_ENVIRONMENT = "deployment-health";
 const SYNTHETIC_ORIGIN = "https://deployment-health.invalid";
-const SYNTHETIC_RELEASE = "error-hub-deployment-health";
-const SYNTHETIC_TITLE = "Error Hub deployment health check";
+const SYNTHETIC_RELEASE = "sentrybox-deployment-health";
+const SYNTHETIC_TITLE = "SentryBox deployment health check";
 
 export function validatePreflightDatabase(filename) {
   const database = openReadonly(filename);

@@ -915,16 +915,16 @@ describe("public Sentry envelope ingest", () => {
     });
 
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="accepted"} 1',
+      'sentrybox_ingest_events_total{outcome="accepted"} 1',
     );
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="discarded"} 1',
+      'sentrybox_ingest_events_total{outcome="discarded"} 1',
     );
     expect(rendered).toContain(
-      'error_hub_ingest_events_total{outcome="rejected"} 1',
+      'sentrybox_ingest_events_total{outcome="rejected"} 1',
     );
-    expect(rendered).toContain('error_hub_grouping_total{outcome="created"} 1');
-    expect(rendered).toContain("error_hub_parse_duration_seconds_count 2");
+    expect(rendered).toContain('sentrybox_grouping_total{outcome="created"} 1');
+    expect(rendered).toContain("sentrybox_parse_duration_seconds_count 2");
   });
 
   it("returns 503 only when storage safety marks ingest unavailable", async () => {

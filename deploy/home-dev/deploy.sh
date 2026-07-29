@@ -230,7 +230,7 @@ if (( had_previous == 1 )) && [[ -f "${error_hub_database}" ]]; then
     --user 0:0 \
     --read-only \
     --tmpfs /tmp:size=16m,mode=1777 \
-    --label error-hub-check=compatibility-new \
+    --label sentrybox-check=compatibility-new \
     --mount "type=bind,src=${error_hub_state_directory},dst=/probe" \
     --entrypoint node \
     "${resolved_image}" \
@@ -240,7 +240,7 @@ if (( had_previous == 1 )) && [[ -f "${error_hub_database}" ]]; then
     --user 0:0 \
     --read-only \
     --tmpfs /tmp:size=16m,mode=1777 \
-    --label error-hub-check=compatibility-previous \
+    --label sentrybox-check=compatibility-previous \
     --mount "type=bind,src=${error_hub_state_directory},dst=/probe" \
     --entrypoint node \
     "${previous_image}" \

@@ -15,7 +15,7 @@ export function authenticateProject(
   ) {
     return null;
   }
-  const url = new URL(request.raw.url ?? "", "http://error-hub.invalid");
+  const url = new URL(request.raw.url ?? "", "http://sentrybox.invalid");
   const queryKeys = url.searchParams.getAll("sentry_key");
   if (queryKeys.length > 1) {
     return null;

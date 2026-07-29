@@ -41,7 +41,7 @@ trap 'rm -f "${temporary_backup}"' EXIT
 docker run --rm --interactive \
   --read-only \
   --tmpfs /tmp:size=32m,mode=1777 \
-  --label error-hub-check=online-backup \
+  --label sentrybox-check=online-backup \
   --mount "type=bind,src=${error_hub_data_directory},dst=/data,readonly" \
   --mount "type=bind,src=${error_hub_backup_directory},dst=/backup" \
   --entrypoint node \

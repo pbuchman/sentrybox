@@ -8,14 +8,14 @@ verify_uid="$(id -u)"
 readonly verify_uid
 verify_gid="$(id -g)"
 readonly verify_gid
-readonly verify_container="error-hub-verify-$$"
-readonly verify_private_host="verify.error-hub.invalid:8443"
-verify_temp="$(mktemp -d /tmp/error-hub-container.XXXXXX)"
+readonly verify_container="sentrybox-verify-$$"
+readonly verify_private_host="verify.sentrybox.invalid:8443"
+verify_temp="$(mktemp -d /tmp/sentrybox-container.XXXXXX)"
 
 cleanup() {
   docker rm --force "${verify_container}" >/dev/null 2>&1 || true
   case "${verify_temp}" in
-    /tmp/error-hub-container.*) rm -rf -- "${verify_temp}" ;;
+    /tmp/sentrybox-container.*) rm -rf -- "${verify_temp}" ;;
     *) printf 'Refusing to remove unexpected path: %s\n' "${verify_temp}" >&2 ;;
   esac
 }
@@ -59,10 +59,10 @@ docker run --detach \
   --publish 127.0.0.1::8080 \
   --publish 127.0.0.1::8081 \
   --mount "type=bind,src=${verify_temp}/data,dst=/data" \
-  --mount "type=bind,src=${verify_temp}/env,dst=/run/secrets/error-hub-env,readonly" \
-  --mount "type=bind,src=${verify_root}/deploy/home-dev/config.example.json,dst=/run/config/error-hub-projects.json,readonly" \
+  --mount "type=bind,src=${verify_temp}/env,dst=/run/secrets/sentrybox-env,readonly" \
+  --mount "type=bind,src=${verify_root}/deploy/home-dev/config.example.json,dst=/run/config/sentrybox-projects.json,readonly" \
   --env ERROR_HUB_DATABASE_PATH=/data/error-hub.sqlite \
-  --env ERROR_HUB_ENV_FILE=/run/secrets/error-hub-env \
+  --env ERROR_HUB_ENV_FILE=/run/secrets/sentrybox-env \
   --env ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
   --env ERROR_HUB_PUBLIC_HOST=0.0.0.0 \
   --env ERROR_HUB_PUBLIC_PORT=8080 \
@@ -115,7 +115,7 @@ if docker exec "${verify_container}" touch /root-filesystem-must-be-read-only 2>
   exit 1
 fi
 if ! docker exec "${verify_container}" sh -c \
-  'probe=/tmp/error-hub-write-test; : >"${probe}" && rm "${probe}"'; then
+  'probe=/tmp/sentrybox-write-test; : >"${probe}" && rm "${probe}"'; then
   printf 'Container tmpfs is not writable.\n' >&2
   exit 1
 fi
@@ -130,7 +130,7 @@ if docker exec "${verify_container}" sh -c \
 fi
 if ! docker exec "${verify_container}" node \
   scripts/admin/validate-project-config.mjs \
-  --config /run/config/error-hub-projects.json >/dev/null; then
+  --config /run/config/sentrybox-projects.json >/dev/null; then
   printf 'Runtime project configuration validator failed.\n' >&2
   exit 1
 fi

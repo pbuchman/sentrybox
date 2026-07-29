@@ -442,7 +442,7 @@ function applyCors(
 }
 
 function requestSentryClient(request: FastifyRequest): string | null {
-  const url = new URL(request.raw.url ?? "", "http://error-hub.invalid");
+  const url = new URL(request.raw.url ?? "", "http://sentrybox.invalid");
   return url.searchParams.get("sentry_client");
 }
 

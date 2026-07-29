@@ -7,7 +7,7 @@ services:
     init: true
     environment:
       ERROR_HUB_DATABASE_PATH: /data/error-hub.sqlite
-      ERROR_HUB_ENV_FILE: /run/secrets/error-hub-env
+      ERROR_HUB_ENV_FILE: /run/secrets/sentrybox-env
       ERROR_HUB_PRIVATE_ORIGIN: "${ERROR_HUB_PRIVATE_ORIGIN:?private origin required}"
       ERROR_HUB_PUBLIC_HOST: "0.0.0.0"
       ERROR_HUB_PUBLIC_PORT: "8080"
@@ -27,8 +27,8 @@ services:
       - no-new-privileges:true
     volumes:
       - /home/pbuchman/services/sentrybox/data:/data
-      - /home/pbuchman/services/sentrybox/env:/run/secrets/error-hub-env:ro
-      - /home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json:/run/config/error-hub-projects.json:ro
+      - /home/pbuchman/services/sentrybox/env:/run/secrets/sentrybox-env:ro
+      - /home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json:/run/config/sentrybox-projects.json:ro
     pids_limit: 128
     mem_limit: 512m
     restart: unless-stopped

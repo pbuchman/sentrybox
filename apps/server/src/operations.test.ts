@@ -172,21 +172,22 @@ describe("shared operations composition", () => {
       })
     ).body;
     expect(metrics).toContain(
-      `error_hub_storage_physical_bytes ${String(DEFAULT_RETENTION_CONFIG.physicalCriticalBytes)}`,
+      `sentrybox_storage_physical_bytes ${String(DEFAULT_RETENTION_CONFIG.physicalCriticalBytes)}`,
     );
     expect(metrics).toContain(
-      'error_hub_ingest_events_total{outcome="accepted"} 1',
+      'sentrybox_ingest_events_total{outcome="accepted"} 1',
     );
     expect(metrics).toContain(
-      'error_hub_ingest_events_total{outcome="discarded"} 1',
+      'sentrybox_ingest_events_total{outcome="discarded"} 1',
     );
     expect(metrics).toContain(
-      'error_hub_ingest_events_total{outcome="rejected"} 1',
+      'sentrybox_ingest_events_total{outcome="rejected"} 1',
     );
-    expect(metrics).toContain('error_hub_grouping_total{outcome="created"} 1');
+    expect(metrics).toContain('sentrybox_grouping_total{outcome="created"} 1');
     expect(metrics).toContain(
-      'error_hub_dispatch_total{outcome="delivered"} 1',
+      'sentrybox_dispatch_total{outcome="delivered"} 1',
     );
+    expect(metrics).not.toContain("error_hub_");
   });
 
   it("uses one tiny retention config for hysteresis, hard limits, admission, and private status", async () => {

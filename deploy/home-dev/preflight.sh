@@ -64,7 +64,7 @@ rm -f "${container_write_probe}"
 docker run --rm --interactive \
   --read-only \
   --tmpfs /tmp:size=16m,mode=1777 \
-  --label error-hub-check=runtime-write \
+  --label sentrybox-check=runtime-write \
   --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
   --entrypoint node \
   "${candidate_image}" \
@@ -86,7 +86,7 @@ if [[ -f "${error_hub_database}" ]]; then
   docker run --rm --interactive \
     --read-only \
     --tmpfs /tmp:size=16m,mode=1777 \
-    --label error-hub-check=preflight-integrity \
+    --label sentrybox-check=preflight-integrity \
     --mount "type=bind,src=${error_hub_data_directory},dst=/data,readonly" \
     --entrypoint node \
     "${candidate_image}" \

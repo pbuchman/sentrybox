@@ -275,7 +275,7 @@ export interface RuntimeShutdownActions {
 
 export class RuntimeShutdownError extends AggregateError {
   public constructor(errors: readonly Error[]) {
-    super(errors, "Error Hub shutdown did not complete cleanly");
+    super(errors, "SentryBox shutdown did not complete cleanly");
     this.name = "RuntimeShutdownError";
   }
 }

@@ -46,6 +46,9 @@ describe("bounded runtime shutdown", () => {
     );
 
     expect(rejection).toBeInstanceOf(RuntimeShutdownError);
+    expect((rejection as RuntimeShutdownError).message).toBe(
+      "SentryBox shutdown did not complete cleanly",
+    );
     expect((rejection as RuntimeShutdownError).errors).toHaveLength(10);
     expect(calls).toEqual([
       "public",
