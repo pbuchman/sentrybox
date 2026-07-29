@@ -19,6 +19,10 @@ export interface ShadowForwarder {
   enqueue(request: ShadowForwardRequest): ShadowEnqueueResult;
 }
 
+export interface DrainableShadowForwarder extends ShadowForwarder {
+  drain(): Promise<void>;
+}
+
 export interface ShadowHttpRequest {
   readonly url: URL;
   readonly headers: Readonly<Record<string, string>>;
@@ -66,16 +70,17 @@ interface PendingForward {
 
 export function createShadowForwarder(
   options: CreateShadowForwarderOptions,
-): ShadowForwarder {
+): DrainableShadowForwarder {
   return new BoundedShadowForwarder(options);
 }
 
-class BoundedShadowForwarder implements ShadowForwarder {
+class BoundedShadowForwarder implements DrainableShadowForwarder {
   readonly #pending: PendingForward[] = [];
   readonly #send: (request: ShadowHttpRequest) => Promise<ShadowHttpResponse>;
   readonly #now: () => number;
   #active = 0;
   #pumpScheduled = false;
+  readonly #drainWaiters: Array<() => void> = [];
 
   public constructor(private readonly options: CreateShadowForwarderOptions) {
     assertPositiveInteger(options.queueCapacity, "shadow queue capacity");
@@ -139,6 +144,15 @@ class BoundedShadowForwarder implements ShadowForwarder {
     return "queued";
   }
 
+  public drain(): Promise<void> {
+    if (this.#active === 0 && this.#pending.length === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.#drainWaiters.push(resolve);
+    });
+  }
+
   private schedulePump(): void {
     if (this.#pumpScheduled) return;
     this.#pumpScheduled = true;
@@ -183,6 +197,9 @@ class BoundedShadowForwarder implements ShadowForwarder {
       });
       this.#active -= 1;
       this.pump();
+      if (this.#active === 0 && this.#pending.length === 0) {
+        for (const resolve of this.#drainWaiters.splice(0)) resolve();
+      }
     }
   }
 

@@ -180,6 +180,35 @@ describe("bounded migration shadow forwarder", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("drains queued and active forwarding work before runtime shutdown", async () => {
+    let releaseSend: (() => void) | undefined;
+    const pendingSend = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const forwarder = createShadowForwarder({
+      secretResolver: secretResolver({ LEGACY_DEV_DSN }),
+      send: async () => {
+        await pendingSend;
+        return { statusCode: 204 };
+      },
+      queueCapacity: 2,
+      concurrency: 1,
+    });
+    const request = shadowRequest(verifiedKey("dev", "LEGACY_DEV_DSN"), "dev");
+    expect(forwarder.enqueue(request)).toBe("queued");
+    expect(forwarder.enqueue(request)).toBe("queued");
+    let drained = false;
+    const drain = forwarder.drain().then(() => {
+      drained = true;
+    });
+    await flushTasks();
+    expect(drained).toBe(false);
+
+    releaseSend?.();
+    await drain;
+    await expect(forwarder.drain()).resolves.toBeUndefined();
+  });
+
   it("counts network and non-2xx failures once without retry or payload disclosure", async () => {
     const networkSend = vi.fn(async () => {
       throw new Error("network unavailable");

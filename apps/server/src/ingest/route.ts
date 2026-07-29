@@ -197,6 +197,24 @@ export function registerIngestRoute(
           ),
         );
       }
+      const admittedEvents = prepared.events.filter(
+        (preparedEvent) => preparedEvent.event !== null,
+      ).length;
+      const reservation =
+        admittedEvents === 0
+          ? null
+          : options.operations.storageSafety.reserveIngest(admittedEvents);
+      if (admittedEvents > 0 && reservation === null) {
+        return sendSentryError(
+          reply,
+          new SentryHttpError(
+            503,
+            "Ingest storage is temporarily unavailable.",
+            limits.retryAfterSeconds,
+          ),
+        );
+      }
+      let persistedEvents = 0;
       try {
         for (const preparedEvent of prepared.events) {
           if (preparedEvent.event === null) continue;
@@ -215,11 +233,13 @@ export function registerIngestRoute(
           });
           options.operations.metrics.recordIngest("accepted");
           options.operations.metrics.recordGrouping(result);
+          if (!result.duplicate) persistedEvents += 1;
         }
         for (let index = 0; index < prepared.discarded; index += 1) {
           options.operations.metrics.recordIngest("discarded");
         }
       } catch {
+        reservation?.release(admittedEvents - persistedEvents);
         return sendSentryError(
           reply,
           new SentryHttpError(
@@ -229,6 +249,7 @@ export function registerIngestRoute(
           ),
         );
       }
+      reservation?.release(admittedEvents - persistedEvents);
 
       const eventEnvironment = prepared.events[0]?.environment;
       if (

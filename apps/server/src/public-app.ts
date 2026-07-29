@@ -38,7 +38,7 @@ export interface BuildOutboxInput {
 export interface PublicAppOptions {
   readonly database: ErrorHubDatabase;
   readonly operations: OperationsContext;
-  readonly shadowForwarder: ShadowForwarder;
+  readonly shadowForwarder: Pick<ShadowForwarder, "enqueue">;
   readonly buildOutbox: (input: BuildOutboxInput) => OutboxDraft;
   readonly now?: () => Date;
   readonly monotonicNow?: () => number;

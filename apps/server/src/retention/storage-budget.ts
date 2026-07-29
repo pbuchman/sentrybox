@@ -45,10 +45,15 @@ export interface StorageSafetySnapshot {
   readonly physicalUsage: PhysicalStorageUsage | null;
   readonly logicalPayloadBytes: number | null;
   readonly oldestEventReceivedAt: string | null;
+  readonly unmeasuredIngestBytes: number;
   readonly removedEvents: {
     readonly age: number;
     readonly budget: number;
   };
+}
+
+export interface IngestStorageReservation {
+  release(unusedUnits?: number): void;
 }
 
 export class StorageSafetyState {
@@ -62,8 +67,10 @@ export class StorageSafetyState {
     physicalUsage: null,
     logicalPayloadBytes: null,
     oldestEventReceivedAt: null,
+    unmeasuredIngestBytes: 0,
     removedEvents: { age: 0, budget: 0 },
   };
+  #reservationEpoch = 0;
 
   public constructor(config: RetentionConfig = DEFAULT_RETENTION_CONFIG) {
     this.#config = validateRetentionConfig(config);
@@ -105,6 +112,7 @@ export class StorageSafetyState {
       throw new TypeError("oldest event timestamp must be valid");
     }
     const observedSafety = classifyStorage(this.#config, physical, logical);
+    this.#reservationEpoch += 1;
     const publishObservedSafety =
       observedSafety === "critical" || this.#snapshot.retentionKnownSuccessful;
     this.#snapshot = {
@@ -117,6 +125,52 @@ export class StorageSafetyState {
       physicalUsage: physical,
       logicalPayloadBytes: logical,
       oldestEventReceivedAt,
+      unmeasuredIngestBytes: 0,
+    };
+  }
+
+  public reserveIngest(units = 1): IngestStorageReservation | null {
+    if (!Number.isSafeInteger(units) || units <= 0) {
+      throw new TypeError("ingest reservation units must be positive");
+    }
+    const reservationBytes = this.reservationBytes(units);
+    if (!this.canReserve(reservationBytes)) {
+      this.#snapshot = { ...this.#snapshot, acceptingIngest: false };
+      return null;
+    }
+    const epoch = this.#reservationEpoch;
+    this.#snapshot = {
+      ...this.#snapshot,
+      unmeasuredIngestBytes:
+        this.#snapshot.unmeasuredIngestBytes + reservationBytes,
+    };
+    this.#snapshot = {
+      ...this.#snapshot,
+      acceptingIngest: this.canReserve(this.reservationBytes(1)),
+    };
+    let releasableUnits = units;
+    return {
+      release: (unusedUnits = releasableUnits): void => {
+        if (
+          !Number.isSafeInteger(unusedUnits) ||
+          unusedUnits < 0 ||
+          unusedUnits > releasableUnits
+        ) {
+          throw new TypeError("unused ingest reservation units are invalid");
+        }
+        releasableUnits -= unusedUnits;
+        if (this.#reservationEpoch !== epoch || unusedUnits === 0) return;
+        this.#snapshot = {
+          ...this.#snapshot,
+          unmeasuredIngestBytes:
+            this.#snapshot.unmeasuredIngestBytes -
+            this.reservationBytes(unusedUnits),
+        };
+        this.#snapshot = {
+          ...this.#snapshot,
+          acceptingIngest: this.canReserve(this.reservationBytes(1)),
+        };
+      },
     };
   }
 
@@ -178,6 +232,35 @@ export class StorageSafetyState {
       lastRun: validDate(completedAt, "retention failure").toISOString(),
       lastFailure: reason,
     };
+  }
+
+  private reservationBytes(units: number): number {
+    const bytes =
+      (this.#config.physicalTotalBytes - this.#config.physicalCriticalBytes) *
+      units;
+    if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+      throw new RangeError("ingest reservation bytes exceed the safe range");
+    }
+    return bytes;
+  }
+
+  private canReserve(bytes: number): boolean {
+    const physical = this.#snapshot.physicalUsage;
+    const logical = this.#snapshot.logicalPayloadBytes;
+    if (
+      !this.#snapshot.retentionKnownSuccessful ||
+      physical === null ||
+      logical === null ||
+      logical > this.#config.logicalHighBytes
+    ) {
+      return false;
+    }
+    return (
+      physical.totalBytes + this.#snapshot.unmeasuredIngestBytes + bytes <
+        this.#config.physicalCriticalBytes &&
+      physical.freeBytes - this.#snapshot.unmeasuredIngestBytes - bytes >=
+        this.#config.minimumFreeBytes
+    );
   }
 }
 

@@ -14,7 +14,7 @@
     "lint": "pnpm -r run lint",
     "test": "pnpm -r run test",
     "test:integration": "pnpm -r run test:integration",
-    "build": "pnpm -r run build"
+    "build": "pnpm --filter @intexura-error-hub/domain build && pnpm --filter @intexura-error-hub/protocol build && pnpm --filter @intexura-error-hub/web build && pnpm --filter @intexura-error-hub/server build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",

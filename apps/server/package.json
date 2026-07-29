@@ -25,7 +25,10 @@
     "lint": "pnpm --dir ../.. exec eslint apps/server",
     "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project @intexura-error-hub/server",
     "test:integration": "pnpm --dir ../.. exec vitest run --passWithNoTests --dir apps/server/test/integration",
-    "build": "pnpm --dir ../.. exec tsc --build apps/server/tsconfig.json && pnpm run copy:storage-assets",
-    "copy:storage-assets": "mkdir -p dist/src/storage/migrations && cp src/storage/migrations/*.sql dist/src/storage/migrations/"
+    "build": "pnpm --dir ../.. exec tsc --build apps/server/tsconfig.json && pnpm run copy:runtime-assets",
+    "copy:runtime-assets": "pnpm run copy:storage-assets && pnpm run copy:private-ui",
+    "copy:storage-assets": "mkdir -p dist/src/storage/migrations && cp src/storage/migrations/*.sql dist/src/storage/migrations/",
+    "copy:private-ui": "test -f ../web/dist/index.html && rm -rf dist/private-ui && cp -R ../web/dist dist/private-ui",
+    "start": "node dist/src/main.js"
   }
 }

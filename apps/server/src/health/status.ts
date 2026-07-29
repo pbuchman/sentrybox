@@ -112,6 +112,7 @@ export class HealthStatusService {
         logicalTargetBytes: this.#config.logicalTargetBytes,
         physicalCriticalBytes: this.#config.physicalCriticalBytes,
         minimumFreeBytes: this.#config.minimumFreeBytes,
+        unmeasuredIngestBytes: snapshot.unmeasuredIngestBytes,
         safety: snapshot.safety,
       },
       retention: {
