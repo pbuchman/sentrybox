@@ -166,6 +166,37 @@ describe("issue list", () => {
     expect(window.location.search).toBe("?status=unresolved");
   });
 
+  it("keeps the loading state until the core issue list resolves, then shows content", async () => {
+    const pendingIssues = deferred<{
+      items: readonly (typeof issue)[];
+      nextCursor: null;
+      facets: typeof facets;
+    }>();
+    render(
+      <App
+        api={makeApi({
+          listIssues: vi.fn(() => pendingIssues.promise),
+        })}
+      />,
+    );
+
+    expect(await screen.findByText("Loading current issues…")).not.toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Loading current issues…")).not.toBeNull();
+
+    await act(async () => {
+      pendingIssues.resolve({ items: [issue], nextCursor: null, facets });
+      await pendingIssues.promise;
+    });
+
+    expect(
+      await screen.findByRole("link", { name: issue.title }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Loading current issues…")).toBeNull();
+  });
+
   it("combines every filter and writes server-provided facet query values to a shareable URL", async () => {
     const user = userEvent.setup();
     render(<App api={makeApi()} />);
@@ -370,3 +401,17 @@ describe("issue list", () => {
     ).toBe("next-page");
   });
 });
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -296,6 +297,35 @@ describe("issue detail", () => {
     ).not.toBeNull();
     expect(screen.getByText("Unknown version")).not.toBeNull();
     expect(api.getEvent).toHaveBeenCalledWith(501);
+  });
+
+  it("keeps the loading state until core issue evidence rejects, then shows the error", async () => {
+    const pendingIssue = deferred<typeof issue>();
+    render(
+      <App
+        api={makeApi({
+          getIssue: vi.fn(() => pendingIssue.promise),
+        })}
+      />,
+    );
+
+    expect(await screen.findByText("Loading issue evidence…")).not.toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Loading issue evidence…")).not.toBeNull();
+
+    await act(async () => {
+      pendingIssue.reject(new Error("offline"));
+      await pendingIssue.promise.catch(() => undefined);
+    });
+
+    expect(
+      await screen.findByText(
+        "Issue details could not be loaded. Check the private connection and try again.",
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByText("Loading issue evidence…")).toBeNull();
   });
 
   it("keeps every visible timestamp permanent, exact, UTC, and machine-readable", async () => {
@@ -623,3 +653,17 @@ describe("issue detail", () => {
     });
   });
 });
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
