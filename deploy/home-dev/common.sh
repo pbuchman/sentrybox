@@ -195,16 +195,22 @@ error_hub_synthetic_database_operation() {
   local eh_synthetic_image="$1"
   local eh_synthetic_command="$2"
   local eh_synthetic_context="$3"
+  local eh_synthetic_uid="${ERROR_HUB_RUNTIME_UID:-1000}"
+  local eh_synthetic_gid="${ERROR_HUB_RUNTIME_GID:-1000}"
   error_hub_require_immutable_image "${eh_synthetic_image}"
+  if [[ ! "${eh_synthetic_uid}" =~ ^[1-9][0-9]*$ \
+    || ! "${eh_synthetic_gid}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Synthetic database checks require a numeric non-root runtime UID and GID.\n' >&2
+    return 1
+  fi
   docker run --rm --interactive \
-    --user 0:0 \
+    --user "${eh_synthetic_uid}:${eh_synthetic_gid}" \
     --read-only \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --tmpfs /tmp:size=16m,mode=1777 \
     --label "sentrybox-check=${eh_synthetic_command}" \
     --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
-    --mount "type=bind,src=${error_hub_state_directory},dst=/state" \
     --entrypoint node \
     "${eh_synthetic_image}" \
     --input-type=module - "${eh_synthetic_command}" "${eh_synthetic_context}" \
@@ -219,7 +225,7 @@ error_hub_recover_synthetic_public_check() (
   error_hub_require_immutable_image "${eh_synthetic_image}"
   shopt -s nullglob
   for eh_candidate in \
-    "${error_hub_state_directory}"/synthetic-public-check.*.json; do
+    "${error_hub_data_directory}"/synthetic-public-check.*.json; do
     eh_candidate_basename="${eh_candidate##*/}"
     if [[ "${eh_candidate_basename}" =~ ^synthetic-public-check\.[0-9]+\.json$ ]]; then
       eh_contexts+=("${eh_candidate}")
@@ -239,7 +245,7 @@ error_hub_recover_synthetic_public_check() (
   fi
   eh_candidate_basename="${eh_candidate##*/}"
   error_hub_synthetic_database_operation \
-    "${eh_synthetic_image}" synthetic-cleanup "/state/${eh_candidate_basename}" \
+    "${eh_synthetic_image}" synthetic-cleanup "/data/${eh_candidate_basename}" \
     >/dev/null || exit $?
   if [[ -e "${eh_candidate}" ]]; then
     printf 'Synthetic public check cleanup did not remove its context.\n' >&2
@@ -260,8 +266,8 @@ error_hub_run_synthetic_public_check() (
   local eh_synthetic_image="$1"
   local eh_route="${2:-loopback}"
   local eh_context_basename="synthetic-public-check.${BASHPID}.json"
-  local eh_container_context="/state/${eh_context_basename}"
-  local eh_host_context="${error_hub_state_directory}/${eh_context_basename}"
+  local eh_container_context="/data/${eh_context_basename}"
+  local eh_host_context="${error_hub_data_directory}/${eh_context_basename}"
   local eh_options_headers="${error_hub_state_directory}/${eh_context_basename}.options.headers"
   local eh_post_headers="${error_hub_state_directory}/${eh_context_basename}.post.headers"
   local eh_post_response="${error_hub_state_directory}/${eh_context_basename}.response.json"

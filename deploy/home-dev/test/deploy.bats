@@ -137,9 +137,9 @@ if [ "$1" = compose ]; then
 fi
 if [ "$1" = run ]; then
   if printf '%s' "$*" | grep -q 'synthetic-prepare'; then
-    state_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/state.*#\1#p')"
-    context_name="$(printf '%s\n' "$*" | sed -n 's#.* synthetic-prepare /state/\([^ ]*\)$#\1#p')"
-    context_file="${state_root}/${context_name}"
+    data_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/data.*#\1#p')"
+    context_name="$(printf '%s\n' "$*" | sed -n 's#.* synthetic-prepare /data/\([^ ]*\)$#\1#p')"
+    context_file="${data_root}/${context_name}"
     printf '%s\n' '{"version":1,"keyId":5,"projectId":1,"publicKey":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","dsn":"https://dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd@errors.intexuraos.cloud/1","eventId":"cccccccccccccccccccccccccccccccc","envelope":"synthetic-envelope"}' \
       >"${context_file}"
     chmod 0600 "${context_file}"
@@ -155,9 +155,9 @@ if [ "$1" = run ]; then
     exit 0
   fi
   if printf '%s' "$*" | grep -q 'synthetic-cleanup'; then
-    state_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/state.*#\1#p')"
-    context_name="$(printf '%s\n' "$*" | sed -n 's#.* synthetic-cleanup /state/\([^ ]*\)$#\1#p')"
-    context_file="${state_root}/${context_name}"
+    data_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/data.*#\1#p')"
+    context_name="$(printf '%s\n' "$*" | sed -n 's#.* synthetic-cleanup /data/\([^ ]*\)$#\1#p')"
+    context_file="${data_root}/${context_name}"
     [ "${ERROR_HUB_FAKE_SYNTHETIC_CLEANUP_FAIL:-0}" = 1 ] && exit 1
     rm -f "${context_file}"
     exit 0
@@ -420,6 +420,33 @@ EOF
   [ "${status}" -eq 0 ]
 }
 
+@test "synthetic database checks use the runtime identity without mounting deployment state" {
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+  run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
+
+  [ "${status}" -eq 0 ]
+  run grep -F -- '--user 1000:1000' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F -- 'dst=/state' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
+  run grep -E 'synthetic-(prepare|verify|cleanup) /data/synthetic-public-check\.[0-9]+\.json' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "synthetic database checks reject a root runtime identity before Docker" {
+  export ERROR_HUB_RUNTIME_UID=0
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+  run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_synthetic_database_operation '${image}' synthetic-prepare /data/synthetic-public-check.1.json"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *'numeric non-root runtime UID and GID'* ]]
+  run grep -F 'synthetic-prepare' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
+}
+
 @test "failed synthetic persistence verification still removes the non-production fixture" {
   export ERROR_HUB_FAKE_SYNTHETIC_VERIFY_FAIL=1
   image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -449,7 +476,7 @@ EOF
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -ne 0 ]
-  context_file="$(find "${fixture_root}/var/lib/sentrybox-deploy" \
+  context_file="$(find "${fixture_root}/home/pbuchman/services/sentrybox/data" \
     -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print)"
   [ -f "${context_file}" ]
   printf 'live-database\n' \
@@ -487,7 +514,7 @@ EOF
     [ "${status}" -ne 0 ]
     run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
     [ "${status}" -eq 0 ]
-    run find "${fixture_root}/var/lib/sentrybox-deploy" \
+    run find "${fixture_root}/home/pbuchman/services/sentrybox/data" \
       -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print
     [ -z "${output}" ]
   done
@@ -892,4 +919,33 @@ EOF
   run grep -R -E 'deploy-request\.json.*(docker\.sock|/data)|sentrybox-deploy-webhook.*docker\.sock' \
     "${fixture_root}/etc/systemd/system"
   [ "${status}" -ne 0 ]
+}
+
+@test "deployment webhook runs Node jitless with only its checkout visible under home" {
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -eq 0 ]
+
+  webhook_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  run grep -Fx \
+    'ExecStart=/usr/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
+    "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'MemoryMax=128M' "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'MemoryDenyWriteExecute=true' "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'ProtectHome=tmpfs' "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx \
+    'BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox' \
+    "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx \
+    'SystemCallFilter=@system-service pkey_alloc pkey_free pkey_mprotect' \
+    "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  run grep '^InaccessiblePaths=' "${webhook_unit}"
+  [ "${status}" -eq 0 ]
+  [ "${output}" = $'InaccessiblePaths=\nInaccessiblePaths=/var/run/docker.sock' ]
 }

@@ -348,7 +348,7 @@ function requiredSyntheticContextPath() {
   const value = process.argv[3];
   if (
     typeof value !== "string" ||
-    !/^\/state\/synthetic-public-check\.[0-9]+\.json$/u.test(value)
+    !/^\/data\/synthetic-public-check\.[0-9]+\.json$/u.test(value)
   ) {
     throw new Error("synthetic public check context path is invalid");
   }
