@@ -10,6 +10,7 @@ const CODE_AGENT_TARGETS = {
   dev: "https://dev.intexuraos.cloud/api/code/webhooks/sentry",
   prod: "https://intexuraos.cloud/api/code/webhooks/sentry",
 };
+const LOCAL_VITE_ORIGIN = "http://localhost:3000";
 
 export function validateProjectConfiguration(value) {
   const input = record(value, "project configuration");
@@ -75,7 +76,7 @@ export function validateProjectConfiguration(value) {
         "ingest key identity does not match its project and environment",
       );
     }
-    const allowedOrigins = exactOrigins(key.allowedOrigins);
+    const allowedOrigins = exactOrigins(key.allowedOrigins, environment);
     const forwarding = validateForwarding(key.forwarding, environment);
     const codeAgent = validateCodeAgent(key.codeAgent, environment);
     return {
@@ -228,19 +229,31 @@ function canonicalCodeAgentTarget(value, environment) {
   return target;
 }
 
-function exactOrigins(value) {
+function exactOrigins(value, environment) {
   const origins = array(value, "allowedOrigins");
   if (origins.length === 0) {
     throw new TypeError("allowedOrigins must contain at least one origin");
   }
   const normalized = origins.map((origin) =>
-    canonicalHttpsOrigin(origin, "allowedOrigins entry"),
+    canonicalAllowedOrigin(origin, environment),
   );
   const unique = new Set(normalized);
   if (unique.size !== normalized.length) {
     throw new TypeError("allowedOrigins contains a duplicate origin");
   }
   return [...unique].sort(compareCodePoints);
+}
+
+function canonicalAllowedOrigin(value, environment) {
+  if (value === LOCAL_VITE_ORIGIN) {
+    if (environment !== "dev") {
+      throw new TypeError(
+        "the local Vite origin is allowed only for development keys",
+      );
+    }
+    return LOCAL_VITE_ORIGIN;
+  }
+  return canonicalHttpsOrigin(value, "allowedOrigins entry");
 }
 
 function canonicalHttpsOrigin(value, field) {

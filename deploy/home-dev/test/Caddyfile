@@ -1,0 +1,7 @@
+{
+	auto_https off
+	admin off
+}
+
+import /config/caddy-error-hub.caddy
+import /config/caddy-error-hub-deploy.caddy

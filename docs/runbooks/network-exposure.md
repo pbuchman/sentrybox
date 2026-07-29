@@ -7,7 +7,7 @@ network.
 | Surface | Address | Allowed operations |
 | --- | --- | --- |
 | Public ingest | `https://errors.intexuraos.cloud` | `POST|OPTIONS /api/{numericProjectId}/envelope/`, `GET /health/live` |
-| Private application | `https://home-dev.taild6ad57.ts.net:8443` | UI, private API, exports, MCP/worker reads, readiness, metrics |
+| Private application | Runtime `ERROR_HUB_PRIVATE_ORIGIN` on Tailscale HTTPS port `8443` | UI, private API, exports, MCP/worker reads, readiness, metrics |
 | Deployment callback | `https://errors-deploy.intexuraos.cloud` | `POST /github/workflow-run` only |
 
 The public hostnames terminate TLS at Cloudflare Tunnel and reach Caddy over
@@ -73,8 +73,12 @@ tailscale serve --bg --https=8443 http://127.0.0.1:8141
 ```
 
 It verifies that Tailscale is online, reads back the persisted Serve mapping,
-and probes private readiness. Preserve existing Serve entries; inspect the
-result after setup:
+derives the current peer hostname from `Self.DNSName`, and probes private
+readiness. If `ERROR_HUB_PRIVATE_ORIGIN` is present, the script also requires
+that exact origin to match the current peer. It refuses to overwrite a
+conflicting port `8443` mapping and rolls back a newly created mapping when
+structural validation or readiness fails. Preserve existing Serve entries;
+inspect the result after setup:
 
 ```bash
 sudo tailscale serve status --json

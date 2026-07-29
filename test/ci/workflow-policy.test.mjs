@@ -121,6 +121,32 @@ test("pull-request CI is read-only and exercises every required gate", async () 
   }
 });
 
+test("CI executes the Home Dev network contract with pinned Caddy", async () => {
+  const workflow = await source(".github/workflows/ci.yml");
+  const routeVerifier = await source(
+    "deploy/home-dev/test/verify-caddy-routes.sh",
+  );
+
+  assert.ok(
+    workflow.includes("sudo apt-get install --yes bats shellcheck"),
+    "CI does not install the network contract tools",
+  );
+  assert.ok(
+    workflow.includes("shellcheck deploy/home-dev/configure-tailscale.sh"),
+    "CI does not shellcheck the Tailscale setup",
+  );
+  assert.ok(
+    workflow.includes("bats deploy/home-dev/test/network-contract.bats"),
+    "CI does not execute the Bats network contract",
+  );
+  assert.match(
+    routeVerifier,
+    /caddy:2\.10\.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d/u,
+  );
+  assert.match(routeVerifier, /caddy validate/u);
+  assert.doesNotMatch(routeVerifier, /caddy:latest/u);
+});
+
 test("main-only release publishes one immutable amd64 tag with attestations", async () => {
   const workflow = await source(".github/workflows/release-image.yml");
 

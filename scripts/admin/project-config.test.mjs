@@ -88,6 +88,48 @@ test("every key requires a non-empty exact browser-origin allowlist", () => {
   assert.throws(() => validateProjectConfiguration(copy), /allowedOrigins/u);
 });
 
+test("the exact local Vite origin is allowed only for development keys", () => {
+  const configuration = validateProjectConfiguration(CONFIG);
+  const developmentKeys = configuration.ingestKeys.filter(
+    ({ environment }) => environment === "dev",
+  );
+  const productionKeys = configuration.ingestKeys.filter(
+    ({ environment }) => environment === "prod",
+  );
+
+  assert.ok(
+    developmentKeys.every(({ allowedOrigins }) =>
+      allowedOrigins.includes("http://localhost:3000"),
+    ),
+  );
+  assert.ok(
+    productionKeys.every(
+      ({ allowedOrigins }) => !allowedOrigins.includes("http://localhost:3000"),
+    ),
+  );
+
+  const productionCopy = clone(CONFIG);
+  productionCopy.ingestKeys[1].allowedOrigins.push("http://localhost:3000");
+  assert.throws(
+    () => validateProjectConfiguration(productionCopy),
+    /local Vite origin.*development/u,
+  );
+
+  for (const invalidOrigin of [
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://localhost:3000/path",
+    "http://localhost:3000?query=true",
+  ]) {
+    const developmentCopy = clone(CONFIG);
+    developmentCopy.ingestKeys[0].allowedOrigins.push(invalidOrigin);
+    assert.throws(
+      () => validateProjectConfiguration(developmentCopy),
+      /exact HTTPS origin|local Vite origin/u,
+    );
+  }
+});
+
 test("legacy forwarding and Code Agent destinations cannot cross environments", () => {
   const forwarding = clone(CONFIG);
   forwarding.ingestKeys[0].forwarding.environment = "prod";

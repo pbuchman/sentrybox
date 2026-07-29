@@ -12,14 +12,17 @@ The non-secret manifest at
 
 | Project | Project ID | Environment | Browser origin |
 | --- | ---: | --- | --- |
-| `intexuraos-backend` | 1 | `dev` | `https://dev.intexuraos.cloud` |
+| `intexuraos-backend` | 1 | `dev` | `http://localhost:3000`, `https://dev.intexuraos.cloud` |
 | `intexuraos-backend` | 1 | `prod` | `https://intexuraos.cloud` |
-| `intexuraos-web` | 2 | `dev` | `https://dev.intexuraos.cloud` |
+| `intexuraos-web` | 2 | `dev` | `http://localhost:3000`, `https://dev.intexuraos.cloud` |
 | `intexuraos-web` | 2 | `prod` | `https://intexuraos.cloud` |
 
 Each record binds one environment to one legacy Sentry forwarding reference
 and one Code Agent destination. Development and production use different Code
 Agent HMAC references. All Code Agent destinations start in `disabled` mode.
+The single HTTP exception is the exact local Vite origin
+`http://localhost:3000`, and it is valid only on development keys. Production
+keys and localhost lookalikes remain invalid.
 
 ## Prerequisites
 

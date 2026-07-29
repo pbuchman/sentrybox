@@ -33,6 +33,14 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Install network contract tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bats shellcheck
+      - name: Verify Home Dev network boundaries
+        run: |
+          shellcheck deploy/home-dev/configure-tailscale.sh deploy/home-dev/verify-container.sh deploy/home-dev/test/verify-caddy-routes.sh deploy/home-dev/test/read-http-request.sh
+          bats deploy/home-dev/test/network-contract.bats
       - name: Verify repository and workflow contracts
         run: node --test test/ci/workflow-policy.test.mjs test/container/runtime-contract.test.mjs
       - name: Check formatting
