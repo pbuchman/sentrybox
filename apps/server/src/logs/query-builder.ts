@@ -156,7 +156,9 @@ function identifierLineRegex(identifier: SelectedIdentifier): string {
   const alias = escapeLogQlRegex(identifier.alias);
   const value = escapeLogQlRegex(identifier.value);
   const pm2 = `(^|[|[:space:]])${alias}=${value}([|[:space:]]|$)`;
-  const json = `\\"${alias}\\":\\"${value}\\"`;
+  const json = escapeLogQlRegex(
+    `${JSON.stringify(identifier.alias)}:${JSON.stringify(identifier.value)}`,
+  );
   return `${pm2}|${json}`;
 }
 

@@ -77,6 +77,26 @@ describe("buildLogLocator", () => {
     expect(matcher.test("otherRequestId=request-from-pm2")).toBe(false);
   });
 
+  it.each([
+    'request-"quoted"',
+    "request-back\\slash",
+    "request-control\n\t\u0000end",
+  ])("matches JSON-serialized production correlation value %j", (requestId) => {
+    const locator = buildLogLocator(event({ requestId }), {
+      grafanaExploreUrl: GRAFANA,
+    });
+    const matcher = logLineMatcher(locator.query);
+
+    expect(matcher.test(JSON.stringify({ requestId, msg: "failed" }))).toBe(
+      true,
+    );
+    expect(
+      matcher.test(
+        JSON.stringify({ requestId: `${requestId}-suffix`, msg: "failed" }),
+      ),
+    ).toBe(false);
+  });
+
   it("uses Pino extras before an SDK-generated trace context and falls back when only that trace exists", () => {
     const withRequest = buildLogLocator(
       event({
