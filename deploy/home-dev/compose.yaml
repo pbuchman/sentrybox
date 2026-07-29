@@ -1,0 +1,52 @@
+name: intexura-error-hub
+
+services:
+  error-hub:
+    image: ${ERROR_HUB_IMAGE:?immutable image digest required}
+    user: "${ERROR_HUB_RUNTIME_UID:-1000}:${ERROR_HUB_RUNTIME_GID:-1000}"
+    init: true
+    environment:
+      ERROR_HUB_DATABASE_PATH: /data/error-hub.sqlite
+      ERROR_HUB_ENV_FILE: /run/secrets/error-hub-env
+      ERROR_HUB_PRIVATE_ORIGIN: "${ERROR_HUB_PRIVATE_ORIGIN:?private origin required}"
+      ERROR_HUB_PUBLIC_HOST: "0.0.0.0"
+      ERROR_HUB_PUBLIC_PORT: "8080"
+      ERROR_HUB_PRIVATE_HOST: "0.0.0.0"
+      ERROR_HUB_PRIVATE_PORT: "8081"
+      ERROR_HUB_PUBLIC_INGEST_HOSTS: errors.intexuraos.cloud
+      ERROR_HUB_REQUIRED_SECRET_REFERENCES: "${ERROR_HUB_REQUIRED_SECRET_REFERENCES:-}"
+    ports:
+      - "127.0.0.1:8140:8080"
+      - "127.0.0.1:8141:8081"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /home/pbuchman/services/intexura-error-hub/data:/data
+      - /home/pbuchman/services/intexura-error-hub/env:/run/secrets/error-hub-env:ro
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const http=require('node:http');const host=new
+          URL(process.env.ERROR_HUB_PRIVATE_ORIGIN).host;const
+          request=http.get({hostname:'127.0.0.1',port:8081,path:'/health/ready',headers:{host}},response=>process.exit(response.statusCode===200?0:1));request.on('error',()=>process.exit(1));request.setTimeout(3000,()=>{request.destroy();process.exit(1)});
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
