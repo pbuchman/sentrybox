@@ -196,7 +196,7 @@ run_tailscale_setup() {
       --header 'Host: errors.intexuraos.cloud' \
       "http://127.0.0.1:${host_port}/api/1/envelope/")"
     [ "${status}" = 503 ]
-    grep -Eiq '^Retry-After: 120\r?$' "${maintenance_headers}"
+    tr -d '\r' <"${maintenance_headers}" | grep -Eiq '^Retry-After: 120$'
   done
 
   status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
