@@ -67,7 +67,9 @@ describe("private operator API", () => {
       allowedHosts: [PRIVATE_HOST],
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: [PUBLIC_HOST],
-      grafanaExploreUrl: new URL("https://grafana.test/explore"),
+      grafanaExploreUrl: new URL(
+        "https://grafana.test/explore?orgId=1&datasource=test-logs",
+      ),
       operations,
       now: () => clock,
       createDeliveryId: () => "55555555-5555-4555-8555-555555555555",
@@ -1123,7 +1125,23 @@ function normalizedEvent(
     payload: {
       contexts: { runtime: { name: "node", version: "22.23.1" } },
       extras: { operation: "test" },
-      correlations: {},
+      correlations: {
+        requestId: {
+          source: "extras",
+          alias: "requestId",
+          value: `req-${String(sequence)}`,
+        },
+        traceId: {
+          source: "extras",
+          alias: "traceId",
+          value: `trace-${String(sequence)}`,
+        },
+        taskId: {
+          source: "extras",
+          alias: "taskId",
+          value: `task-${String(sequence)}`,
+        },
+      },
     },
     payloadBytes: 100,
     truncated: false,

@@ -142,7 +142,7 @@ const event = {
   logLocator: {
     confidence: "exact_identifier" as const,
     query:
-      '{environment="prod",service="whatsapp-service"} | json | requestId="request-42"',
+      '{environment="prod",service="whatsapp-service"} |~ "(^|[|[:space:]])requestId=request-42([|[:space:]]|$)|\\"requestId\\":\\"request-42\\""',
     grafanaUrl: "https://grafana.example/explore?query=request-42",
     from: "2026-07-29T11:56:00.000Z",
     to: "2026-07-29T12:00:00.000Z",

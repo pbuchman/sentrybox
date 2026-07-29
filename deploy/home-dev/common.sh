@@ -79,11 +79,26 @@ error_hub_require_runtime_environment() {
     return 1
   fi
   mapfile -t eh_lines <"${error_hub_runtime_environment_file}"
-  if (( ${#eh_lines[@]} != 1 )) \
+  if (( ${#eh_lines[@]} < 1 || ${#eh_lines[@]} > 2 )) \
     || [[ ! "${eh_lines[0]}" =~ ^ERROR_HUB_REQUIRED_SECRET_REFERENCES=[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$ ]]; then
-    printf 'SentryBox runtime environment must contain exactly one valid reference list.\n' >&2
+    printf 'SentryBox runtime environment must contain one valid reference list and at most one Grafana URL.\n' >&2
     return 1
   fi
+  if (( ${#eh_lines[@]} == 2 )) \
+    && ! error_hub_valid_grafana_environment_line "${eh_lines[1]}"; then
+    printf 'SentryBox Grafana Explore URL must be credential-free HTTPS with orgId and datasource.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_valid_grafana_environment_line() {
+  local eh_line="$1"
+  local eh_port=""
+  if [[ ! "${eh_line}" =~ ^ERROR_HUB_GRAFANA_EXPLORE_URL=https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?/explore\?orgId=[0-9]+\&datasource=[A-Za-z0-9_-]{1,128}$ ]]; then
+    return 1
+  fi
+  eh_port="${BASH_REMATCH[2]:-}"
+  [[ -z "${eh_port}" ]] || (( 10#${eh_port} <= 65535 ))
 }
 
 error_hub_require_immutable_image() {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildLogLocator } from "./query-builder.js";
 
-const GRAFANA = new URL("https://grafana.example/explore?orgId=1");
+const GRAFANA = new URL(
+  "https://grafana.example/explore?orgId=1&datasource=grafanacloud-logs",
+);
 const OCCURRED_AT = "2026-07-28T10:00:00.000Z";
 
 function event(
@@ -26,10 +28,11 @@ describe("buildLogLocator", () => {
   it.each([
     [
       { traceId: "trace-1", requestId: "request-1", taskId: "task-1" },
-      "traceId",
-      "trace-1",
+      "requestId",
+      "request-1",
     ],
-    [{ requestId: "request-1", taskId: "task-1" }, "requestId", "request-1"],
+    [{ traceId: "trace-1", taskId: "task-1" }, "taskId", "task-1"],
+    [{ traceId: "trace-1" }, "traceId", "trace-1"],
     [{ taskId: "task-1" }, "taskId", "task-1"],
   ] as const)(
     "uses deterministic identifier priority for %o",
@@ -49,10 +52,75 @@ describe("buildLogLocator", () => {
           message: null,
         },
       });
-      expect(locator.query).toContain(`| ${kind}=`);
-      expect(locator.query).toContain(value);
+      expect(locator.query).toContain(`{environment="dev",service="api"} |~ `);
+      expect(locator.query).toContain(`${kind}=${value}`);
+      expect(locator.query).not.toContain("| json");
+      expect(locator.query).not.toContain("|=");
     },
   );
+
+  it("matches the exact correlation field in Home Dev PM2 and production JSON lines", () => {
+    const locator = buildLogLocator(event({ requestId: "request-from-pm2" }), {
+      grafanaExploreUrl: GRAFANA,
+    });
+    const matcher = logLineMatcher(locator.query);
+
+    expect(
+      matcher.test(
+        "12:00:00 | WARN | api | failed | requestId=request-from-pm2",
+      ),
+    ).toBe(true);
+    expect(
+      matcher.test('{"requestId":"request-from-pm2","msg":"failed"}'),
+    ).toBe(true);
+    expect(matcher.test("requestId=request-from-pm2-other")).toBe(false);
+    expect(matcher.test("otherRequestId=request-from-pm2")).toBe(false);
+  });
+
+  it("uses Pino extras before an SDK-generated trace context and falls back when only that trace exists", () => {
+    const withRequest = buildLogLocator(
+      event({
+        traceId: "sdk-generated-trace",
+        requestId: "12345678-1234-4123-8123-123456789abc",
+        correlationEvidence: {
+          requestId: {
+            source: "extras",
+            alias: "requestId",
+            value: "12345678-1234-4123-8123-123456789abc",
+          },
+          traceId: {
+            source: "contexts",
+            alias: "trace_id",
+            value: "sdk-generated-trace",
+          },
+        },
+      }),
+      { grafanaExploreUrl: GRAFANA },
+    );
+    const sdkTraceOnly = buildLogLocator(
+      event({
+        traceId: "sdk-generated-trace",
+        correlationEvidence: {
+          traceId: {
+            source: "contexts",
+            alias: "trace_id",
+            value: "sdk-generated-trace",
+          },
+        },
+      }),
+      { grafanaExploreUrl: GRAFANA },
+    );
+
+    expect(withRequest.criteria.identifier).toEqual({
+      kind: "requestId",
+      value: "12345678-1234-4123-8123-123456789abc",
+    });
+    expect(withRequest.query).not.toContain("sdk-generated-trace");
+    expect(sdkTraceOnly).toMatchObject({
+      confidence: "time_message_fallback",
+      criteria: { identifier: null, message: "worker failed" },
+    });
+  });
 
   it("uses message, then exception type, then title as non-exact fallback", () => {
     const message = buildLogLocator(event(), { grafanaExploreUrl: GRAFANA });
@@ -191,7 +259,7 @@ describe("buildLogLocator", () => {
           );
         }),
       ).toBe(false);
-      expect(new URL(locator.grafanaUrl ?? "").searchParams.get("query")).toBe(
+      expect(grafanaPane(locator.grafanaUrl).queries[0]?.expr).toBe(
         locator.query,
       );
     }
@@ -205,13 +273,20 @@ describe("buildLogLocator", () => {
 
     expect(url.origin + url.pathname).toBe("https://grafana.example/explore");
     expect(url.searchParams.get("orgId")).toBe("1");
-    expect(url.searchParams.get("from")).toBe(
-      String(Date.parse("2026-07-28T09:58:00.000Z")),
-    );
-    expect(url.searchParams.get("to")).toBe(
-      String(Date.parse("2026-07-28T10:02:00.000Z")),
-    );
-    expect(url.searchParams.get("query")).toBe(locator.query);
+    expect(url.searchParams.get("schemaVersion")).toBe("1");
+    expect(url.searchParams.has("datasource")).toBe(false);
+    const pane = grafanaPane(locator.grafanaUrl);
+    expect(pane.datasource).toBe("grafanacloud-logs");
+    expect(pane.range).toEqual({
+      from: String(Date.parse("2026-07-28T09:58:00.000Z")),
+      to: String(Date.parse("2026-07-28T10:02:00.000Z")),
+    });
+    expect(pane.queries[0]).toMatchObject({
+      refId: "A",
+      expr: locator.query,
+      queryType: "range",
+      datasource: { uid: "grafanacloud-logs", type: "loki" },
+    });
   });
 
   it("rejects invalid occurrence timestamps", () => {
@@ -222,3 +297,26 @@ describe("buildLogLocator", () => {
     ).toThrow(/occurrence timestamp/u);
   });
 });
+
+interface GrafanaPane {
+  readonly datasource: string;
+  readonly queries: readonly { readonly expr: string }[];
+  readonly range: { readonly from: string; readonly to: string };
+}
+
+function grafanaPane(url: string | null): GrafanaPane {
+  const panes = new URL(url ?? "").searchParams.get("panes");
+  expect(panes).not.toBeNull();
+  const pane = (
+    JSON.parse(panes ?? "") as Record<string, GrafanaPane | undefined>
+  )["A"];
+  if (pane === undefined) throw new Error("Grafana pane A is missing");
+  return pane;
+}
+
+function logLineMatcher(query: string | null): RegExp {
+  const match = /\|~ ("(?:\\.|[^"])*")$/u.exec(query ?? "");
+  expect(match?.[1]).toBeDefined();
+  const re2Pattern = JSON.parse(match?.[1] ?? '""') as string;
+  return new RegExp(re2Pattern.replaceAll("[|[:space:]]", "[|\\s]"), "u");
+}

@@ -364,6 +364,7 @@ EOF
 
   printf '%s\n' \
     'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
+    'ERROR_HUB_GRAFANA_EXPLORE_URL=https://logs.example.grafana.net/explore?orgId=1&datasource=grafanacloud-logs' \
     >"${runtime_env}"
   chmod 0644 "${runtime_env}"
 
@@ -376,6 +377,47 @@ EOF
     'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
     "${runtime_env}"
   [ "${status}" -eq 0 ]
+  run grep -Fx \
+    'ERROR_HUB_GRAFANA_EXPLORE_URL=https://logs.example.grafana.net/explore?orgId=1&datasource=grafanacloud-logs' \
+    "${runtime_env}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "runtime state rejects an insecure Grafana Explore URL" {
+  runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  printf '%s\n' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    'ERROR_HUB_GRAFANA_EXPLORE_URL=http://logs.example.test/explore' \
+    >"${runtime_env}"
+  chmod 0600 "${runtime_env}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"Grafana Explore URL"* ]]
+}
+
+@test "runtime state rejects ambiguous Grafana Explore URL parameters and ports" {
+  runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  for grafana_url in \
+    'https://logs.example.test/explore?orgId=one&datasource=logs' \
+    'https://logs.example.test/explore?orgId=1&orgId=2&datasource=logs' \
+    'https://logs.example.test/explore?orgId=1&datasource=logs&extra=value' \
+    'https://logs.example.test/explore?orgId=1&datasource=logs#fragment' \
+    'https://logs.example.test:70000/explore?orgId=1&datasource=logs'; do
+    printf '%s\n' \
+      'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+      "ERROR_HUB_GRAFANA_EXPLORE_URL=${grafana_url}" \
+      >"${runtime_env}"
+    chmod 0600 "${runtime_env}"
+
+    run "${repository_root}/deploy/home-dev/install.sh" \
+      --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Grafana Explore URL"* ]]
+  done
 }
 
 @test "preflight refuses less than 15 GiB and immutable image violations" {

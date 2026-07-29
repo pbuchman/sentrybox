@@ -13,9 +13,16 @@ export interface LogLocatorEvent {
   readonly traceId: string | null;
   readonly requestId: string | null;
   readonly taskId: string | null;
+  readonly correlationEvidence?: unknown;
   readonly message: string | null;
   readonly exceptionType: string | null;
   readonly title: string;
+}
+
+interface SelectedIdentifier {
+  readonly kind: LogIdentifierKind;
+  readonly alias: string;
+  readonly value: string;
 }
 
 export interface LogLocatorOptions {
@@ -83,7 +90,7 @@ export function buildLogLocator(
   const query =
     identifier === null
       ? `${selector} |~ "${escapeLogQlRegex(fallbackMessage(event))}"`
-      : `${selector} | json | ${identifier.kind}="${escapeLogQlLiteral(identifier.value)}"`;
+      : `${selector} |~ "${identifierLineRegex(identifier)}"`;
   const confidence: LogCorrelationConfidence =
     identifier === null ? "time_message_fallback" : "exact_identifier";
   return {
@@ -95,7 +102,10 @@ export function buildLogLocator(
     criteria: {
       environment: event.environment,
       service: event.service,
-      identifier,
+      identifier:
+        identifier === null
+          ? null
+          : { kind: identifier.kind, value: identifier.value },
       message,
     },
     explanation:
@@ -105,17 +115,49 @@ export function buildLogLocator(
   };
 }
 
-function firstIdentifier(
-  event: LogLocatorEvent,
-): LogLocator["criteria"]["identifier"] {
+function firstIdentifier(event: LogLocatorEvent): SelectedIdentifier | null {
+  if (event.correlationEvidence !== undefined) {
+    const evidence = record(event.correlationEvidence);
+    for (const [kind, aliases] of [
+      ["requestId", ["requestId", "request_id", "reqId", "req_id"]],
+      ["taskId", ["taskId", "task_id"]],
+      ["traceId", ["traceId", "trace_id"]],
+    ] as const) {
+      const selected = record(evidence[kind]);
+      const alias = selected["alias"];
+      const value = selected["value"];
+      if (
+        selected["source"] === "extras" &&
+        typeof alias === "string" &&
+        aliases.some((candidate) => candidate === alias) &&
+        typeof value === "string" &&
+        value.length > 0 &&
+        value === event[kind]
+      ) {
+        return { kind, alias, value };
+      }
+    }
+    return null;
+  }
+
   for (const [kind, value] of [
-    ["traceId", event.traceId],
     ["requestId", event.requestId],
     ["taskId", event.taskId],
+    ["traceId", event.traceId],
   ] as const) {
-    if (value !== null && value.length > 0) return { kind, value };
+    if (value !== null && value.length > 0) {
+      return { kind, alias: kind, value };
+    }
   }
   return null;
+}
+
+function identifierLineRegex(identifier: SelectedIdentifier): string {
+  const alias = escapeLogQlRegex(identifier.alias);
+  const value = escapeLogQlRegex(identifier.value);
+  const pm2 = `(^|[|[:space:]])${alias}=${value}([|[:space:]]|$)`;
+  const json = `\\"${alias}\\":\\"${value}\\"`;
+  return `${pm2}|${json}`;
 }
 
 function fallbackMessage(event: LogLocatorEvent): string {
@@ -160,6 +202,12 @@ function escapeLogQlLiteral(value: string): string {
   return escaped;
 }
 
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : {};
+}
+
 function grafanaUrl(
   base: URL | null,
   query: string,
@@ -168,9 +216,31 @@ function grafanaUrl(
 ): string | null {
   if (base === null) return null;
   const url = new URL(base.toString());
-  url.searchParams.set("from", String(Date.parse(from)));
-  url.searchParams.set("to", String(Date.parse(to)));
-  url.searchParams.set("query", query);
+  const datasourceUid = url.searchParams.get("datasource");
+  if (datasourceUid === null) return null;
+  url.searchParams.delete("datasource");
+  url.searchParams.set("schemaVersion", "1");
+  url.searchParams.set(
+    "panes",
+    JSON.stringify({
+      A: {
+        datasource: datasourceUid,
+        queries: [
+          {
+            refId: "A",
+            expr: query,
+            queryType: "range",
+            editorMode: "code",
+            datasource: { uid: datasourceUid, type: "loki" },
+          },
+        ],
+        range: {
+          from: String(Date.parse(from)),
+          to: String(Date.parse(to)),
+        },
+      },
+    }),
+  );
   return url.toString();
 }
 

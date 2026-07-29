@@ -39,6 +39,20 @@ keys and localhost lookalikes remain invalid.
    entries that are not in `ERROR_HUB_REQUIRED_SECRET_REFERENCES`.
 4. Confirm `/health/ready` is healthy and the Code Agent destinations are still
    disabled.
+5. Put the credential-free HTTPS Grafana Explore URL in the second line of
+   `/var/lib/sentrybox-deploy/runtime.env` so event details can open matching
+   logs. Keep the required-reference list as the first line:
+
+```dotenv
+ERROR_HUB_REQUIRED_SECRET_REFERENCES=<comma-separated reference names>
+ERROR_HUB_GRAFANA_EXPLORE_URL=https://<grafana-stack-host>/explore?orgId=1&datasource=<loki-datasource-uid>
+```
+
+The file remains root-owned, mode `0600`, and singly linked. SentryBox uses a
+field-bounded LogQL identifier filter so the same locator works for Home Dev
+PM2 text lines and structured production lines. The `datasource` parameter is
+configuration input; SentryBox converts it to Grafana's versioned `panes`
+deep-link format together with the exact query and time range.
 
 ## Generate the four DSNs once
 
@@ -86,10 +100,11 @@ been verified.
    credential file without printing its value. Add `CODE_AGENT_HMAC_PROD` only
    during the later production cutover.
 3. Atomically replace `/var/lib/sentrybox-deploy/runtime.env` with a root-owned,
-   mode-`0600` regular file whose single line adds the matching HMAC name to
-   `ERROR_HUB_REQUIRED_SECRET_REFERENCES`. This file is the persistent source
-   used by normal starts, deployments, and rollbacks; do not export the value
-   only in an interactive shell.
+   mode-`0600` regular file whose **first line** adds the matching HMAC name to
+   `ERROR_HUB_REQUIRED_SECRET_REFERENCES`. Preserve the existing second
+   `ERROR_HUB_GRAFANA_EXPLORE_URL` line byte-for-byte. This file is the
+   persistent source used by normal starts, deployments, and rollbacks; do not
+   export the value only in an interactive shell.
 4. Start a one-off container with the same data/config mounts and run the
    transition with one explicit UTC baseline:
 
@@ -137,8 +152,9 @@ sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --
 Only after disabling that environment, keep maintenance active and the service
 stopped while atomically replacing both files: remove the matching HMAC value
 from `/home/pbuchman/services/sentrybox/env` and remove the matching HMAC name
-from `/var/lib/sentrybox-deploy/runtime.env`. Then start the service and validate
-it with `--environment dev --webhook-mode disabled`.
+from only the first line of `/var/lib/sentrybox-deploy/runtime.env`; preserve its
+Grafana line. Then start the service and validate it with
+`--environment dev --webhook-mode disabled`.
 
 ## Disable legacy Sentry shadow forwarding
 
@@ -155,8 +171,9 @@ sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --
 ```
 
 Validate with `--environment dev --forwarding-mode disabled`, then remove only
-the two matching legacy DSN references from the credential file and required
-reference list. Repeat for `prod` only after its independent stability window.
+the two matching legacy DSN references from the credential file and the first
+line's required-reference list. Preserve the Grafana line. Repeat for `prod`
+only after its independent stability window.
 
 ## Environment-mismatch acceptance check
 

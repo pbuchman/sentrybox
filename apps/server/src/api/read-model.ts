@@ -253,7 +253,13 @@ export function eventResponse(
     traceId: event.traceId,
     taskId: event.taskId,
     truncated: event.truncated,
-    logLocator: buildLogLocator(event, logLocatorOptions),
+    logLocator: buildLogLocator(
+      {
+        ...event,
+        correlationEvidence: event.payload.payload["correlations"],
+      },
+      logLocatorOptions,
+    ),
     normalized: event.payload,
   };
 }
