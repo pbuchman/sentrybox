@@ -36,31 +36,45 @@ require_safe_snapshot() {
 finalize_retained_snapshot() (
   set -euo pipefail
   local image="$1"
-  local temporary_retained retained_name
+  local temporary_directory temporary_retained runtime_uid runtime_gid
   error_hub_require_immutable_image "${image}"
+  runtime_uid="${ERROR_HUB_RUNTIME_UID:-1000}"
+  runtime_gid="${ERROR_HUB_RUNTIME_GID:-1000}"
+  if [[ ! "${runtime_uid}" =~ ^[1-9][0-9]*$ \
+    || ! "${runtime_gid}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Retained backup requires a numeric non-root runtime UID and GID.\n' >&2
+    return 1
+  fi
   require_safe_snapshot "${final_backup}" "Pre-deployment backup"
-  temporary_retained="$(
-    mktemp "${error_hub_backup_directory}/.retained.sqlite.XXXXXX"
+  temporary_directory="$(
+    mktemp -d "${error_hub_backup_directory}/.retained-finalize.XXXXXX"
   )"
-  retained_name="${temporary_retained##*/}"
-  trap 'rm -f \
-    "${temporary_retained}" \
-    "${temporary_retained}-wal" \
-    "${temporary_retained}-shm" \
-    "${temporary_retained}-journal"' EXIT
-  install -m 0600 "${final_backup}" "${temporary_retained}"
+  case "${temporary_directory}" in
+    "${error_hub_backup_directory}/.retained-finalize."*) ;;
+    *)
+      printf 'Retained backup staging directory is outside backup storage.\n' >&2
+      return 1
+      ;;
+  esac
+  temporary_retained="${temporary_directory}/.retained.sqlite.COPY000"
+  trap 'rm -rf -- "${temporary_directory}"' EXIT
+  install -d -o "${runtime_uid}" -g "${runtime_gid}" -m 0700 \
+    "${temporary_directory}"
+  install -o "${runtime_uid}" -g "${runtime_gid}" -m 0600 \
+    "${final_backup}" "${temporary_retained}"
   docker run --rm --interactive \
-    --user 0:0 \
+    --user "${runtime_uid}:${runtime_gid}" \
     --network none \
     --read-only \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --tmpfs /tmp:size=32m,mode=1777 \
     --label sentrybox-check=retained-finalize \
-    --mount "type=bind,src=${error_hub_backup_directory},dst=/retained" \
+    --mount "type=bind,src=${temporary_directory},dst=/retained" \
     --entrypoint node \
     "${image}" \
-    --input-type=module - retained-finalize "/retained/${retained_name}" \
+    --input-type=module - retained-finalize \
+    "/retained/${temporary_retained##*/}" \
     <"${database_operations}"
   require_safe_snapshot "${temporary_retained}" "Retained backup"
   chmod 0600 "${temporary_retained}"

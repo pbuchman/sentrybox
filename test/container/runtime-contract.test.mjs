@@ -200,7 +200,13 @@ test("disabled scheduled backup and restore checks are explicit and isolated fro
   assert.doesNotMatch(backup, /docker compose[^\n]*\bstop\b/u);
   assert.doesNotMatch(backup, /--env-file|\/run\/secrets/u);
   assert.match(backup, /flock -n 9/u);
-  assert.match(backup, /\.retained\.sqlite\.XXXXXX/u);
+  assert.match(backup, /\.retained-finalize\.XXXXXX/u);
+  assert.match(backup, /--user "\$\{runtime_uid\}:\$\{runtime_gid\}"/u);
+  assert.match(backup, /src=\$\{temporary_directory\},dst=\/retained/u);
+  assert.doesNotMatch(
+    backup,
+    /src=\$\{error_hub_backup_directory\},dst=\/retained/u,
+  );
 
   assert.match(
     restore,
