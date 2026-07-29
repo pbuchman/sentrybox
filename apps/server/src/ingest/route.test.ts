@@ -12,6 +12,7 @@ import type { OutboxDraft } from "../storage/outbox-repository.js";
 import { ProjectRepository } from "../storage/project-repository.js";
 import { createPublicApp, type PublicAppOptions } from "../public-app.js";
 import { ErrorHubMetrics } from "../metrics.js";
+import { createOperationsContext } from "../operations.js";
 import {
   DEFAULT_RETENTION_CONFIG,
   StorageSafetyState,
@@ -847,12 +848,7 @@ describe("public Sentry envelope ingest", () => {
   });
 
   it("returns 503 only when storage safety marks ingest unavailable", async () => {
-    const storageSafety = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
-    storageSafety.markFailure(
-      "physical_storage_critical",
-      new Date(RECEIVED_AT),
-    );
-    const fixture = createFixture({ storageSafety });
+    const fixture = createFixture({ storageCritical: true });
 
     const response = await postEnvelope(fixture.app, NODE_FIXTURE);
 
@@ -972,7 +968,7 @@ interface FixtureOptions {
   readonly forwardingSecretRef?: string | null;
   readonly shadowResult?: ReturnType<ShadowForwarder["enqueue"]>;
   readonly shadowThrows?: boolean;
-  readonly storageSafety?: StorageSafetyState;
+  readonly storageCritical?: boolean;
   readonly storageInitiallyUnknown?: boolean;
   readonly now?: () => Date;
   readonly limits?: PublicAppOptions["limits"];
@@ -1053,13 +1049,15 @@ function createFixture(options: FixtureOptions = {}): {
     },
   };
   const operationalMetrics: { readonly type: string }[] = [];
-  const metrics = new ErrorHubMetrics();
-  const storageSafety =
-    options.storageSafety ?? new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
-  if (
-    options.storageSafety === undefined &&
-    options.storageInitiallyUnknown !== true
-  ) {
+  const operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
+  const metrics = operations.metrics;
+  const storageSafety = operations.storageSafety;
+  if (options.storageCritical === true) {
+    storageSafety.markFailure(
+      "physical_storage_critical",
+      new Date(RECEIVED_AT),
+    );
+  } else if (options.storageInitiallyUnknown !== true) {
     storageSafety.observeUsage(
       {
         databaseBytes: 0,
@@ -1077,7 +1075,7 @@ function createFixture(options: FixtureOptions = {}): {
   }
   const app = createPublicApp({
     database,
-    operations: { storageSafety, metrics },
+    operations,
     shadowForwarder,
     buildOutbox({ transition }): OutboxDraft {
       return {

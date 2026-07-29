@@ -282,6 +282,7 @@ describe("IssueRepository.recordOccurrence", () => {
     ]) {
       expect(rowCount(database, table), table).toBe(0);
     }
+    expect(logicalPayloadBytes(database)).toBe(0);
   });
 
   it("cascades permanent issue deletion through events, tags, facets, and outbox", () => {
@@ -292,6 +293,9 @@ describe("IssueRepository.recordOccurrence", () => {
       buildOutbox: liveOutbox,
     });
     expect(rowCount(database, "event_tags")).toBe(2);
+    expect(logicalPayloadBytes(database)).toBe(
+      events.getByRowId(created.eventRowId)?.compressedPayloadBytes,
+    );
     expect(issues.delete(created.issueId)).toBe(true);
 
     for (const table of [
@@ -303,6 +307,7 @@ describe("IssueRepository.recordOccurrence", () => {
     ]) {
       expect(rowCount(database, table), table).toBe(0);
     }
+    expect(logicalPayloadBytes(database)).toBe(0);
     expect(rowCount(database, "projects")).toBe(1);
   });
 
@@ -449,4 +454,16 @@ function rowCount(database: ErrorHubDatabase, table: string): number {
     count: number;
   };
   return row.count;
+}
+
+function logicalPayloadBytes(database: ErrorHubDatabase): number {
+  return (
+    database
+      .prepare(
+        `SELECT logical_payload_bytes AS bytes
+         FROM retention_accounting
+         WHERE singleton = 1`,
+      )
+      .get() as { bytes: number }
+  ).bytes;
 }

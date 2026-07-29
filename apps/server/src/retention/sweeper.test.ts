@@ -440,6 +440,12 @@ describe("RetentionSweeper", () => {
     });
     let samples = 0;
     const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
+    const preparedSql: string[] = [];
+    const originalPrepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      preparedSql.push(sql);
+      return originalPrepare(sql);
+    });
 
     const result = await createSweeper({
       safetyState: state,
@@ -470,6 +476,13 @@ describe("RetentionSweeper", () => {
           snapshot.safety === "critical" && snapshot.acceptingIngest === false,
       ),
     ).toBe(true);
+    expect(
+      preparedSql.filter((sql) =>
+        /SELECT received_at\s+FROM events INDEXED BY idx_events_retention_received/iu.test(
+          sql,
+        ),
+      ),
+    ).toHaveLength(2);
   });
 
   it("preserves a sampled physical-critical classification when emergency reclaim throws", async () => {
@@ -493,18 +506,85 @@ describe("RetentionSweeper", () => {
       lastFailure: "cleanup_failed",
     });
   });
+
+  it("keeps logical accounting work bounded as event batch count grows", async () => {
+    for (const [index, receivedAt] of [
+      "2026-07-01T00:00:00.000Z",
+      "2026-07-02T00:00:00.000Z",
+      "2026-07-03T00:00:00.000Z",
+    ].entries()) {
+      record({ fingerprint: String(index), receivedAt });
+    }
+    const preparedSql: string[] = [];
+    const originalPrepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      preparedSql.push(sql);
+      return originalPrepare(sql);
+    });
+
+    const result = await createSweeper({ config: { batchSize: 1 } }).run();
+
+    expect(result).toMatchObject({
+      success: true,
+      removedEvents: { age: 3, budget: 0 },
+      batches: 3,
+    });
+    expect(
+      preparedSql.filter((sql) =>
+        /SUM\s*\(\s*compressed_payload_bytes|MIN\s*\(\s*received_at/iu.test(
+          sql,
+        ),
+      ),
+    ).toEqual([]);
+    expect(
+      preparedSql.filter((sql) =>
+        /WHERE id > \? AND id <= \?.*ORDER BY id.*LIMIT \?/isu.test(sql),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails closed when bounded reconciliation detects logical-accounting drift", async () => {
+    record({ receivedAt: "2026-08-22T00:00:00.000Z" });
+    database
+      .prepare(
+        `UPDATE retention_accounting
+         SET logical_payload_bytes = 0
+         WHERE singleton = 1`,
+      )
+      .run();
+    const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+
+    const result = await createSweeper({
+      safetyState: state,
+      config: { batchSize: 10 },
+    }).run();
+
+    expect(result).toMatchObject({ success: false, failure: "cleanup_failed" });
+    expect(state.snapshot()).toMatchObject({
+      safety: "unsafe",
+      acceptingIngest: false,
+      retentionKnownSuccessful: false,
+      lastFailure: "cleanup_failed",
+    });
+  });
 });
 
 function createSweeper(
   overrides: Partial<
     Omit<ConstructorParameters<typeof RetentionSweeper>[0], "operations">
-  > & { readonly safetyState?: StorageSafetyState } = {},
+  > & {
+    readonly safetyState?: StorageSafetyState;
+    readonly config?: Partial<typeof DEFAULT_RETENTION_CONFIG>;
+  } = {},
 ): RetentionSweeper {
-  const state =
-    overrides.safetyState ?? new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
   const sweeperOverrides = { ...overrides };
   delete sweeperOverrides.safetyState;
-  const operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
+  delete sweeperOverrides.config;
+  const operations = createOperationsContext({
+    ...DEFAULT_RETENTION_CONFIG,
+    ...overrides.config,
+  });
+  const state = overrides.safetyState ?? operations.storageSafety;
   return new RetentionSweeper({
     database,
     clock: () => new Date(NOW),

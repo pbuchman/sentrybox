@@ -9,6 +9,11 @@ import { OutboxRepository } from "./storage/outbox-repository.js";
 import { ProjectRepository } from "./storage/project-repository.js";
 import { WebhookDispatcher } from "./webhooks/dispatcher.js";
 import { DEFAULT_RETENTION_CONFIG } from "./retention/storage-budget.js";
+import {
+  type RetentionConfig,
+  type PhysicalStorageUsage,
+} from "./retention/storage-budget.js";
+import { RetentionSweeper } from "./retention/sweeper.js";
 
 const NOW = "2026-08-28T10:00:00.000Z";
 const PUBLIC_KEY = "shared-operations-key";
@@ -180,6 +185,171 @@ describe("shared operations composition", () => {
       'error_hub_dispatch_total{outcome="delivered"} 1',
     );
   });
+
+  it("uses one tiny retention config for hysteresis, hard limits, admission, and private status", async () => {
+    const tinyConfig: RetentionConfig = {
+      eventAgeMs: 30 * 24 * 60 * 60_000,
+      deliveryTtlMs: 7 * 24 * 60 * 60_000,
+      logicalHighBytes: 400,
+      logicalTargetBytes: 360,
+      physicalCriticalBytes: 475,
+      physicalTotalBytes: 500,
+      minimumFreeBytes: 10,
+      batchSize: 1,
+      incrementalVacuumPages: 1,
+    };
+    const database = openDatabase(":memory:");
+    databases.push(database);
+    migrateDatabase(database, NOW);
+    const projects = new ProjectRepository(database);
+    projects.create({
+      id: 1,
+      slug: "tiny",
+      name: "Tiny",
+      enabled: true,
+      createdAt: NOW,
+    });
+    projects.setIngestKey({
+      projectId: 1,
+      environment: "dev",
+      publicKey: PUBLIC_KEY,
+      allowedOrigins: [],
+      forwardingMode: "disabled",
+      forwardingSecretRef: null,
+      webhookMode: "disabled",
+      webhookTargetUrl: null,
+      webhookSecretRef: null,
+      enabledAt: null,
+      webhookSecrets: { references: () => [] },
+    });
+    const operations = createOperationsContext(tinyConfig);
+    expect(operations).toMatchObject({ retentionConfig: tinyConfig });
+    const initialUsage = tinyUsage(100);
+    operations.storageSafety.observeUsage(initialUsage, 0, null);
+    operations.storageSafety.markSuccess(new Date(NOW), {
+      age: 0,
+      budget: 0,
+    });
+    const publicApp = createPublicApp({
+      database,
+      operations,
+      shadowForwarder: { enqueue: () => "disabled" },
+      buildOutbox: () => ({
+        mode: "disabled",
+        deliveryId: "22222222-2222-4222-8222-222222222222",
+        targetUrl: null,
+        secretRef: null,
+        signature: null,
+        body: Buffer.from("{}"),
+      }),
+      now: () => new Date(NOW),
+    });
+    const privateApp = createPrivateApp({
+      database,
+      operations,
+      privateOrigin: new URL(PRIVATE_ORIGIN),
+      organizationSlug: "intexuraos",
+      allowedHosts: [PRIVATE_HOST],
+      allowedOrigins: [PRIVATE_ORIGIN],
+      publicIngestHosts: ["errors.test"],
+    });
+    apps.push(publicApp, privateApp);
+    for (const eventId of [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cccccccccccccccccccccccccccccccc",
+    ]) {
+      expect(
+        (
+          await publicApp.inject({
+            method: "POST",
+            url: `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`,
+            payload: eventEnvelope(eventId),
+          })
+        ).statusCode,
+      ).toBe(200);
+    }
+    database
+      .prepare(
+        `UPDATE events
+         SET compressed_payload_bytes = CASE event_id
+           WHEN 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' THEN 200
+           WHEN 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' THEN 201
+           ELSE 0
+         END`,
+      )
+      .run();
+
+    const hysteresis = await new RetentionSweeper({
+      database,
+      operations,
+      clock: () => new Date(NOW),
+      readPhysicalUsage: () => initialUsage,
+      checkpoint: checkpointResult,
+      emergencyCheckpoint: checkpointResult,
+      incrementalVacuum: () => undefined,
+    }).run();
+
+    expect(hysteresis).toMatchObject({
+      success: true,
+      removedEvents: { age: 0, budget: 1 },
+      usage: { logicalPayloadBytes: 201 },
+    });
+    database
+      .prepare(
+        `UPDATE events
+         SET received_at = '2026-07-01T00:00:00.000Z'
+         WHERE event_id = 'cccccccccccccccccccccccccccccccc'`,
+      )
+      .run();
+
+    operations.storageSafety.observeUsage(tinyUsage(475), 201, NOW);
+    expect(
+      (
+        await publicApp.inject({
+          method: "POST",
+          url: `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`,
+          payload: eventEnvelope("dddddddddddddddddddddddddddddddd"),
+        })
+      ).statusCode,
+    ).toBe(503);
+    expect(
+      (
+        await privateApp.inject({
+          method: "GET",
+          url: "/api/system/status",
+          headers: { host: PRIVATE_HOST },
+        })
+      ).json(),
+    ).toMatchObject({
+      storage: {
+        budgetBytes: 500,
+        logicalHighBytes: 400,
+        logicalTargetBytes: 360,
+        physicalCriticalBytes: 475,
+        minimumFreeBytes: 10,
+        safety: "critical",
+      },
+      ingest: { accepting: false },
+    });
+
+    const hardLimit = await new RetentionSweeper({
+      database,
+      operations,
+      clock: () => new Date(NOW),
+      readPhysicalUsage: () => tinyUsage(500),
+      emergencyCheckpoint: checkpointResult,
+      incrementalVacuum: () => undefined,
+    }).run();
+    expect(hardLimit).toMatchObject({
+      success: false,
+      failure: "physical_storage_critical",
+      removedEvents: { age: 0, budget: 0 },
+    });
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM events").get(),
+    ).toEqual({ count: 2 });
+  });
 });
 
 function eventEnvelope(eventId: string): Buffer {
@@ -224,4 +394,20 @@ function safeUsage() {
     totalBytes: 135,
     freeBytes: 10 * 1024 ** 3,
   };
+}
+
+function tinyUsage(totalBytes: number): PhysicalStorageUsage {
+  return {
+    databaseBytes: totalBytes,
+    walBytes: 0,
+    shmBytes: 0,
+    temporaryBytes: 0,
+    dataDirectoryOtherBytes: 0,
+    totalBytes,
+    freeBytes: 1_000,
+  };
+}
+
+function checkpointResult() {
+  return { busy: 0, logFrames: 0, checkpointedFrames: 0 };
 }

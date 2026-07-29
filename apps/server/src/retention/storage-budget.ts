@@ -189,7 +189,7 @@ export function validateRetentionConfig(
       "retention batch and vacuum bounds must be safe integers",
     );
   }
-  return { ...config };
+  return Object.isFrozen(config) ? config : Object.freeze({ ...config });
 }
 
 function classifyStorage(

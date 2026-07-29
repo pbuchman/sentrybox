@@ -1,11 +1,10 @@
 import type { ErrorHubDatabase } from "../storage/database.js";
 import { CURRENT_MIGRATION_VERSION } from "../storage/migrate.js";
 import {
-  DEFAULT_RETENTION_CONFIG,
   type RetentionConfig,
-  StorageSafetyState,
-  validateRetentionConfig,
+  type StorageSafetyState,
 } from "../retention/storage-budget.js";
+import type { OperationsContext } from "../operations.js";
 
 export interface ReadinessChecks {
   readonly sqliteReadWrite: boolean;
@@ -24,8 +23,7 @@ export interface ReadinessResult {
 
 export interface HealthStatusServiceOptions {
   readonly database: ErrorHubDatabase;
-  readonly safetyState: StorageSafetyState;
-  readonly config?: Partial<RetentionConfig>;
+  readonly operations: OperationsContext;
 }
 
 export class HealthStatusService {
@@ -35,11 +33,8 @@ export class HealthStatusService {
 
   public constructor(options: HealthStatusServiceOptions) {
     this.#database = options.database;
-    this.#safetyState = options.safetyState;
-    this.#config = validateRetentionConfig({
-      ...DEFAULT_RETENTION_CONFIG,
-      ...options.config,
-    });
+    this.#safetyState = options.operations.storageSafety;
+    this.#config = options.operations.retentionConfig;
   }
 
   public liveness(): { readonly status: "ok" } {
@@ -116,6 +111,7 @@ export class HealthStatusService {
         logicalHighBytes: this.#config.logicalHighBytes,
         logicalTargetBytes: this.#config.logicalTargetBytes,
         physicalCriticalBytes: this.#config.physicalCriticalBytes,
+        minimumFreeBytes: this.#config.minimumFreeBytes,
         safety: snapshot.safety,
       },
       retention: {

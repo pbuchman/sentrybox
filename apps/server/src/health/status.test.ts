@@ -24,7 +24,7 @@ beforeEach(() => {
   migrateDatabase(database, "2026-07-28T00:00:00.000Z");
   operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
   safetyState = operations.storageSafety;
-  health = new HealthStatusService({ database, safetyState });
+  health = new HealthStatusService({ database, operations });
 });
 
 afterEach(() => {

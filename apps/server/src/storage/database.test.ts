@@ -49,7 +49,7 @@ describe("SQLite database and migrations", () => {
     expect(pragmaScalar(first, "wal_autocheckpoint")).toBe(1_000);
     expect(
       first.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get(),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
 
     first.close();
     openConnections.pop();
@@ -79,6 +79,7 @@ describe("SQLite database and migrations", () => {
       "issues",
       "project_ingest_keys",
       "projects",
+      "retention_accounting",
       "schema_migrations",
       "webhook_outbox",
       "webhook_redrives",

@@ -68,7 +68,7 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
   const now = options.now ?? (() => new Date());
   const health = new HealthStatusService({
     database: options.database,
-    safetyState: options.operations.storageSafety,
+    operations: options.operations,
   });
   registerIssueRoutes(app, { database: options.database, now });
   registerEventRoutes(app, options.database, options.grafanaExploreUrl ?? null);

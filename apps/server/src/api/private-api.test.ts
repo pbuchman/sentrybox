@@ -2,12 +2,7 @@ import { gunzipSync } from "node:zlib";
 import type { NormalizedEvent } from "@intexura-error-hub/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrivateApp } from "../private-app.js";
-import { ErrorHubMetrics } from "../metrics.js";
 import { createOperationsContext } from "../operations.js";
-import {
-  DEFAULT_RETENTION_CONFIG,
-  StorageSafetyState,
-} from "../retention/storage-budget.js";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
 import { IssueRepository } from "../storage/issue-repository.js";
 import { migrateDatabase } from "../storage/migrate.js";
@@ -50,8 +45,8 @@ describe("private operator API", () => {
     exportBatches = [];
     clock = new Date(NOW);
     secretFailure = null;
-    const storageSafety = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
-    storageSafety.observeUsage(
+    const operations = createOperationsContext();
+    operations.storageSafety.observeUsage(
       {
         databaseBytes: 100,
         walBytes: 20,
@@ -64,7 +59,7 @@ describe("private operator API", () => {
       0,
       "2026-07-28T08:00:01.000Z",
     );
-    storageSafety.markSuccess(new Date(NOW), { age: 0, budget: 0 });
+    operations.storageSafety.markSuccess(new Date(NOW), { age: 0, budget: 0 });
     app = createPrivateApp({
       database,
       privateOrigin: new URL(PRIVATE_ORIGIN),
@@ -73,10 +68,7 @@ describe("private operator API", () => {
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: [PUBLIC_HOST],
       grafanaExploreUrl: new URL("https://grafana.test/explore"),
-      operations: {
-        storageSafety,
-        metrics: new ErrorHubMetrics(),
-      },
+      operations,
       now: () => clock,
       createDeliveryId: () => "55555555-5555-4555-8555-555555555555",
       secrets: {

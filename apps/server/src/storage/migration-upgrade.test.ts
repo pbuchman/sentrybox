@@ -19,6 +19,8 @@ const ORIGINAL_003_SHA256 =
   "7acf5bea95bc10e9ea33a028574d03b7b4463bea4a27750970a09f4b73ad6310";
 const ORIGINAL_004_SHA256 =
   "7a496732e2bdd1c3d232c213f7337e8b76b6dbead1eaa0b5cea6fc0e3b236614";
+const ORIGINAL_005_SHA256 =
+  "2fc05ab694f45e9d48957ef28593e3319f8f941c5c0e51c5e4f892bf1c6c7fab";
 const APPLIED_AT = "2026-07-28T10:00:00.000Z";
 const directories: string[] = [];
 const databases: ErrorHubDatabase[] = [];
@@ -40,9 +42,59 @@ describe("ordered database migration upgrade", () => {
     expect(migrationChecksum("004_private_api_order.sql")).toBe(
       ORIGINAL_004_SHA256,
     );
+    expect(migrationChecksum("005_retention_indexes.sql")).toBe(
+      ORIGINAL_005_SHA256,
+    );
   });
 
-  it("upgrades a populated v1 database through v5 without changing historical rows", async () => {
+  it("initializes trusted retention accounting from populated historical events", () => {
+    const database = openDatabase(":memory:");
+    databases.push(database);
+    database.exec(migrationSql("001_initial.sql"));
+    insertV1Rows(database);
+    database
+      .prepare(
+        `INSERT INTO events(
+           event_id, issue_id, project_id, issue_generation, environment,
+           release, service, level, platform, title, message, exception_type,
+           culprit, occurred_at, received_at, request_id, trace_id, task_id,
+           fingerprint_version, fingerprint, payload_gzip, payload_bytes,
+           compressed_payload_bytes, truncated
+         ) VALUES (
+           'historical-event', 1, 1, 1, 'dev', NULL, 'api', 'error', 'node',
+           'failure', 'failure', 'Error', NULL, ?, ?, NULL, NULL, NULL,
+           1, ?, ?, 3, 3, 0
+         )`,
+      )
+      .run(APPLIED_AT, APPLIED_AT, "a".repeat(64), Buffer.from("old"));
+    database
+      .prepare(
+        `INSERT INTO schema_migrations(version, name, checksum, applied_at)
+         VALUES (1, '001_initial', ?, ?)`,
+      )
+      .run(ORIGINAL_001_SHA256, APPLIED_AT);
+    database.pragma("user_version = 1");
+
+    migrateDatabase(database, "2026-07-28T10:04:00.000Z");
+
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
+    expect(
+      database
+        .prepare(
+          `SELECT logical_payload_bytes, mutation_revision,
+                  reconciliation_cursor_id
+           FROM retention_accounting
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({
+      logical_payload_bytes: 3,
+      mutation_revision: 0,
+      reconciliation_cursor_id: -1,
+    });
+  });
+
+  it("upgrades a populated v1 database through v6 without changing historical rows", async () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v1-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -64,7 +116,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:05:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
     expect(
       database
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -75,6 +127,7 @@ describe("ordered database migration upgrade", () => {
       { version: 3, name: "003_due_frontier" },
       { version: 4, name: "004_private_api_order" },
       { version: 5, name: "005_retention_indexes" },
+      { version: 6, name: "006_retention_accounting" },
     ]);
     expect(historicalRows(database)).toEqual(before);
     const outbox = new OutboxRepository(database);
@@ -136,10 +189,10 @@ describe("ordered database migration upgrade", () => {
     expect(() => migrateDatabase(database, "2026-07-28T10:06:00.000Z")).toThrow(
       /002_webhook_delivery checksum/u,
     );
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
   });
 
-  it("upgrades populated v2 to v5 with indexed bounded dispatcher, private API, and retention frontiers", () => {
+  it("upgrades populated v2 to v6 with indexed bounded dispatcher, private API, and retention frontiers", () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v2-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -169,7 +222,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:07:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
     expect(
       database
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -180,6 +233,7 @@ describe("ordered database migration upgrade", () => {
       { version: 3, name: "003_due_frontier" },
       { version: 4, name: "004_private_api_order" },
       { version: 5, name: "005_retention_indexes" },
+      { version: 6, name: "006_retention_accounting" },
     ]);
     expect(
       database.prepare("SELECT * FROM webhook_outbox ORDER BY id").all(),
@@ -202,7 +256,7 @@ describe("ordered database migration upgrade", () => {
     expectRetentionPlans(database);
   });
 
-  it("upgrades populated v3 to v5 without changing rows and adds operation indexes", () => {
+  it("upgrades populated v3 to v6 without changing rows and adds operation indexes", () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v3-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -231,7 +285,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:08:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
     expect(historicalRows(database)).toEqual(before);
     expect(
       database
@@ -243,12 +297,13 @@ describe("ordered database migration upgrade", () => {
       { version: 3, name: "003_due_frontier" },
       { version: 4, name: "004_private_api_order" },
       { version: 5, name: "005_retention_indexes" },
+      { version: 6, name: "006_retention_accounting" },
     ]);
     expectPrivateApiPlans(database);
     expectRetentionPlans(database);
   });
 
-  it("upgrades populated v4 to v5 without changing rows and adds only retention indexes", () => {
+  it("upgrades populated v4 to v6 without changing rows and adds retention operations", () => {
     const directory = mkdtempSync(join(tmpdir(), "error-hub-v4-upgrade-"));
     directories.push(directory);
     const database = openDatabase(join(directory, "error-hub.sqlite"));
@@ -285,7 +340,7 @@ describe("ordered database migration upgrade", () => {
 
     migrateDatabase(database, "2026-07-28T10:09:00.000Z");
 
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
     expect(historicalRows(database)).toEqual(before);
     expectRetentionPlans(database);
   });
