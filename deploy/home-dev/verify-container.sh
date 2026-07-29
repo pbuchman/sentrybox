@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly verify_image="${1:-intexura-error-hub:verify}"
+readonly verify_image="${1:-sentrybox:verify}"
 verify_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly verify_root
 verify_uid="$(id -u)"
@@ -154,8 +154,8 @@ if [[ "${exit_code}" != "0" ]]; then
   exit 1
 fi
 
-ERROR_HUB_IMAGE="ghcr.io/pbuchman/intexura-error-hub@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+ERROR_HUB_IMAGE="ghcr.io/pbuchman/sentrybox@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 ERROR_HUB_PRIVATE_ORIGIN="https://${verify_private_host}" \
 docker compose --file "${verify_root}/deploy/home-dev/compose.yaml" config >/dev/null
 
-printf 'Error Hub container contract verified.\n'
+printf 'SentryBox container contract verified.\n'

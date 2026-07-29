@@ -3,5 +3,5 @@
 	admin off
 }
 
-import /config/caddy-error-hub.caddy
-import /config/caddy-error-hub-deploy.caddy
+import /config/caddy-sentrybox.caddy
+import /config/caddy-sentrybox-deploy.caddy

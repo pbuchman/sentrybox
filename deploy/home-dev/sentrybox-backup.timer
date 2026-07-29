@@ -1,11 +1,11 @@
 [Unit]
-Description=Run the Intexura Error Hub backup daily
+Description=Run the SentryBox backup daily
 
 [Timer]
 OnCalendar=*-*-* 03:15:00
 RandomizedDelaySec=30m
 Persistent=true
-Unit=intexura-error-hub-backup.service
+Unit=sentrybox-backup.service
 
 [Install]
 WantedBy=timers.target

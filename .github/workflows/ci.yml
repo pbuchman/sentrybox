@@ -107,9 +107,9 @@ jobs:
           cache: false
           version: v0.72.0
       - name: Install Chromium
-        run: pnpm --filter @intexura-error-hub/web exec playwright install --with-deps chromium
+        run: pnpm --filter @sentrybox/web exec playwright install --with-deps chromium
       - name: Run Playwright operator flow
-        run: pnpm --filter @intexura-error-hub/web e2e
+        run: pnpm --filter @sentrybox/web e2e
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build linux/amd64 container without publishing

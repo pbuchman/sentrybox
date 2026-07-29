@@ -1,7 +1,7 @@
-name: intexura-error-hub
+name: sentrybox
 
 services:
-  error-hub:
+  sentrybox:
     image: ${ERROR_HUB_IMAGE:?immutable image digest required}
     user: "${ERROR_HUB_RUNTIME_UID:-1000}:${ERROR_HUB_RUNTIME_GID:-1000}"
     init: true
@@ -26,9 +26,9 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - /home/pbuchman/services/intexura-error-hub/data:/data
-      - /home/pbuchman/services/intexura-error-hub/env:/run/secrets/error-hub-env:ro
-      - /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/config.example.json:/run/config/error-hub-projects.json:ro
+      - /home/pbuchman/services/sentrybox/data:/data
+      - /home/pbuchman/services/sentrybox/env:/run/secrets/error-hub-env:ro
+      - /home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json:/run/config/error-hub-projects.json:ro
     pids_limit: 128
     mem_limit: 512m
     restart: unless-stopped

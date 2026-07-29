@@ -1,12 +1,12 @@
 [Unit]
-Description=Create the scheduled Intexura Error Hub backup
+Description=Create the scheduled SentryBox backup
 Requires=docker.service
-After=docker.service intexura-error-hub.service
+After=docker.service sentrybox.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/pbuchman/deploy/intexura-error-hub
-ExecStart=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/backup.sh scheduled
+WorkingDirectory=/home/pbuchman/deploy/sentrybox
+ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/backup.sh scheduled
 TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=true
@@ -14,8 +14,8 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/pbuchman/services/intexura-error-hub-backups
-ReadWritePaths=/var/lib/intexura-error-hub-deploy
+ReadWritePaths=/home/pbuchman/services/sentrybox/backups
+ReadWritePaths=/var/lib/sentrybox-deploy
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

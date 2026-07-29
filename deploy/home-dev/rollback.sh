@@ -40,7 +40,7 @@ if (( integrity_status != 0 )); then
   fi
   ERROR_HUB_IMAGE="${previous_image}" \
     ERROR_HUB_PRIVATE_ORIGIN="${previous_origin}" \
-    docker compose --file "${error_hub_compose_file}" stop --timeout 30 error-hub >/dev/null || true
+    docker compose --file "${error_hub_compose_file}" stop --timeout 30 sentrybox >/dev/null || true
   restore_temporary="${error_hub_database}.restore.$$"
   trap 'rm -f "${restore_temporary}"' EXIT
   install -m 0600 "${backup_file}" "${restore_temporary}"
@@ -58,7 +58,7 @@ if (( integrity_status != 0 )); then
 fi
 
 if (( restart_status != 0 )); then
-  printf 'Previous Error Hub image did not restart and the database remains valid; backup was not restored.\n' >&2
+  printf 'Previous SentryBox image did not restart and the database remains valid; backup was not restored.\n' >&2
   exit "${restart_status}"
 fi
 
@@ -69,4 +69,4 @@ error_hub_write_state \
   "${previous_origin}" \
   "${previous_sha}"
 
-printf 'Error Hub rolled back to %s.\n' "${previous_sha}"
+printf 'SentryBox rolled back to %s.\n' "${previous_sha}"

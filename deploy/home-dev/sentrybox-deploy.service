@@ -1,0 +1,36 @@
+[Unit]
+Description=Deploy a verified SentryBox release
+Requires=docker.service
+After=docker.service network-online.target caddy.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/sentrybox-deploy/deploy-request.json
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pbuchman/deploy/sentrybox
+ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy.sh
+ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy
+ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile
+ExecStopPost=/usr/bin/systemctl reload caddy
+TimeoutStartSec=20min
+UMask=0077
+StateDirectory=sentrybox-deploy
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pbuchman/deploy/sentrybox
+ReadWritePaths=/home/pbuchman/services/sentrybox/data
+ReadWritePaths=/home/pbuchman/services/sentrybox/backups
+ReadWritePaths=/var/lib/sentrybox-deploy
+ReadWritePaths=/run/lock
+ReadWritePaths=/etc/caddy/Caddyfile.d
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native

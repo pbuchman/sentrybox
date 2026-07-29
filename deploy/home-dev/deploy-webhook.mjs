@@ -27,13 +27,13 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_EVENT_AGE_MS = 5 * 60_000;
 const MAX_FUTURE_SKEW_MS = 30_000;
 const DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const EXPECTED_REPOSITORY = "pbuchman/intexura-error-hub";
-const EXPECTED_WORKFLOW = "Release Error Hub Image";
+const EXPECTED_REPOSITORY = "pbuchman/sentrybox";
+const EXPECTED_WORKFLOW = "Release SentryBox Image";
 const SECRET_FILE =
-  "/run/credentials/intexura-error-hub-deploy-webhook.service/github-webhook-secret";
-const DELIVERY_STORE = "/var/lib/intexura-error-hub-deploy/deliveries.json";
-const DEPLOY_REQUEST = "/var/lib/intexura-error-hub-deploy/deploy-request.json";
-const DEPLOY_UNIT = "intexura-error-hub-deploy.service";
+  "/run/credentials/sentrybox-deploy-webhook.service/github-webhook-secret";
+const DELIVERY_STORE = "/var/lib/sentrybox-deploy/deliveries.json";
+const DEPLOY_REQUEST = "/var/lib/sentrybox-deploy/deploy-request.json";
+const DEPLOY_UNIT = "sentrybox-deploy.service";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DELIVERY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
 const SIGNATURE_PATTERN = /^sha256=([0-9a-f]{64})$/u;
@@ -111,7 +111,7 @@ export function validateWorkflowRun(value, now = new Date()) {
   const payload = record(value, "payload");
   const repository = record(payload.repository, "repository");
   if (repository.full_name !== EXPECTED_REPOSITORY) {
-    throw new TypeError("repository does not match Error Hub");
+    throw new TypeError("repository does not match SentryBox");
   }
   if (payload.action !== "completed") {
     throw new TypeError("action must be completed");

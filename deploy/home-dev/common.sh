@@ -14,25 +14,25 @@ else
   readonly error_hub_prefix=""
 fi
 
-readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/intexura-error-hub"
-readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/intexura-error-hub"
+readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/sentrybox"
+readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/sentrybox"
 readonly error_hub_environment_file="${error_hub_service_root}/env"
 readonly error_hub_data_directory="${error_hub_service_root}/data"
 readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
-readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/intexura-error-hub-backups"
-readonly error_hub_state_directory="${error_hub_prefix}/var/lib/intexura-error-hub-deploy"
-readonly error_hub_lock_file="${error_hub_prefix}/run/lock/intexura-error-hub-deploy.lock"
+readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/sentrybox/backups"
+readonly error_hub_state_directory="${error_hub_prefix}/var/lib/sentrybox-deploy"
+readonly error_hub_lock_file="${error_hub_prefix}/run/lock/sentrybox-deploy.lock"
 readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
 readonly error_hub_current_state="${error_hub_state_directory}/current.env"
 readonly error_hub_previous_state="${error_hub_state_directory}/previous.env"
 readonly error_hub_compose_file="${error_hub_checkout}/deploy/home-dev/compose.yaml"
 readonly error_hub_project_config="${error_hub_checkout}/deploy/home-dev/config.example.json"
 readonly error_hub_database_operations="${error_hub_checkout}/deploy/home-dev/database-operations.mjs"
-readonly error_hub_caddy_fragment="${error_hub_prefix}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
+readonly error_hub_caddy_fragment="${error_hub_prefix}/etc/caddy/Caddyfile.d/sentrybox.caddy"
 readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
-readonly error_hub_repository="pbuchman/intexura-error-hub"
-readonly error_hub_workflow="Release Error Hub Image"
-readonly error_hub_image_repository="ghcr.io/pbuchman/intexura-error-hub"
+readonly error_hub_repository="pbuchman/sentrybox"
+readonly error_hub_workflow="Release SentryBox Image"
+readonly error_hub_image_repository="ghcr.io/pbuchman/sentrybox"
 
 error_hub_require_command() {
   local eh_command_name="$1"
@@ -44,8 +44,8 @@ error_hub_require_command() {
 
 error_hub_require_immutable_image() {
   local eh_candidate_image="${1:-}"
-  if [[ ! "${eh_candidate_image}" =~ ^ghcr\.io/pbuchman/intexura-error-hub@sha256:[0-9a-f]{64}$ ]]; then
-    printf 'An immutable Error Hub image digest is required; tags including latest are forbidden.\n' >&2
+  if [[ ! "${eh_candidate_image}" =~ ^ghcr\.io/pbuchman/sentrybox@sha256:[0-9a-f]{64}$ ]]; then
+    printf 'An immutable SentryBox image digest is required; tags including latest are forbidden.\n' >&2
     return 1
   fi
 }

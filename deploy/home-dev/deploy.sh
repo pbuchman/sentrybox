@@ -15,7 +15,7 @@ mkdir -p "$(dirname "${error_hub_lock_file}")" "${error_hub_state_directory}"
 umask 077
 exec 9>"${error_hub_lock_file}"
 if ! flock -n 9; then
-  printf 'An Error Hub deployment is already in progress.\n' >&2
+  printf 'A SentryBox deployment is already in progress.\n' >&2
   exit 1
 fi
 
@@ -33,7 +33,7 @@ private_origin=""
 restore_normal_caddy() {
   local route_status=0
   install -m 0644 \
-    "${error_hub_checkout}/deploy/home-dev/caddy-error-hub.caddy" \
+    "${error_hub_checkout}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${error_hub_caddy_fragment}" || route_status=$?
   if (( route_status == 0 )); then
     caddy validate --config "${error_hub_caddy_config}" >/dev/null \
@@ -58,7 +58,7 @@ cleanup() {
       ERROR_HUB_IMAGE="${resolved_image:-}" \
         ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
         docker compose --file "${error_hub_compose_file}" \
-          stop --timeout 30 error-hub >/dev/null || runtime_restore_status=$?
+          stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
     fi
     if (( exit_status == 0 && runtime_restore_status != 0 )); then
       exit_status="${runtime_restore_status}"
@@ -110,8 +110,8 @@ request_sha="$(
     if type == "object"
       and keys == ["headSha", "repository", "version", "workflow"]
       and .version == 1
-      and .repository == "pbuchman/intexura-error-hub"
-      and .workflow == "Release Error Hub Image"
+      and .repository == "pbuchman/sentrybox"
+      and .workflow == "Release SentryBox Image"
       and (.headSha | type == "string" and test("^[0-9a-f]{40}$"))
     then .headSha
     else error("deployment request identity is invalid")
@@ -125,14 +125,14 @@ error_hub_require_free_space "${error_hub_service_root}"
 repository_remote="$(error_hub_git remote get-url origin)"
 readonly repository_remote
 case "${repository_remote}" in
-  https://github.com/pbuchman/intexura-error-hub.git|git@github.com:pbuchman/intexura-error-hub.git) ;;
+  https://github.com/pbuchman/sentrybox.git|git@github.com:pbuchman/sentrybox.git) ;;
   *)
-    printf 'Canonical Error Hub checkout has an unexpected origin.\n' >&2
+    printf 'Canonical SentryBox checkout has an unexpected origin.\n' >&2
     exit 1
     ;;
 esac
 if [[ -n "$(error_hub_git status --porcelain --untracked-files=normal)" ]]; then
-  printf 'Canonical Error Hub deployment checkout must be clean.\n' >&2
+  printf 'Canonical SentryBox deployment checkout must be clean.\n' >&2
   exit 1
 fi
 original_checkout_sha="$(error_hub_git rev-parse HEAD)"
@@ -256,7 +256,7 @@ if (( deployment_status == 0 )); then
   error_hub_health_checks "${private_origin}" "${resolved_image}" || deployment_status=$?
 fi
 if (( deployment_status != 0 )); then
-  printf 'New Error Hub image failed deployment health checks.\n' >&2
+  printf 'New SentryBox image failed deployment health checks.\n' >&2
   exit "${deployment_status}"
 fi
 
@@ -282,4 +282,4 @@ error_hub_write_state \
   "${request_sha}"
 deployment_committed=1
 
-printf 'Error Hub deployed at %s using %s.\n' "${request_sha}" "${resolved_image}"
+printf 'SentryBox deployed at %s using %s.\n' "${request_sha}" "${resolved_image}"

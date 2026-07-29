@@ -68,19 +68,19 @@ mv -f "${private_origin_file}.tmp.$$" "${private_origin_file}"
 readonly systemd_directory="${error_hub_prefix}/etc/systemd/system"
 install -d -m 0755 "${systemd_directory}"
 for unit in \
-  intexura-error-hub.service \
-  intexura-error-hub-deploy.service \
-  intexura-error-hub-backup.service \
-  intexura-error-hub-backup.timer \
-  intexura-error-hub-restore-test.service \
-  intexura-error-hub-restore-test.timer; do
+  sentrybox.service \
+  sentrybox-deploy.service \
+  sentrybox-backup.service \
+  sentrybox-backup.timer \
+  sentrybox-restore-test.service \
+  sentrybox-restore-test.timer; do
   install -m 0644 "${script_directory}/${unit}" "${systemd_directory}/${unit}"
 done
 
 systemctl daemon-reload
 systemctl enable \
-  intexura-error-hub.service \
-  intexura-error-hub-backup.timer \
-  intexura-error-hub-restore-test.timer >/dev/null
+  sentrybox.service \
+  sentrybox-backup.timer \
+  sentrybox-restore-test.timer >/dev/null
 
-printf 'Error Hub Home Dev service assets installed.\n'
+printf 'SentryBox Home Dev service assets installed.\n'

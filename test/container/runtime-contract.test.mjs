@@ -60,6 +60,8 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
 test("compose keeps both listeners on host loopback and hardens the container", async () => {
   const compose = await source("deploy/home-dev/compose.yaml");
 
+  assert.match(compose, /^services:\s*\n\s{2}sentrybox:\s*$/mu);
+  assert.doesNotMatch(compose, /^\s{2}error-hub:\s*$/mu);
   assert.match(
     compose,
     /image:\s*\$\{ERROR_HUB_IMAGE:\?immutable image digest required\}/u,

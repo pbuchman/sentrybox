@@ -44,16 +44,16 @@ for port in 8140 8141; do
     container_id="$(
       ERROR_HUB_IMAGE="${candidate_image}" \
         ERROR_HUB_PRIVATE_ORIGIN="${ERROR_HUB_PRIVATE_ORIGIN:-https://preflight.invalid}" \
-        docker compose --file "${error_hub_compose_file}" ps -q error-hub
+        docker compose --file "${error_hub_compose_file}" ps -q sentrybox
     )"
     if [[ -z "${container_id}" ]]; then
-      printf 'Port %s is occupied by a process outside Error Hub Compose.\n' "${port}" >&2
+      printf 'Port %s is occupied by a process outside SentryBox Compose.\n' "${port}" >&2
       exit 1
     fi
     bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
     if [[ "${bindings}" != *"\"HostIp\":\"127.0.0.1\""* \
       || "${bindings}" != *"\"HostPort\":\"${port}\""* ]]; then
-      printf 'Port %s is not owned by the loopback-only Error Hub container.\n' "${port}" >&2
+      printf 'Port %s is not owned by the loopback-only SentryBox container.\n' "${port}" >&2
       exit 1
     fi
   fi
@@ -94,4 +94,4 @@ if [[ -f "${error_hub_database}" ]]; then
     <"${database_operations}" >/dev/null
 fi
 
-printf 'Error Hub preflight passed.\n'
+printf 'SentryBox preflight passed.\n'

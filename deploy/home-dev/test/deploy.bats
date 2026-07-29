@@ -19,30 +19,30 @@ setup() {
     "${fixture_root}/fake-state" \
     "${fixture_root}/etc/caddy/Caddyfile.d" \
     "${fixture_root}/etc/systemd/system" \
-    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev" \
-    "${fixture_root}/home/pbuchman/services/intexura-error-hub/data" \
-    "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups" \
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev" \
+    "${fixture_root}/home/pbuchman/services/sentrybox/data" \
+    "${fixture_root}/home/pbuchman/services/sentrybox/backups" \
     "${fixture_root}/run/lock" \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy"
+    "${fixture_root}/var/lib/sentrybox-deploy"
   : >"${ERROR_HUB_COMMAND_LOG}"
 
   cp "${repository_root}/deploy/home-dev/compose.yaml" \
-    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/compose.yaml"
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml"
   cp "${repository_root}/deploy/home-dev/config.example.json" \
-    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/config.example.json"
-  cp "${repository_root}/deploy/home-dev/caddy-error-hub.caddy" \
-    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/caddy-error-hub.caddy"
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy"
   cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
-    "${fixture_root}/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/database-operations.mjs"
-  cp "${repository_root}/deploy/home-dev/caddy-error-hub.caddy" \
-    "${fixture_root}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/database-operations.mjs"
+  cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   printf '{ import Caddyfile.d/*.caddy }\n' >"${fixture_root}/etc/caddy/Caddyfile"
   printf 'LEGACY_SENTRY_DSN_BACKEND_DEV=redacted\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/env"
-  chmod 0600 "${fixture_root}/home/pbuchman/services/intexura-error-hub/env"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/env"
+  chmod 0600 "${fixture_root}/home/pbuchman/services/sentrybox/env"
   printf '%s\n' "${ERROR_HUB_PRIVATE_ORIGIN}" \
-    >"${fixture_root}/var/lib/intexura-error-hub-deploy/private-origin"
-  chmod 0600 "${fixture_root}/var/lib/intexura-error-hub-deploy/private-origin"
+    >"${fixture_root}/var/lib/sentrybox-deploy/private-origin"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/private-origin"
 
   install_fake_commands
   write_valid_request
@@ -54,20 +54,20 @@ teardown() {
 
 write_valid_request() {
   printf '%s\n' \
-    "{\"version\":1,\"repository\":\"pbuchman/intexura-error-hub\",\"workflow\":\"Release Error Hub Image\",\"headSha\":\"${ERROR_HUB_EXPECTED_SHA}\"}" \
-    >"${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json"
-  chmod 0600 "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json"
+    "{\"version\":1,\"repository\":\"pbuchman/sentrybox\",\"workflow\":\"Release SentryBox Image\",\"headSha\":\"${ERROR_HUB_EXPECTED_SHA}\"}" \
+    >"${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json"
 }
 
 write_runtime_state() {
-  image="${1:-ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+  image="${1:-ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
   sha="${2:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
-  cat >"${fixture_root}/var/lib/intexura-error-hub-deploy/current.env" <<EOF
+  cat >"${fixture_root}/var/lib/sentrybox-deploy/current.env" <<EOF
 ERROR_HUB_IMAGE=${image}
 ERROR_HUB_PRIVATE_ORIGIN=${ERROR_HUB_PRIVATE_ORIGIN}
 ERROR_HUB_DEPLOYED_SHA=${sha}
 EOF
-  chmod 0600 "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/current.env"
 }
 
 install_fake_commands() {
@@ -94,7 +94,7 @@ if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ] && printf '%s' "$*" | grep -q ' fe
   sleep 0.4
 fi
 case "$*" in
-  *"remote get-url origin"*) printf '%s\n' 'https://github.com/pbuchman/intexura-error-hub.git' ;;
+  *"remote get-url origin"*) printf '%s\n' 'https://github.com/pbuchman/sentrybox.git' ;;
   *"status --porcelain"*) ;;
   *"rev-parse origin/main"*) printf '%s\n' "${ERROR_HUB_EXPECTED_SHA}" ;;
   *"rev-parse HEAD"*) printf '%s\n' "${ERROR_HUB_FAKE_HEAD_SHA}" ;;
@@ -108,7 +108,7 @@ printf 'docker ERROR_HUB_IMAGE=%s %s\n' "${ERROR_HUB_IMAGE:-}" "$*" >>"${ERROR_H
 case "$1 $2 $3" in
   "info  "|"compose version ") exit 0 ;;
 esac
-if printf ' %s ' "$*" | grep -q ' compose .* ps -q error-hub '; then
+if printf ' %s ' "$*" | grep -q ' compose .* ps -q sentrybox '; then
   [ "${ERROR_HUB_FAKE_PORTS_BUSY:-0}" = 1 ] && printf 'existing-container\n'
   exit 0
 fi
@@ -121,7 +121,7 @@ if [ "$1" = pull ]; then
   exit 0
 fi
 if [ "$1" = image ] && [ "$2" = inspect ]; then
-  printf '%s\n' 'ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  printf '%s\n' 'ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   exit 0
 fi
 if [ "$1" = run ]; then
@@ -288,22 +288,22 @@ EOF
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
 
   [ "${status}" -eq 0 ]
-  [ -d "${fixture_root}/home/pbuchman/deploy/intexura-error-hub" ]
-  [ -f "${fixture_root}/home/pbuchman/services/intexura-error-hub/env" ]
-  [ -d "${fixture_root}/home/pbuchman/services/intexura-error-hub/data" ]
-  [ -d "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups" ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/intexura-error-hub/env")" = 600 ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/intexura-error-hub/data")" = 700 ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups")" = 700 ]
+  [ -d "${fixture_root}/home/pbuchman/deploy/sentrybox" ]
+  [ -f "${fixture_root}/home/pbuchman/services/sentrybox/env" ]
+  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/data" ]
+  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/backups" ]
+  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/env")" = 600 ]
+  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/data")" = 700 ]
+  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/backups")" = 700 ]
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
-  [ "${output}" = $'intexura-error-hub\nintexura-error-hub-backups' ]
+  [ "${output}" = 'sentrybox' ]
 }
 
 @test "preflight refuses less than 15 GiB and immutable image violations" {
   export ERROR_HUB_FAKE_AVAILABLE_KIB=15728639
   run "${repository_root}/deploy/home-dev/preflight.sh" \
-    "ghcr.io/pbuchman/intexura-error-hub@sha256:$(printf 'b%.0s' $(seq 1 64))"
+    "ghcr.io/pbuchman/sentrybox@sha256:$(printf 'b%.0s' $(seq 1 64))"
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"15 GiB"* ]]
 
@@ -313,14 +313,14 @@ EOF
   [[ "${output}" == *"immutable"* ]]
 
   run "${repository_root}/deploy/home-dev/preflight.sh" \
-    "ghcr.io/pbuchman/intexura-error-hub:latest"
+    "ghcr.io/pbuchman/sentrybox:latest"
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"immutable"* ]]
 }
 
 @test "preflight proves the container runtime UID can write the data mount" {
   run "${repository_root}/deploy/home-dev/preflight.sh" \
-    "ghcr.io/pbuchman/intexura-error-hub@sha256:$(printf 'b%.0s' $(seq 1 64))"
+    "ghcr.io/pbuchman/sentrybox@sha256:$(printf 'b%.0s' $(seq 1 64))"
 
   [ "${status}" -eq 0 ]
   run grep -F 'runtime-write' "${ERROR_HUB_COMMAND_LOG}"
@@ -328,7 +328,7 @@ EOF
 }
 
 @test "health checks exercise public CORS authenticated envelope parsing and persistence with cleanup" {
-  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -eq 0 ]
@@ -350,7 +350,7 @@ EOF
 
 @test "failed synthetic persistence verification still removes the non-production fixture" {
   export ERROR_HUB_FAKE_SYNTHETIC_VERIFY_FAIL=1
-  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -ne 0 ]
@@ -363,7 +363,7 @@ EOF
 
 @test "synthetic public check rejects an invalid CORS response and still cleans up" {
   export ERROR_HUB_FAKE_CORS_FAIL=1
-  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -ne 0 ]
@@ -373,15 +373,15 @@ EOF
 
 @test "synthetic cleanup failure preserves context and preflight recovers it before database validation" {
   export ERROR_HUB_FAKE_SYNTHETIC_CLEANUP_FAIL=1
-  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -ne 0 ]
-  context_file="$(find "${fixture_root}/var/lib/intexura-error-hub-deploy" \
+  context_file="$(find "${fixture_root}/var/lib/sentrybox-deploy" \
     -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print)"
   [ -f "${context_file}" ]
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
 
   : >"${ERROR_HUB_COMMAND_LOG}"
   run "${repository_root}/deploy/home-dev/preflight.sh" "${image}"
@@ -405,7 +405,7 @@ EOF
 }
 
 @test "synthetic context is cleaned when prepare commits it before exit failure or TERM" {
-  image="ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  image="ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   for failure_mode in exit term; do
     export ERROR_HUB_FAKE_SYNTHETIC_PREPARE_AFTER_CONTEXT="${failure_mode}"
     : >"${ERROR_HUB_COMMAND_LOG}"
@@ -415,14 +415,14 @@ EOF
     [ "${status}" -ne 0 ]
     run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
     [ "${status}" -eq 0 ]
-    run find "${fixture_root}/var/lib/intexura-error-hub-deploy" \
+    run find "${fixture_root}/var/lib/sentrybox-deploy" \
       -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print
     [ -z "${output}" ]
   done
 }
 
 @test "deploy lock rejects contention before consuming the webhook request" {
-  lock="${fixture_root}/run/lock/intexura-error-hub-deploy.lock"
+  lock="${fixture_root}/run/lock/sentrybox-deploy.lock"
   exec 8>"${lock}"
   flock -n 8
 
@@ -430,14 +430,14 @@ EOF
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"already in progress"* ]]
-  [ -f "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+  [ -f "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
 @test "deploy marks only the canonical checkout as safe for root Git operations" {
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -eq 0 ]
-  canonical_checkout="${fixture_root}/home/pbuchman/deploy/intexura-error-hub"
+  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
   run grep -F "git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} fetch --quiet origin main" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
@@ -447,14 +447,14 @@ EOF
 
 @test "deploy rejects wrong webhook identity and removes the claimed request" {
   printf '%s\n' \
-    "{\"version\":1,\"repository\":\"attacker/repository\",\"workflow\":\"Release Error Hub Image\",\"headSha\":\"${ERROR_HUB_EXPECTED_SHA}\"}" \
-    >"${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json"
+    "{\"version\":1,\"repository\":\"attacker/repository\",\"workflow\":\"Release SentryBox Image\",\"headSha\":\"${ERROR_HUB_EXPECTED_SHA}\"}" \
+    >"${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json"
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
-  run find "${fixture_root}/var/lib/intexura-error-hub-deploy" -name 'deploy-request.processing.*' -print
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
+  run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'deploy-request.processing.*' -print
   [ -z "${output}" ]
   run grep '^docker pull ' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
@@ -469,17 +469,17 @@ EOF
   [[ "${output}" == *"15 GiB"* ]]
   run grep '^docker ERROR_HUB_IMAGE= pull ' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
 @test "deploy claims and removes a request with invalid file metadata" {
-  chmod 0644 "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json"
+  chmod 0644 "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json"
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
-  run find "${fixture_root}/var/lib/intexura-error-hub-deploy" -name 'deploy-request.processing.*' -print
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
+  run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'deploy-request.processing.*' -print
   [ -z "${output}" ]
 }
 
@@ -498,66 +498,66 @@ EOF
     "${fixture_root}/fake-state/fetch-blocked"
 
   [ "${status}" -eq 143 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
-  run find "${fixture_root}/var/lib/intexura-error-hub-deploy" -name 'deploy-request.processing.*' -print
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
+  run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'deploy-request.processing.*' -print
   [ -z "${output}" ]
 }
 
 @test "failed readiness automatically restores the previous digest before checking the database" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
-  first_previous="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaa' "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1)"
+  first_previous="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa' "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1)"
   first_integrity="$(grep -n 'rollback-integrity' "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1)"
   [ -n "${first_previous}" ]
   [ -n "${first_integrity}" ]
   [ "${first_previous}" -lt "${first_integrity}" ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
   run grep -F 'respond "temporarily unavailable" 503' \
-    "${fixture_root}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   [ "${status}" -ne 0 ]
 }
 
 @test "rollback keeps a healthy database and restores a backup only after a failed integrity check" {
   write_runtime_state
-  cp "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env" \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy/previous.env"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   printf 'consistent-backup\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/predeploy.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
 
   run "${repository_root}/deploy/home-dev/rollback.sh"
   [ "${status}" -eq 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite")" = 'live-database' ]
+  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
 
   export ERROR_HUB_FAKE_INTEGRITY_FAIL=1
   run "${repository_root}/deploy/home-dev/rollback.sh"
   [ "${status}" -eq 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite")" = 'consistent-backup' ]
-  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite")" = '1000:1000' ]
+  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'consistent-backup' ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = '1000:1000' ]
 }
 
 @test "predeploy backup uses SQLite online backup and retains only one local snapshot" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   printf 'stale\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/old.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/old.sqlite"
 
   run "${repository_root}/deploy/home-dev/backup.sh" predeploy \
-    "ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
   [ "${status}" -eq 0 ]
-  [ -s "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/predeploy.sqlite" ]
-  [ ! -e "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/old.sqlite" ]
-  [ "$(find "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups" -maxdepth 1 -name '*.sqlite' | wc -l | tr -d ' ')" -eq 1 ]
+  [ -s "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite" ]
+  [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/old.sqlite" ]
+  [ "$(find "${fixture_root}/home/pbuchman/services/sentrybox/backups" -maxdepth 1 -name '*.sqlite' | wc -l | tr -d ' ')" -eq 1 ]
   run grep -F 'online-backup' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -E '(^| )cp .*/data/error-hub.sqlite' "${ERROR_HUB_COMMAND_LOG}"
@@ -566,24 +566,24 @@ EOF
 
 @test "oversized backup is rejected without replacing the last known-good snapshot" {
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   printf 'last-known-good\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/predeploy.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_BACKUP_OVERSIZE=1
 
   run "${repository_root}/deploy/home-dev/backup.sh" predeploy \
-    "ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"5 GiB"* ]]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/predeploy.sqlite")" = 'last-known-good' ]
-  [ ! -e "${fixture_root}/home/pbuchman/services/intexura-error-hub-backups/.predeploy.sqlite.tmp" ]
+  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'last-known-good' ]
+  [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/.predeploy.sqlite.tmp" ]
 }
 
 @test "backup failure aborts deployment before the new image starts and normal Caddy is restored" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_BACKUP_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -591,7 +591,7 @@ EOF
   [ "${status}" -ne 0 ]
   [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
   run grep -F 'reverse_proxy 127.0.0.1:8140' \
-    "${fixture_root}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   [ "${status}" -eq 0 ]
   run grep -F 'systemctl reload caddy' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
@@ -602,7 +602,7 @@ EOF
 @test "migration probe requires the immediately previous runtime to read the upgraded copy" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/intexura-error-hub/data/error-hub.sqlite"
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_COMPAT_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -619,9 +619,9 @@ EOF
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -eq 0 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
-  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
+  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "${status}" -eq 0 ]
   run grep -F 'compose --file' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
@@ -659,8 +659,8 @@ EOF
   [ "${status}" -eq 0 ]
   run grep -F 'https://errors.intexuraos.cloud/api/1/envelope/' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
+  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "${status}" -eq 0 ]
 }
 
@@ -677,8 +677,8 @@ EOF
   run grep -F -- '--request POST' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   [[ "${output}" == *'https://errors.intexuraos.cloud/api/1/envelope/'* ]]
-  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
+  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "${status}" -eq 0 ]
 }
 
@@ -690,10 +690,10 @@ EOF
 
   [ "${status}" -ne 0 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
-  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    "${fixture_root}/var/lib/intexura-error-hub-deploy/current.env"
+  run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "${status}" -eq 0 ]
-  [ ! -e "${fixture_root}/var/lib/intexura-error-hub-deploy/deploy-request.json" ]
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
 @test "failed current state commit rolls the runtime back before restoring the checkout" {
@@ -704,12 +704,12 @@ EOF
 
   [ "${status}" -ne 0 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
-  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
   [ -n "${checkout_line}" ]
   [ "${rollback_line}" -lt "${checkout_line}" ]
-  run find "${fixture_root}/var/lib/intexura-error-hub-deploy" -name 'current.env.tmp.*' -print
+  run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'current.env.tmp.*' -print
   [ -z "${output}" ]
 }
 
@@ -731,7 +731,7 @@ EOF
 
   [ "${status}" -eq 143 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
-  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/intexura-error-hub@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
+  rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
   [ -n "${checkout_line}" ]
@@ -743,32 +743,32 @@ EOF
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
   [ "${status}" -eq 0 ]
 
-  deploy_unit="${fixture_root}/etc/systemd/system/intexura-error-hub-deploy.service"
-  runtime_unit="${fixture_root}/etc/systemd/system/intexura-error-hub.service"
-  backup_timer="${fixture_root}/etc/systemd/system/intexura-error-hub-backup.timer"
-  restore_timer="${fixture_root}/etc/systemd/system/intexura-error-hub-restore-test.timer"
-  restore_unit="${fixture_root}/etc/systemd/system/intexura-error-hub-restore-test.service"
-  run grep -F 'StateDirectory=intexura-error-hub-deploy' "${deploy_unit}"
+  deploy_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy.service"
+  runtime_unit="${fixture_root}/etc/systemd/system/sentrybox.service"
+  backup_timer="${fixture_root}/etc/systemd/system/sentrybox-backup.timer"
+  restore_timer="${fixture_root}/etc/systemd/system/sentrybox-restore-test.timer"
+  restore_unit="${fixture_root}/etc/systemd/system/sentrybox-restore-test.service"
+  run grep -F 'StateDirectory=sentrybox-deploy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ExecStart=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/deploy.sh' "${deploy_unit}"
+  run grep -F 'ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy.sh' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/caddy-error-hub.caddy /etc/caddy/Caddyfile.d/intexura-error-hub.caddy' "${deploy_unit}"
+  run grep -F 'ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'WorkingDirectory=/home/pbuchman/deploy/intexura-error-hub' "${runtime_unit}"
+  run grep -F 'WorkingDirectory=/home/pbuchman/deploy/sentrybox' "${runtime_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${backup_timer}"
   [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${restore_timer}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ConditionFileIsExecutable=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/restore-test.sh' "${restore_unit}"
+  run grep -F 'ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh' "${restore_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ConditionPathIsExecutable=' "${restore_unit}"
   [ "${status}" -ne 0 ]
-  run grep -R -E 'deploy-request\.json.*(docker\.sock|/data)|intexura-error-hub-deploy-webhook.*docker\.sock' \
+  run grep -R -E 'deploy-request\.json.*(docker\.sock|/data)|sentrybox-deploy-webhook.*docker\.sock' \
     "${fixture_root}/etc/systemd/system"
   [ "${status}" -ne 0 ]
 }

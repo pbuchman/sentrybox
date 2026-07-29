@@ -20,12 +20,11 @@ try {
     );
   }
 
-  const match =
-    /^ghcr\.io\/pbuchman\/intexura-error-hub:sha-([0-9a-f]{40})$/u.exec(
-      imageReference,
-    );
+  const match = /^ghcr\.io\/pbuchman\/sentrybox:sha-([0-9a-f]{40})$/u.exec(
+    imageReference,
+  );
   if (match === null) {
-    throw new Error("image reference is not the immutable Error Hub SHA tag");
+    throw new Error("image reference is not the immutable SentryBox SHA tag");
   }
   if (match[1] !== commitSha) {
     throw new Error("image reference does not match the tested commit SHA");
@@ -44,6 +43,6 @@ try {
 } catch (error) {
   const message =
     error instanceof Error ? error.message : "unknown validation error";
-  process.stderr.write(`Invalid Error Hub image reference: ${message}\n`);
+  process.stderr.write(`Invalid SentryBox image reference: ${message}\n`);
   process.exitCode = 1;
 }

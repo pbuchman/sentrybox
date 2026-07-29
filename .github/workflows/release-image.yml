@@ -1,4 +1,4 @@
-name: Release Error Hub Image
+name: Release SentryBox Image
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-error-hub-image-main
+  group: release-sentrybox-image-main
   cancel-in-progress: false
 
 jobs:
@@ -100,9 +100,9 @@ jobs:
           cache: false
           version: v0.72.0
       - name: Install Chromium
-        run: pnpm --filter @intexura-error-hub/web exec playwright install --with-deps chromium
+        run: pnpm --filter @sentrybox/web exec playwright install --with-deps chromium
       - name: Run Playwright operator flow
-        run: pnpm --filter @intexura-error-hub/web e2e
+        run: pnpm --filter @sentrybox/web e2e
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build linux/amd64 container without publishing
@@ -123,7 +123,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_REF: ghcr.io/pbuchman/intexura-error-hub:sha-${{ github.sha }}
+      IMAGE_REF: ghcr.io/pbuchman/sentrybox:sha-${{ github.sha }}
       DOCKER_BUILD_RECORD_UPLOAD: false
     steps:
       - name: Check out verified commit
@@ -148,7 +148,7 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_REF }}
           labels: |
-            org.opencontainers.image.source=https://github.com/pbuchman/intexura-error-hub
+            org.opencontainers.image.source=https://github.com/pbuchman/sentrybox
             org.opencontainers.image.revision=${{ github.sha }}
           push: false
           provenance: false
@@ -176,7 +176,7 @@ jobs:
           registry_token="$({
             curl --fail --silent --show-error \
               --user "$GITHUB_ACTOR:$GHCR_TOKEN" \
-              "https://ghcr.io/token?service=ghcr.io&scope=repository:pbuchman/intexura-error-hub:pull"
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:pbuchman/sentrybox:pull"
           } | node --input-type=module -e '
             import { readFileSync } from "node:fs";
             const response = JSON.parse(readFileSync(0, "utf8"));
@@ -191,7 +191,7 @@ jobs:
               --request HEAD \
               --header "Authorization: Bearer $registry_token" \
               --header "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
-              "https://ghcr.io/v2/pbuchman/intexura-error-hub/manifests/sha-$GITHUB_SHA"
+              "https://ghcr.io/v2/pbuchman/sentrybox/manifests/sha-$GITHUB_SHA"
           )"
           case "$manifest_status" in
             404) ;;
@@ -219,7 +219,7 @@ jobs:
           pull: true
           tags: ${{ env.IMAGE_REF }}
           labels: |
-            org.opencontainers.image.source=https://github.com/pbuchman/intexura-error-hub
+            org.opencontainers.image.source=https://github.com/pbuchman/sentrybox
             org.opencontainers.image.revision=${{ github.sha }}
           push: true
           sbom: true
@@ -230,7 +230,7 @@ jobs:
         run: |
           node scripts/ci/verify-image-ref.mjs "$IMAGE_REF" "$GITHUB_SHA" "$IMAGE_DIGEST"
           {
-            echo "## Error Hub image"
+            echo "## SentryBox image"
             echo
             echo "- Reference: \`$IMAGE_REF\`"
             echo "- Digest: \`$IMAGE_DIGEST\`"

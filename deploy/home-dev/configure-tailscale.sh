@@ -152,10 +152,10 @@ fi
 
 if ! "${curl_bin}" --fail --silent --show-error --connect-timeout 2 --max-time 5 \
   "${private_origin}/health/ready" >/dev/null; then
-  printf 'Error Hub private Tailscale readiness probe failed.\n' >&2
+  printf 'SentryBox private Tailscale readiness probe failed.\n' >&2
   exit 1
 fi
 
 mapping_changed=false
 trap - EXIT
-printf 'Error Hub private Tailscale endpoint is ready at %s.\n' "${private_origin}"
+printf 'SentryBox private Tailscale endpoint is ready at %s.\n' "${private_origin}"
