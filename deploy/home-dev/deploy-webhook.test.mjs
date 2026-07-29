@@ -144,13 +144,13 @@ test("HTTP boundary rejects path, method, event, signature, stale payload, and o
   }
 });
 
-test("production wiring can invoke only the fixed deployment unit and cannot access Hub data", () => {
+test("production wiring can invoke only the fixed SentryBox deployment unit and cannot access SentryBox data", () => {
   const source = readFileSync(
     new URL("./deploy-webhook.mjs", import.meta.url),
     "utf8",
   );
   const unit = readFileSync(
-    new URL("./intexura-error-hub-deploy-webhook.service", import.meta.url),
+    new URL("./sentrybox-deploy-webhook.service", import.meta.url),
     "utf8",
   );
   const cloudflaredUnit = readFileSync(
@@ -162,24 +162,36 @@ test("production wiring can invoke only the fixed deployment unit and cannot acc
   assert.match(source, /import \{ spawn \} from "node:child_process"/u);
   assert.match(source, /\["--wait", "start", DEPLOY_UNIT\]/u);
   assert.match(source, /shell:\s*false/u);
-  assert.match(source, /"Release Error Hub Image"/u);
-  assert.match(source, /"pbuchman\/intexura-error-hub"/u);
+  assert.match(source, /"Release SentryBox Image"/u);
+  assert.match(source, /"pbuchman\/sentrybox"/u);
+  assert.match(
+    source,
+    /"\/run\/credentials\/sentrybox-deploy-webhook\.service\/github-webhook-secret"/u,
+  );
+  assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deliveries\.json"/u);
+  assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deploy-request\.json"/u);
+  assert.match(source, /"sentrybox-deploy\.service"/u);
   assert.match(unit, /^LoadCredential=github-webhook-secret:/mu);
   assert.match(unit, /^CapabilityBoundingSet=$/mu);
   assert.match(unit, /^NoNewPrivileges=true$/mu);
   assert.match(
     unit,
-    /^ReadWritePaths=\/var\/lib\/intexura-error-hub-deploy$/mu,
+    /^ConditionPathExists=\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/deploy-webhook\.mjs$/mu,
   );
   assert.match(
     unit,
-    /InaccessiblePaths=.*intexura-error-hub\/data.*docker\.sock/u,
+    /^WorkingDirectory=\/home\/pbuchman\/deploy\/sentrybox$/mu,
   );
+  assert.match(unit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
+  assert.match(unit, /InaccessiblePaths=.*sentrybox\/data.*docker\.sock/u);
   assert.match(
     cloudflaredUnit,
     /--token-file \/run\/credentials\/cloudflared\.service\/tunnel-token/u,
   );
-  assert.match(cloudflaredUnit, /^LoadCredential=tunnel-token:/mu);
+  assert.match(
+    cloudflaredUnit,
+    /^LoadCredential=tunnel-token:\/home\/pbuchman\/services\/sentrybox-deploy\/cloudflare-tunnel-token$/mu,
+  );
   assert.doesNotMatch(cloudflaredUnit, /(?:^|\s)--token(?:\s|=)(?!-file)/u);
 });
 
@@ -249,9 +261,9 @@ test("a deployment in progress holds the concurrency lock without consuming anot
 function validPayload() {
   return {
     action: "completed",
-    repository: { full_name: "pbuchman/intexura-error-hub" },
+    repository: { full_name: "pbuchman/sentrybox" },
     workflow_run: {
-      name: "Release Error Hub Image",
+      name: "Release SentryBox Image",
       event: "push",
       head_branch: "main",
       head_sha: SHA,

@@ -78,17 +78,14 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.match(compose, /\/health\/ready/u);
   assert.match(compose, /max-size:\s*"?10m"?/u);
   assert.match(compose, /max-file:\s*"?3"?/u);
+  assert.match(compose, /\/home\/pbuchman\/services\/sentrybox\/data:\/data/u);
   assert.match(
     compose,
-    /\/home\/pbuchman\/services\/intexura-error-hub\/data:\/data/u,
+    /\/home\/pbuchman\/services\/sentrybox\/env:\/run\/secrets\/error-hub-env:ro/u,
   );
   assert.match(
     compose,
-    /\/home\/pbuchman\/services\/intexura-error-hub\/env:\/run\/secrets\/error-hub-env:ro/u,
-  );
-  assert.match(
-    compose,
-    /config\.example\.json:\/run\/config\/error-hub-projects\.json:ro/u,
+    /\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/config\.example\.json:\/run\/config\/error-hub-projects\.json:ro/u,
   );
   assert.doesNotMatch(compose, /^volumes:\s*$/mu);
   assert.doesNotMatch(compose, /\bdown\s+-v\b/u);

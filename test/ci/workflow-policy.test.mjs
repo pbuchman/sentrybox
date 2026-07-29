@@ -147,10 +147,10 @@ test("CI executes the Home Dev network contract with pinned Caddy", async () => 
   assert.doesNotMatch(routeVerifier, /caddy:latest/u);
 });
 
-test("main-only release publishes one immutable amd64 tag with attestations", async () => {
+test("main-only release publishes one immutable SentryBox amd64 tag with attestations", async () => {
   const workflow = await source(".github/workflows/release-image.yml");
 
-  assert.match(workflow, /^name:\s*Release Error Hub Image$/mu);
+  assert.match(workflow, /^name:\s*Release SentryBox Image$/mu);
   assert.match(workflow, /^\s{2}push:\s*$/mu);
   assert.match(workflow, /^\s{4}branches:\s*\[main\]\s*$/mu);
   assert.doesNotMatch(workflow, /^\s{2}pull_request:\s*$/mu);
@@ -171,7 +171,7 @@ test("main-only release publishes one immutable amd64 tag with attestations", as
   );
   assert.match(
     workflow,
-    /ghcr\.io\/pbuchman\/intexura-error-hub:sha-\$\{\{\s*github\.sha\s*\}\}/u,
+    /ghcr\.io\/pbuchman\/sentrybox:sha-\$\{\{\s*github\.sha\s*\}\}/u,
   );
   assert.match(workflow, /platforms:\s*linux\/amd64/u);
   assert.match(workflow, /push:\s*true/u);
@@ -192,7 +192,7 @@ test("image reference validator accepts only the repository SHA tag and digest",
   );
   const sha = "0123456789abcdef0123456789abcdef01234567";
   const digest = `sha256:${"a".repeat(64)}`;
-  const valid = `ghcr.io/pbuchman/intexura-error-hub:sha-${sha}`;
+  const valid = `ghcr.io/pbuchman/sentrybox:sha-${sha}`;
 
   assert.equal(spawnSync(process.execPath, [script, valid, sha]).status, 0);
   assert.equal(
@@ -201,8 +201,8 @@ test("image reference validator accepts only the repository SHA tag and digest",
   );
 
   for (const args of [
-    ["ghcr.io/pbuchman/intexura-error-hub:latest", sha],
-    [`ghcr.io/pbuchman/intexura-error-hub:sha-${sha.slice(0, 12)}`, sha],
+    ["ghcr.io/pbuchman/sentrybox:latest", sha],
+    [`ghcr.io/pbuchman/sentrybox:sha-${sha.slice(0, 12)}`, sha],
     [valid, "f".repeat(40)],
     [valid, sha, "sha256:abcd"],
   ]) {
