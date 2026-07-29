@@ -148,7 +148,7 @@ finalize_retained_snapshot() (
   }
 
   # Invoked indirectly by the EXIT trap below.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   cleanup_staging() {
     local exit_status=$?
     trap - EXIT
