@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   createOnlineBackup,
   prepareSyntheticPublicCheck,
   validatePreflightDatabase,
+  validateRestoredDatabase,
   validateRollbackDatabase,
   verifySyntheticPublicCheck,
 } from "./database-operations.mjs";
@@ -83,6 +84,24 @@ test("preflight accepts exactly two projects and four unique environment credent
   }
 });
 
+test("preflight reads an active WAL database while the writer remains open", () => {
+  const current = fixture();
+  try {
+    current.database.pragma("wal_autocheckpoint = 0");
+    current.database
+      .prepare("UPDATE projects SET name = ? WHERE id = 1")
+      .run("IntexuraOS Backend from WAL");
+    const walPath = `${current.databasePath}-wal`;
+    assert.equal(existsSync(walPath), true);
+    assert.ok(statSync(walPath).size > 0);
+
+    assert.doesNotThrow(() => validatePreflightDatabase(current.databasePath));
+  } finally {
+    if (current.database.open) current.database.close();
+    rmSync(current.directory, { recursive: true, force: true });
+  }
+});
+
 test("preflight rejects duplicate project/environment and public-key identities", () => {
   const current = fixture();
   try {
@@ -138,6 +157,31 @@ test("rollback validation rejects a migration newer than the previous runtime", 
     assert.throws(
       () => validateRollbackDatabase(current.databasePath, 2),
       /newer than the rollback runtime/u,
+    );
+  } finally {
+    if (current.database.open) current.database.close();
+    rmSync(current.directory, { recursive: true, force: true });
+  }
+});
+
+test("restore validation requires current migrations, integrity, and readable core tables", () => {
+  const current = fixture();
+  try {
+    current.database.close();
+    assert.doesNotThrow(() =>
+      validateRestoredDatabase(current.databasePath, 3),
+    );
+    assert.throws(
+      () => validateRestoredDatabase(current.databasePath, 4),
+      /does not match the current runtime/u,
+    );
+
+    const damaged = new Database(current.databasePath);
+    damaged.exec("DROP TABLE events");
+    damaged.close();
+    assert.throws(
+      () => validateRestoredDatabase(current.databasePath, 3),
+      /required table is unreadable/u,
     );
   } finally {
     if (current.database.open) current.database.close();

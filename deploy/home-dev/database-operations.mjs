@@ -75,6 +75,38 @@ export function validateRollbackDatabase(filename, currentMigrationVersion) {
   }
 }
 
+export function validateRestoredDatabase(filename, currentMigrationVersion) {
+  if (
+    !Number.isSafeInteger(currentMigrationVersion) ||
+    currentMigrationVersion < 1
+  ) {
+    throw new TypeError("current migration version must be a positive integer");
+  }
+  const database = openReadonly(filename);
+  try {
+    assertIntegrity(database);
+    const migration = database
+      .prepare(
+        "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
+      )
+      .get();
+    if (migration.version !== currentMigrationVersion) {
+      throw new Error(
+        "restored database migration does not match the current runtime",
+      );
+    }
+    for (const table of ["projects", "issues", "events", "webhook_outbox"]) {
+      try {
+        database.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get();
+      } catch {
+        throw new Error(`required table is unreadable: ${table}`);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
 export function prepareSyntheticPublicCheck(filename, contextPath) {
   if (existsSync(contextPath)) {
     throw new Error("synthetic public check context already exists");
@@ -274,6 +306,60 @@ function dependencyAnchor() {
     : pathToFileURL(join(process.cwd(), "package.json"));
 }
 
+async function runRetentionValidation(filename, eventAgeMs) {
+  const { openDatabase } = await import(
+    pathToFileURL(join(process.cwd(), "dist/src/storage/database.js")).href
+  );
+  const { CURRENT_MIGRATION_VERSION, migrateDatabase } = await import(
+    pathToFileURL(join(process.cwd(), "dist/src/storage/migrate.js")).href
+  );
+  const { createOperationsContext } = await import(
+    pathToFileURL(join(process.cwd(), "dist/src/operations.js")).href
+  );
+  const { DEFAULT_RETENTION_CONFIG } = await import(
+    pathToFileURL(join(process.cwd(), "dist/src/retention/storage-budget.js"))
+      .href
+  );
+  const { RetentionSweeper } = await import(
+    pathToFileURL(join(process.cwd(), "dist/src/retention/sweeper.js")).href
+  );
+
+  validateRollbackDatabase(filename, CURRENT_MIGRATION_VERSION);
+  const retentionConfig = { ...DEFAULT_RETENTION_CONFIG, eventAgeMs };
+  const safePhysicalSample = {
+    databaseBytes: 0,
+    walBytes: 0,
+    shmBytes: 0,
+    temporaryBytes: 0,
+    dataDirectoryOtherBytes: 0,
+    totalBytes: 0,
+    freeBytes: retentionConfig.physicalTotalBytes,
+  };
+  const database = openDatabase(filename);
+  try {
+    migrateDatabase(database);
+    const result = await new RetentionSweeper({
+      database,
+      operations: createOperationsContext(retentionConfig),
+      readPhysicalUsage: () => safePhysicalSample,
+    }).run();
+    if (!result.success) {
+      throw new Error(
+        `retention validation failed: ${result.failure ?? "unknown failure"}`,
+      );
+    }
+    const checkpoint = database.pragma("wal_checkpoint(TRUNCATE)", {
+      simple: false,
+    });
+    if (checkpoint.length !== 1 || checkpoint[0].busy !== 0) {
+      throw new Error("retained database WAL could not be checkpointed");
+    }
+  } finally {
+    database.close();
+  }
+  validateRestoredDatabase(filename, CURRENT_MIGRATION_VERSION);
+}
+
 async function runCli() {
   const command = process.argv[2];
   if (command === "runtime-write") {
@@ -319,6 +405,20 @@ async function runCli() {
     );
     return;
   }
+  if (command === "restore-test") {
+    await runRetentionValidation(
+      "/restore/restore.sqlite",
+      30 * 24 * 60 * 60_000,
+    );
+    return;
+  }
+  if (command === "retained-finalize") {
+    await runRetentionValidation(
+      requiredRetainedDatabasePath(),
+      23 * 24 * 60 * 60_000,
+    );
+    return;
+  }
   if (command === "synthetic-prepare") {
     const context = prepareSyntheticPublicCheck(
       "/data/error-hub.sqlite",
@@ -342,6 +442,17 @@ async function runCli() {
     return;
   }
   throw new Error("unknown database deployment operation");
+}
+
+function requiredRetainedDatabasePath() {
+  const value = process.argv[3];
+  if (
+    typeof value !== "string" ||
+    !/^\/retained\/\.retained\.sqlite\.[A-Za-z0-9]{6,}$/u.test(value)
+  ) {
+    throw new Error("retained database path is invalid");
+  }
+  return value;
 }
 
 function requiredSyntheticContextPath() {

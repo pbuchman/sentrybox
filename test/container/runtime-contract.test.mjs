@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import test from "node:test";
 
 const root = new URL("../../", import.meta.url);
@@ -173,6 +174,119 @@ test("verification is bounded and never installs packages at runtime", async () 
   assert.doesNotMatch(verifier, /\bdown\s+-v\b/u);
 });
 
+test("disabled scheduled backup and restore checks are explicit and isolated from live restore writes", async () => {
+  const backup = await source("deploy/home-dev/backup.sh");
+  const restore = await source("deploy/home-dev/restore-test.sh");
+  const databaseOperations = await source(
+    "deploy/home-dev/database-operations.mjs",
+  );
+  const backupUnit = await source("deploy/home-dev/sentrybox-backup.service");
+  const restoreUnit = await source(
+    "deploy/home-dev/sentrybox-restore-test.service",
+  );
+  const installer = await source("deploy/home-dev/install.sh");
+  const deploy = await source("deploy/home-dev/deploy.sh");
+  const preflight = await source("deploy/home-dev/preflight.sh");
+  const rollback = await source("deploy/home-dev/rollback.sh");
+
+  await access(
+    new URL("deploy/home-dev/restore-test.sh", root),
+    constants.X_OK,
+  );
+  assert.match(backup, /Scheduled external backup is disabled\/degraded/u);
+  assert.match(backup, /exit 1/u);
+  assert.match(backup, /predeploy\.sqlite/u);
+  assert.doesNotMatch(backup, /scheduled\.sqlite/u);
+  assert.doesNotMatch(backup, /docker compose[^\n]*\bstop\b/u);
+  assert.doesNotMatch(backup, /--env-file|\/run\/secrets/u);
+  assert.match(backup, /flock -n 9/u);
+  assert.match(backup, /\.retained\.sqlite\.XXXXXX/u);
+
+  assert.match(
+    restore,
+    /error_hub_read_state "\$\{error_hub_current_state\}"/u,
+  );
+  assert.match(
+    restore,
+    /mktemp -d "\$\{error_hub_state_directory\}\/restore-test\.XXXXXX"/u,
+  );
+  assert.match(restore, /predeploy\.sqlite/u);
+  assert.match(restore, /dst=\/restore/u);
+  assert.match(restore, /--network none/u);
+  assert.match(restore, /restore-test/u);
+  assert.doesNotMatch(restore, /error_hub_data_directory|dst=\/data/u);
+  assert.doesNotMatch(restore, /--env-file|\/run\/secrets/u);
+  assert.match(databaseOperations, /command === "restore-test"/u);
+  assert.match(databaseOperations, /\/restore\/restore\.sqlite/u);
+  assert.match(databaseOperations, /migrateDatabase/u);
+  assert.match(databaseOperations, /RetentionSweeper/u);
+  assert.match(databaseOperations, /23 \* 24 \* 60 \* 60_000/u);
+
+  assert.match(restore, /--name "\$\{restore_container\}"/u);
+  assert.match(restore, /docker rm --force "\$\{restore_container\}"/u);
+  assert.match(restore, /rm -rf -- "\$\{temporary_directory\}"/u);
+  assert.match(restore, /15 \* 1024 \* 1024/u);
+  assert.match(restore, /flock -n 9/u);
+  assert.match(restore, /exec 7<"\$\{database_operations\}"/u);
+  assert.match(restore, /<&7/u);
+
+  const retainedFinalize = deploy.indexOf('backup.sh" retained-finalize');
+  const publicCheck = deploy.indexOf("error_hub_run_synthetic_public_check");
+  const committed = deploy.indexOf("deployment_committed=1");
+  assert.ok(publicCheck >= 0 && retainedFinalize > publicCheck);
+  assert.ok(committed > retainedFinalize);
+  assert.match(deploy, /migration-probe\.XXXXXX/u);
+  assert.match(deploy, /src=\$\{migration_probe_directory\},dst=\/probe/u);
+  assert.doesNotMatch(
+    deploy,
+    /src=\$\{error_hub_state_directory\},dst=\/probe/u,
+  );
+
+  const preflightIntegrity = preflight.split(
+    "--label sentrybox-check=preflight-integrity",
+  )[1];
+  assert.ok(preflightIntegrity !== undefined);
+  assert.match(
+    preflightIntegrity,
+    /--user "\$\{runtime_uid\}:\$\{runtime_gid\}"/u,
+  );
+  assert.match(preflightIntegrity, /--network none/u);
+  assert.match(preflightIntegrity, /--cap-drop ALL/u);
+  assert.match(preflightIntegrity, /--security-opt no-new-privileges:true/u);
+  assert.match(
+    preflightIntegrity,
+    /src=\$\{error_hub_data_directory\},dst=\/data"/u,
+  );
+  assert.doesNotMatch(preflightIntegrity, /dst=\/data,readonly/u);
+
+  const rollbackIntegrity = rollback.split(
+    "--label sentrybox-check=rollback-integrity",
+  )[1];
+  assert.ok(rollbackIntegrity !== undefined);
+  assert.match(rollbackIntegrity, /--network none/u);
+  assert.doesNotMatch(rollbackIntegrity, /dst=\/data,readonly/u);
+
+  assert.match(backupUnit, /^ExecStart=.*\/backup\.sh scheduled$/mu);
+  assert.match(backupUnit, /^ReadWritePaths=\/run\/lock$/mu);
+  assert.match(restoreUnit, /^Requires=docker\.service$/mu);
+  assert.match(restoreUnit, /^ReadWritePaths=\/run\/lock$/mu);
+  assert.match(
+    restoreUnit,
+    /^InaccessiblePaths=\/home\/pbuchman\/services\/sentrybox\/data$/mu,
+  );
+  assert.match(installer, /systemd-analyze verify/u);
+  assert.match(
+    installer,
+    /caddy validate --config Caddyfile --adapter caddyfile/u,
+  );
+  assert.ok(
+    installer.indexOf("systemd-analyze verify") <
+      installer.indexOf('"${error_hub_caddy_fragment}"'),
+  );
+  assert.match(deploy, /state_write_started=1/u);
+  assert.match(deploy, /Deployment state restoration failed during rollback/u);
+});
+
 test("active runtime artifacts do not expose the retired product name", async () => {
   const runtimeArtifacts = [
     "Dockerfile",
@@ -192,6 +306,7 @@ test("active runtime artifacts do not expose the retired product name", async ()
     "deploy/home-dev/deploy.sh",
     "deploy/home-dev/preflight.sh",
     "deploy/home-dev/rollback.sh",
+    "deploy/home-dev/restore-test.sh",
     "deploy/home-dev/verify-container.sh",
     "packages/protocol/src/normalize.ts",
     "scripts/admin/generate-project-config.mjs",

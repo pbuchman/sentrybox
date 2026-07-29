@@ -60,6 +60,45 @@ afterEach(() => {
 });
 
 describe("RetentionSweeper", () => {
+  it("runs the retained-backup profile at 23 days and recomputes the surviving issue", async () => {
+    const issue = record({
+      receivedAt: "2026-08-05T09:59:59.999Z",
+      occurredAt: "2026-08-20T10:00:00.000Z",
+      level: "fatal",
+    });
+    record({
+      receivedAt: "2026-08-05T10:00:00.000Z",
+      occurredAt: "2026-08-01T10:00:00.000Z",
+      level: "warn",
+    });
+
+    const result = await createSweeper({
+      config: { eventAgeMs: 23 * 24 * 60 * 60_000 },
+    }).run();
+
+    expect(result).toMatchObject({
+      success: true,
+      removedEvents: { age: 1, budget: 0 },
+    });
+    expect(issues.getById(issue.issueId)).toMatchObject({
+      occurrenceCount: 1,
+      firstSeen: "2026-08-01T10:00:00.000Z",
+      lastSeen: "2026-08-01T10:00:00.000Z",
+      highestLevel: "warn",
+    });
+  });
+
+  it("fails real retention readiness when its required event frontier index is absent", async () => {
+    database.exec("DROP INDEX idx_events_retention_received");
+
+    const result = await createSweeper().run();
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "cleanup_failed",
+    });
+  });
+
   it("uses strict received-at age boundaries and recomputes every retained aggregate and nullable facet", async () => {
     const issue = record({
       receivedAt: "2026-07-29T09:59:59.999Z",

@@ -14,6 +14,15 @@ for executable in docker df ss stat; do
   error_hub_require_command "${executable}"
 done
 
+runtime_uid="${ERROR_HUB_RUNTIME_UID:-1000}"
+runtime_gid="${ERROR_HUB_RUNTIME_GID:-1000}"
+readonly runtime_uid runtime_gid
+if [[ ! "${runtime_uid}" =~ ^[1-9][0-9]*$ \
+  || ! "${runtime_gid}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'Preflight requires a numeric non-root runtime UID and GID.\n' >&2
+  exit 1
+fi
+
 for required_path in \
   "${error_hub_checkout}" \
   "${error_hub_service_root}" \
@@ -65,7 +74,11 @@ done
 container_write_probe="${error_hub_data_directory}/.container-preflight"
 rm -f "${container_write_probe}"
 docker run --rm --interactive \
+  --user "${runtime_uid}:${runtime_gid}" \
+  --network none \
   --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
   --tmpfs /tmp:size=16m,mode=1777 \
   --label sentrybox-check=runtime-write \
   --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
@@ -87,10 +100,14 @@ docker run --rm \
 error_hub_recover_synthetic_public_check "${candidate_image}"
 if [[ -f "${error_hub_database}" ]]; then
   docker run --rm --interactive \
-    --read-only \
-    --tmpfs /tmp:size=16m,mode=1777 \
     --label sentrybox-check=preflight-integrity \
-    --mount "type=bind,src=${error_hub_data_directory},dst=/data,readonly" \
+    --user "${runtime_uid}:${runtime_gid}" \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --tmpfs /tmp:size=16m,mode=1777 \
+    --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
     --entrypoint node \
     "${candidate_image}" \
     --input-type=module - preflight \

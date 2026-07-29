@@ -7,7 +7,7 @@ readonly script_directory
 source "${script_directory}/common.sh"
 readonly database_operations="${script_directory}/database-operations.mjs"
 
-for executable in caddy curl df docker flock git jq systemctl; do
+for executable in caddy curl df docker flock git jq mktemp systemctl; do
   error_hub_require_command "${executable}"
 done
 
@@ -21,10 +21,13 @@ fi
 
 claimed_request="${error_hub_state_directory}/deploy-request.processing.$$"
 maintenance_active=0
-migration_probe="${error_hub_state_directory}/migration-probe.sqlite"
+migration_probe_directory=""
+migration_probe=""
+migration_probe_cleanup_armed=0
 original_checkout_sha=""
 checkout_changed=0
 deployment_committed=0
+state_write_started=0
 runtime_changed=0
 had_previous=0
 previous_image=""
@@ -38,7 +41,38 @@ cleanup() {
   local exit_status=$?
   trap - EXIT INT TERM
   set +e
-  rm -f "${claimed_request}" "${migration_probe}" "${migration_probe}-wal" "${migration_probe}-shm"
+  rm -f "${claimed_request}"
+  if (( migration_probe_cleanup_armed == 1 )); then
+    if ! rm -rf -- "${migration_probe_directory}" \
+      || [[ -e "${migration_probe_directory}" \
+        || -L "${migration_probe_directory}" ]]; then
+      printf 'Migration-probe temporary-tree cleanup failed: %s\n' \
+        "${migration_probe_directory}" >&2
+      if (( exit_status == 0 )); then
+        exit_status=1
+      fi
+    fi
+  fi
+  if (( state_write_started == 1 && deployment_committed == 0 )); then
+    state_restore_status=0
+    if (( had_previous == 1 )); then
+      install -m 0600 "${error_hub_previous_state}" \
+        "${error_hub_current_state}.restore.$$" || state_restore_status=$?
+      if (( state_restore_status == 0 )); then
+        mv -f "${error_hub_current_state}.restore.$$" \
+          "${error_hub_current_state}" || state_restore_status=$?
+      fi
+      rm -f "${error_hub_current_state}.restore.$$"
+    else
+      rm -f "${error_hub_current_state}" || state_restore_status=$?
+    fi
+    if (( state_restore_status != 0 )); then
+      printf 'Deployment state restoration failed during rollback.\n' >&2
+      if (( exit_status == 0 )); then
+        exit_status="${state_restore_status}"
+      fi
+    fi
+  fi
   if (( runtime_changed == 1 && deployment_committed == 0 )); then
     runtime_restore_status=0
     if (( had_previous == 1 )); then
@@ -184,28 +218,49 @@ if (( had_previous == 1 )) && [[ -f "${error_hub_database}" ]]; then
     printf 'Migration compatibility probe requires a safe pre-deployment backup.\n' >&2
     exit 1
   fi
+  migration_probe_directory="$(
+    mktemp -d "${error_hub_state_directory}/migration-probe.XXXXXX"
+  )"
+  case "${migration_probe_directory}" in
+    "${error_hub_state_directory}/migration-probe."*) ;;
+    *)
+      printf 'Migration-probe temporary directory is outside deployment state.\n' >&2
+      exit 1
+      ;;
+  esac
+  migration_probe_cleanup_armed=1
+  migration_probe="${migration_probe_directory}/migration-probe.sqlite"
   install -m 0600 "${predeploy_backup}" "${migration_probe}"
   docker run --rm --interactive \
     --user 0:0 \
+    --network none \
     --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
     --tmpfs /tmp:size=16m,mode=1777 \
     --label sentrybox-check=compatibility-new \
-    --mount "type=bind,src=${error_hub_state_directory},dst=/probe" \
+    --mount "type=bind,src=${migration_probe_directory},dst=/probe" \
     --entrypoint node \
     "${resolved_image}" \
     --input-type=module - open-runtime \
     <"${database_operations}" >/dev/null
   docker run --rm --interactive \
     --user 0:0 \
+    --network none \
     --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
     --tmpfs /tmp:size=16m,mode=1777 \
     --label sentrybox-check=compatibility-previous \
-    --mount "type=bind,src=${error_hub_state_directory},dst=/probe" \
+    --mount "type=bind,src=${migration_probe_directory},dst=/probe" \
     --entrypoint node \
     "${previous_image}" \
     --input-type=module - compatibility-read \
     <"${database_operations}" >/dev/null
-  rm -f "${migration_probe}" "${migration_probe}-wal" "${migration_probe}-shm"
+  rm -rf -- "${migration_probe_directory}"
+  migration_probe_cleanup_armed=0
+  migration_probe_directory=""
+  migration_probe=""
 fi
 
 deployment_status=0
@@ -232,13 +287,16 @@ if (( public_route_status != 0 )); then
   printf 'Public HTTPS ingest routing failed its deployment check.\n' >&2
   exit "${public_route_status}"
 fi
-maintenance_active=0
-
+state_write_started=1
 error_hub_write_state \
   "${error_hub_current_state}" \
   "${resolved_image}" \
   "${private_origin}" \
   "${request_sha}"
+if [[ -f "${predeploy_backup}" ]]; then
+  "${script_directory}/backup.sh" retained-finalize "${resolved_image}" >/dev/null
+fi
+maintenance_active=0
 deployment_committed=1
 
 printf 'SentryBox deployed at %s using %s.\n' "${request_sha}" "${resolved_image}"
