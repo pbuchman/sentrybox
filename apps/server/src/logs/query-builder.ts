@@ -163,7 +163,7 @@ function identifierLineRegex(identifier: SelectedIdentifier): string {
 }
 
 function fallbackMessage(event: LogLocatorEvent): string {
-  for (const value of [event.message, event.exceptionType, event.title]) {
+  for (const value of [event.message, event.title, event.exceptionType]) {
     if (value !== null && value.length > 0) return value;
   }
   return "error";
