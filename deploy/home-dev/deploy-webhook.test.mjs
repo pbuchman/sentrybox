@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -149,10 +149,16 @@ test("production wiring can invoke only the fixed SentryBox deployment unit and 
     new URL("./deploy-webhook.mjs", import.meta.url),
     "utf8",
   );
-  const unit = readFileSync(
-    new URL("./sentrybox-deploy-webhook.service", import.meta.url),
-    "utf8",
+  const unitUrl = new URL(
+    "./sentrybox-deploy-webhook.service",
+    import.meta.url,
   );
+  assert.equal(
+    existsSync(unitUrl),
+    true,
+    "SentryBox deployment unit is missing: deploy/home-dev/sentrybox-deploy-webhook.service",
+  );
+  const unit = readFileSync(unitUrl, "utf8");
   const cloudflaredUnit = readFileSync(
     new URL("./cloudflared.service", import.meta.url),
     "utf8",
@@ -171,7 +177,10 @@ test("production wiring can invoke only the fixed SentryBox deployment unit and 
   assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deliveries\.json"/u);
   assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deploy-request\.json"/u);
   assert.match(source, /"sentrybox-deploy\.service"/u);
-  assert.match(unit, /^LoadCredential=github-webhook-secret:/mu);
+  assert.match(
+    unit,
+    /^LoadCredential=github-webhook-secret:\/home\/pbuchman\/services\/sentrybox\/deploy\/github-webhook-secret$/mu,
+  );
   assert.match(unit, /^CapabilityBoundingSet=$/mu);
   assert.match(unit, /^NoNewPrivileges=true$/mu);
   assert.match(
@@ -190,7 +199,7 @@ test("production wiring can invoke only the fixed SentryBox deployment unit and 
   );
   assert.match(
     cloudflaredUnit,
-    /^LoadCredential=tunnel-token:\/home\/pbuchman\/services\/sentrybox-deploy\/cloudflare-tunnel-token$/mu,
+    /^LoadCredential=tunnel-token:\/home\/pbuchman\/services\/sentrybox\/deploy\/cloudflare-tunnel-token$/mu,
   );
   assert.doesNotMatch(cloudflaredUnit, /(?:^|\s)--token(?:\s|=)(?!-file)/u);
 });

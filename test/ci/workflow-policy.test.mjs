@@ -157,6 +157,38 @@ test("main-only release publishes one immutable SentryBox amd64 tag with attesta
   assert.doesNotMatch(workflow, /\bworkflow_dispatch\b/u);
   assert.doesNotMatch(workflow, /(?:^|[:@])latest(?:$|\s)/mu);
 
+  const packageFilters = Array.from(
+    workflow.matchAll(/\bpnpm --filter (\S+)/gu),
+    (match) => match[1],
+  );
+  assert.deepEqual(packageFilters, ["@sentrybox/web", "@sentrybox/web"]);
+  assert.deepEqual(
+    Array.from(
+      workflow.matchAll(/org\.opencontainers\.image\.source=(\S+)/gu),
+      (match) => match[1],
+    ),
+    [
+      "https://github.com/pbuchman/sentrybox",
+      "https://github.com/pbuchman/sentrybox",
+    ],
+  );
+  assert.deepEqual(
+    Array.from(
+      workflow.matchAll(/scope=repository:([^"&\s]+)/gu),
+      (match) => match[1],
+    ),
+    ["pbuchman/sentrybox:pull"],
+  );
+  assert.deepEqual(
+    Array.from(
+      workflow.matchAll(
+        /https:\/\/ghcr\.io\/v2\/([^"\s]+\/manifests\/sha-\$GITHUB_SHA)/gu,
+      ),
+      (match) => match[1],
+    ),
+    ["pbuchman/sentrybox/manifests/sha-$GITHUB_SHA"],
+  );
+
   const release = jobBlocks(workflow).find((job) => job.name === "release");
   assert.ok(release, "release job is missing");
   assert.match(release.source, /^    needs:\s*verify$/mu);
