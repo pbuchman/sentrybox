@@ -298,6 +298,67 @@ describe("private operator API", () => {
     );
   });
 
+  it("returns a transported log title fallback when only an SDK trace context exists", async () => {
+    const sdkTraceId = "c1d021bfd3375d3f43e706a2689da5f0";
+    const transportedBase = normalizedEvent(
+      80,
+      "2026-07-28T12:00:00.000Z",
+      "1.0.0",
+      "dev",
+      "Failed to fetch Linear issue",
+    );
+    const transportedLog: NormalizedEvent = {
+      ...transportedBase,
+      message: null,
+      exception: {
+        type: "Error",
+        value: "Failed to fetch Linear issue",
+        mechanism: { type: "generic", handled: true },
+        frames: [],
+        discardedValues: 0,
+      },
+      serverName: "linear-agent",
+      requestId: null,
+      traceId: sdkTraceId,
+      taskId: null,
+      payload: {
+        contexts: { trace: { trace_id: sdkTraceId } },
+        extras: {},
+        correlations: {
+          traceId: {
+            source: "contexts",
+            alias: "trace_id",
+            value: sdkTraceId,
+          },
+        },
+      },
+    };
+    const occurrence = new IssueRepository(database).recordOccurrence({
+      ...occurrenceInput(transportedLog, "c"),
+      buildOutbox: disabledOutbox("33333333-3333-4333-8333-333333333333"),
+    });
+
+    const response = await privateGet(
+      `/api/events/${String(occurrence.eventRowId)}`,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        traceId: sdkTraceId,
+        logLocator: expect.objectContaining({
+          confidence: "time_message_fallback",
+          criteria: expect.objectContaining({
+            identifier: null,
+            message: "Failed to fetch Linear issue",
+          }),
+          query:
+            '{environment="dev",service="linear-agent"} |~ "Failed to fetch Linear issue"',
+        }),
+      }),
+    );
+  });
+
   it("applies cross-facet predicates to one event row and paginates timestamp ties without gaps", async () => {
     const issues = new IssueRepository(database);
     const mismatch = issues.recordOccurrence({

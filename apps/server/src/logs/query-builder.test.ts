@@ -142,27 +142,56 @@ describe("buildLogLocator", () => {
     });
   });
 
-  it("uses message, then exception type, then title as non-exact fallback", () => {
-    const message = buildLogLocator(event(), { grafanaExploreUrl: GRAFANA });
-    const exception = buildLogLocator(event({ message: null }), {
-      grafanaExploreUrl: GRAFANA,
-    });
-    const title = buildLogLocator(
-      event({ message: null, exceptionType: null }),
+  it("uses the transported log title before a generic exception type", () => {
+    const locator = buildLogLocator(
+      event({
+        message: null,
+        exceptionType: "Error",
+        title: "Failed to fetch Linear issue",
+        traceId: "sdk-generated-trace",
+        correlationEvidence: {
+          traceId: {
+            source: "contexts",
+            alias: "trace_id",
+            value: "sdk-generated-trace",
+          },
+        },
+      }),
       { grafanaExploreUrl: GRAFANA },
     );
+
+    expect(locator).toMatchObject({
+      confidence: "time_message_fallback",
+      criteria: {
+        identifier: null,
+        message: "Failed to fetch Linear issue",
+      },
+    });
+    expect(locator.query).toBe(
+      '{environment="dev",service="api"} |~ "Failed to fetch Linear issue"',
+    );
+  });
+
+  it("uses message, then title, then exception type as non-exact fallback", () => {
+    const message = buildLogLocator(event(), { grafanaExploreUrl: GRAFANA });
+    const title = buildLogLocator(event({ message: null }), {
+      grafanaExploreUrl: GRAFANA,
+    });
+    const exception = buildLogLocator(event({ message: null, title: "" }), {
+      grafanaExploreUrl: GRAFANA,
+    });
 
     expect(message).toMatchObject({
       confidence: "time_message_fallback",
       criteria: { message: "worker failed", identifier: null },
     });
-    expect(exception).toMatchObject({
-      confidence: "time_message_fallback",
-      criteria: { message: "TypeError", identifier: null },
-    });
     expect(title).toMatchObject({
       confidence: "time_message_fallback",
       criteria: { message: "TypeError: worker failed", identifier: null },
+    });
+    expect(exception).toMatchObject({
+      confidence: "time_message_fallback",
+      criteria: { message: "TypeError", identifier: null },
     });
     expect(message.explanation).not.toMatch(/\bexact\b/iu);
   });
