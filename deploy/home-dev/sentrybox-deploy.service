@@ -8,6 +8,8 @@ ConditionPathExists=/var/lib/sentrybox-deploy/deploy-request.json
 [Service]
 Type=oneshot
 WorkingDirectory=/home/pbuchman/deploy/sentrybox
+Environment=XDG_CONFIG_HOME=/var/lib/sentrybox-deploy/caddy-validation/config
+Environment=XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data
 ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy.sh
 ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy
 ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile

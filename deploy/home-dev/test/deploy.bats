@@ -270,6 +270,8 @@ EOF
   cat >"${fixture_root}/fake-bin/caddy" <<'EOF'
 #!/bin/sh
 printf 'caddy %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+printf 'caddy-env XDG_CONFIG_HOME=%s XDG_DATA_HOME=%s\n' \
+  "${XDG_CONFIG_HOME:-}" "${XDG_DATA_HOME:-}" >>"${ERROR_HUB_COMMAND_LOG}"
 exit 0
 EOF
 
@@ -323,6 +325,10 @@ EOF
   [ -f "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
   [ ! -e "${fixture_root}/etc/systemd/system/cloudflared.service" ]
   run grep -F "caddy validate --config ${fixture_root}/etc/caddy/Caddyfile" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx \
+    "caddy-env XDG_CONFIG_HOME=${fixture_root}/var/lib/sentrybox-deploy/caddy-validation/config XDG_DATA_HOME=${fixture_root}/var/lib/sentrybox-deploy/caddy-validation/data" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -F 'systemctl reload caddy' "${ERROR_HUB_COMMAND_LOG}"
@@ -900,6 +906,12 @@ EOF
   run grep -F 'ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile' "${deploy_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'Environment=XDG_CONFIG_HOME=/var/lib/sentrybox-deploy/caddy-validation/config' \
+    "${deploy_unit}"
+  [ "${status}" -eq 0 ]
+  run grep -Fx 'Environment=XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data' \
+    "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]

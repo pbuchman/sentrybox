@@ -46,9 +46,15 @@ Then verify the installed live fragments before every reload:
 ```bash
 sudo test -f /etc/caddy/Caddyfile.d/sentrybox.caddy
 sudo test -f /etc/caddy/Caddyfile.d/sentrybox-deploy.caddy
-sudo caddy validate --config /etc/caddy/Caddyfile
+sudo env \
+  XDG_CONFIG_HOME=/var/lib/sentrybox-deploy/caddy-validation/config \
+  XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data \
+  caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
+
+The dedicated validation directories keep Caddy's internal-PKI validation
+state out of the canonical Git checkout.
 
 The ingest fragment enforces a one-MiB edge limit and falls through to a fixed
 `404` for UI, private API, exports, readiness, metrics, non-numeric project

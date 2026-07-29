@@ -35,6 +35,9 @@ readonly error_hub_caddy_directory="${error_hub_prefix}/etc/caddy/Caddyfile.d"
 readonly error_hub_caddy_fragment="${error_hub_caddy_directory}/sentrybox.caddy"
 readonly error_hub_caddy_deploy_fragment="${error_hub_caddy_directory}/sentrybox-deploy.caddy"
 readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
+readonly error_hub_caddy_validation_root="${error_hub_state_directory}/caddy-validation"
+readonly error_hub_caddy_validation_config="${error_hub_caddy_validation_root}/config"
+readonly error_hub_caddy_validation_data="${error_hub_caddy_validation_root}/data"
 readonly error_hub_repository="pbuchman/sentrybox"
 readonly error_hub_workflow="Release SentryBox Image"
 readonly error_hub_image_repository="ghcr.io/pbuchman/sentrybox"
@@ -49,6 +52,15 @@ error_hub_require_command() {
     printf 'Required executable is unavailable: %s\n' "${eh_command_name}" >&2
     return 1
   fi
+}
+
+error_hub_validate_caddy() {
+  install -d -m 0700 \
+    "${error_hub_caddy_validation_config}" \
+    "${error_hub_caddy_validation_data}"
+  XDG_CONFIG_HOME="${error_hub_caddy_validation_config}" \
+    XDG_DATA_HOME="${error_hub_caddy_validation_data}" \
+    caddy validate --config "${error_hub_caddy_config}"
 }
 
 error_hub_require_runtime_environment() {
