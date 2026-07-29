@@ -1,5 +1,5 @@
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import { migrateDatabase } from "./storage/migrate.js";
 import { openDatabase } from "./storage/database.js";
 import { nodeEnvelope855, PUBLIC_KEY } from "../test/e2e/fixtures.js";
 import { startRuntime, type ErrorHubRuntime } from "./runtime.js";
+import { MAX_UNMEASURED_EVENT_PHYSICAL_BYTES } from "./retention/storage-budget.js";
 
 const temporaryDirectories: string[] = [];
 const runtimes: ErrorHubRuntime[] = [];
@@ -105,13 +106,17 @@ describe("Error Hub runtime", () => {
         deliveryTtlMs: 1_000,
         logicalHighBytes: 1_000_000,
         logicalTargetBytes: 900_000,
-        physicalCriticalBytes: 4_750_000,
-        physicalTotalBytes: 5_000_000,
+        physicalCriticalBytes: 4 * MAX_UNMEASURED_EVENT_PHYSICAL_BYTES,
+        physicalTotalBytes:
+          4 * MAX_UNMEASURED_EVENT_PHYSICAL_BYTES + 256 * 1024 ** 2,
         minimumFreeBytes: 10,
         batchSize: 1,
         incrementalVacuumPages: 1,
       },
-      readPhysicalUsage: () => ({ ...safeUsage(), totalBytes: 4_499_999 }),
+      readPhysicalUsage: () => ({
+        ...safeUsage(),
+        totalBytes: 3 * MAX_UNMEASURED_EVENT_PHYSICAL_BYTES - 1,
+      }),
     });
     runtimes.push(runtime);
     const endpoint = new URL(
@@ -131,7 +136,133 @@ describe("Error Hub runtime", () => {
           .status === 200,
     );
   });
+
+  it("fails readiness and ingest after a sampler failure, then recovers on a stable sample", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "error-hub-monitor-"));
+    temporaryDirectories.push(directory);
+    await writeFile(join(directory, "index.html"), "<h1>Error Hub</h1>");
+    const databasePath = join(directory, "error-hub.sqlite");
+    seedRuntimeProject(databasePath);
+    let sampler: "safe" | "failed" = "safe";
+    const failureSecret = "runtime-sampler-secret";
+    const runtime = await startRuntime({
+      ...baseOptions(directory, databasePath),
+      cadence: { physicalMonitorMs: 10 },
+      readPhysicalUsage: () => {
+        if (sampler === "failed") throw new Error(failureSecret);
+        return safeUsage();
+      },
+    });
+    runtimes.push(runtime);
+    sampler = "failed";
+
+    await waitUntil(
+      async () =>
+        (await runtimePrivateRequest(runtime, "/health/ready")).status === 503,
+    );
+    const status = await runtimePrivateRequest(runtime, "/api/system/status");
+    const statusText = await status.text();
+    expect(statusText).toContain('"healthy":false');
+    expect(statusText).not.toContain(failureSecret);
+    const metrics = await runtimePrivateRequest(runtime, "/metrics");
+    expect(await metrics.text()).toContain(
+      'error_hub_physical_monitor_samples_total{outcome="failure"}',
+    );
+    const endpoint = new URL(
+      `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`,
+      runtime.publicUrl,
+    );
+    expect(
+      (await fetch(endpoint, { method: "POST", body: nodeEnvelope855 })).status,
+    ).toBe(503);
+
+    sampler = "safe";
+    await waitUntil(
+      async () =>
+        (await runtimePrivateRequest(runtime, "/health/ready")).status === 200,
+    );
+    expect(
+      (await fetch(endpoint, { method: "POST", body: nodeEnvelope855 })).status,
+    ).toBe(200);
+  });
+
+  it("aborts a hanging physical sample and closes both listeners and SQLite within the shutdown bound", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "error-hub-shutdown-"));
+    temporaryDirectories.push(directory);
+    await writeFile(join(directory, "index.html"), "<h1>Error Hub</h1>");
+    const databasePath = join(directory, "error-hub.sqlite");
+    let hang = false;
+    let sampleStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      sampleStarted = resolve;
+    });
+    const runtime = await startRuntime({
+      ...baseOptions(directory, databasePath),
+      cadence: { physicalMonitorMs: 1 },
+      shutdownTimeoutMs: 100,
+      readPhysicalUsage: (signal?: AbortSignal) => {
+        if (!hang) return safeUsage();
+        sampleStarted?.();
+        return new Promise<ReturnType<typeof safeUsage>>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("sample aborted")),
+            { once: true },
+          );
+        });
+      },
+    });
+    runtimes.push(runtime);
+    hang = true;
+    await started;
+    const publicUrl = new URL(runtime.publicUrl);
+    const privateUrl = new URL(runtime.privateUrl);
+    const closeStarted = Date.now();
+
+    await expect(
+      Promise.race([
+        runtime.close().then(() => "closed"),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("timed_out"), 400),
+        ),
+      ]),
+    ).resolves.toBe("closed");
+    expect(Date.now() - closeStarted).toBeLessThan(400);
+    runtimes.pop();
+    await expect(fetch(new URL("/health/live", publicUrl))).rejects.toThrow();
+    await expect(fetch(new URL("/health/live", privateUrl))).rejects.toThrow();
+    const reopened = openDatabase(databasePath);
+    expect(reopened.open).toBe(true);
+    reopened.close();
+    await expect(runtime.close()).resolves.toBeUndefined();
+  });
 });
+
+function seedRuntimeProject(databasePath: string): void {
+  const database = openDatabase(databasePath);
+  migrateDatabase(database, "2026-07-29T12:00:00.000Z");
+  const projects = new ProjectRepository(database);
+  projects.create({
+    id: 1,
+    slug: "runtime",
+    name: "Runtime",
+    enabled: true,
+    createdAt: "2026-07-29T12:00:00.000Z",
+  });
+  projects.setIngestKey({
+    projectId: 1,
+    environment: "fixture",
+    publicKey: PUBLIC_KEY,
+    allowedOrigins: [],
+    forwardingMode: "disabled",
+    forwardingSecretRef: null,
+    webhookMode: "disabled",
+    webhookTargetUrl: null,
+    webhookSecretRef: null,
+    enabledAt: null,
+  });
+  database.close();
+}
 
 function baseOptions(directory: string, databasePath: string) {
   return {
@@ -169,6 +300,30 @@ async function waitUntil(condition: () => Promise<boolean>): Promise<void> {
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));
   }
   throw new Error("condition was not met");
+}
+
+function runtimePrivateRequest(
+  runtime: ErrorHubRuntime,
+  path: string,
+): Promise<Response> {
+  const url = new URL(path, runtime.privateUrl);
+  return new Promise((resolveResponse, rejectResponse) => {
+    const outgoing = request(url, { headers: { Host: "hub.test:8443" } });
+    outgoing.once("response", (incoming) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+      incoming.once("end", () => {
+        resolveResponse(
+          new Response(Buffer.concat(chunks), {
+            status: incoming.statusCode ?? 500,
+            headers: incoming.headers as Record<string, string>,
+          }),
+        );
+      });
+    });
+    outgoing.once("error", rejectResponse);
+    outgoing.end();
+  });
 }
 
 function safeUsage() {

@@ -58,9 +58,10 @@ export interface StartRuntimeOptions {
   readonly publicLimits?: Partial<PublicIngestLimits>;
   readonly cadence?: Partial<RuntimeCadence>;
   readonly shadow?: Partial<RuntimeShadowOptions>;
-  readonly readPhysicalUsage?: () =>
-    | PhysicalStorageUsage
-    | Promise<PhysicalStorageUsage>;
+  readonly shutdownTimeoutMs?: number;
+  readonly readPhysicalUsage?: (
+    signal?: AbortSignal,
+  ) => PhysicalStorageUsage | Promise<PhysicalStorageUsage>;
   readonly webhookHttp?: WebhookHttpClient;
 }
 
@@ -82,6 +83,8 @@ const DEFAULT_SHADOW: RuntimeShadowOptions = {
   requestTimeoutMs: 5_000,
 };
 
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
+
 export async function startRuntime(
   options: StartRuntimeOptions,
 ): Promise<ErrorHubRuntime> {
@@ -90,6 +93,10 @@ export async function startRuntime(
   await assertDistinctListeners(publicListener, privateListener);
   const cadence = validatedCadence(options.cadence);
   const shadow = validatedPositiveOptions(DEFAULT_SHADOW, options.shadow);
+  const shutdownTimeoutMs = positiveSafeInteger(
+    options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+    "shutdown timeout",
+  );
   const database = openDatabase(options.databasePath);
   let publicApp: FastifyInstance | null = null;
   let privateApp: FastifyInstance | null = null;
@@ -98,13 +105,19 @@ export async function startRuntime(
   try {
     migrateDatabase(database);
     const operations = createOperationsContext(options.retentionConfig);
-    const readPhysicalUsage =
+    const defaultPhysicalUsage = createPhysicalStorageSampler({
+      dataDirectory: options.dataDirectory,
+      databasePath: options.databasePath,
+      maxDirectoryEntries: 1_000,
+    });
+    const configuredPhysicalUsage =
       options.readPhysicalUsage ??
-      createPhysicalStorageSampler({
-        dataDirectory: options.dataDirectory,
-        databasePath: options.databasePath,
-        maxDirectoryEntries: 1_000,
+      ((signal?: AbortSignal) => {
+        if (signal?.aborted === true) throw signal.reason;
+        return defaultPhysicalUsage();
       });
+    const readPhysicalUsage = (signal?: AbortSignal) =>
+      configuredPhysicalUsage(signal);
     const sweeper = new RetentionSweeper({
       database,
       operations,
@@ -176,18 +189,15 @@ export async function startRuntime(
         abortController.signal,
       ),
       startLoop(
-        () => physicalMonitor.sample(),
+        () => physicalMonitor.sample(abortController.signal),
         cadence.physicalMonitorMs,
         abortController.signal,
       ),
     );
 
-    let closePromise: Promise<void> | null = null;
-    return {
-      publicUrl,
-      privateUrl,
-      close() {
-        closePromise ??= closeRuntime({
+    const close = createRetryableClose(() =>
+      closeRuntime(
+        {
           publicApp: requireApp(publicApp),
           privateApp: requireApp(privateApp),
           database,
@@ -195,9 +205,14 @@ export async function startRuntime(
           shadowForwarder,
           loops,
           abortController,
-        });
-        return closePromise;
-      },
+        },
+        shutdownTimeoutMs,
+      ),
+    );
+    return {
+      publicUrl,
+      privateUrl,
+      close,
     };
   } catch (error) {
     abortController.abort();
@@ -219,19 +234,189 @@ interface CloseRuntimeOptions {
   readonly abortController: AbortController;
 }
 
-async function closeRuntime(options: CloseRuntimeOptions): Promise<void> {
-  await options.publicApp.close();
-  await options.shadowForwarder.drain();
-  await drainOutbox(options.dispatcher);
-  options.abortController.abort();
-  await Promise.allSettled(options.loops.map(async (loop) => loop.close()));
-  try {
-    options.database.pragma("wal_checkpoint(PASSIVE)");
-  } catch {
-    // Shutdown still closes the private listener and database after checkpoint failure.
+async function closeRuntime(
+  options: CloseRuntimeOptions,
+  timeoutMs: number,
+): Promise<void> {
+  await runBoundedShutdown(
+    {
+      stopPublicIngress: async () => options.publicApp.close(),
+      forceStopPublicIngress: () =>
+        options.publicApp.server.closeAllConnections(),
+      abortLoops: () => options.abortController.abort(new Error("shutdown")),
+      drainShadow: async () => options.shadowForwarder.drain(),
+      drainOutbox: async () => drainOutbox(options.dispatcher),
+      closeLoops: async () =>
+        Promise.all(options.loops.map(async (loop) => loop.close())).then(
+          () => undefined,
+        ),
+      checkpointWal: () => options.database.pragma("wal_checkpoint(PASSIVE)"),
+      closePrivateListener: async () => options.privateApp.close(),
+      forceStopPrivateListener: () =>
+        options.privateApp.server.closeAllConnections(),
+      closeDatabase: () => closeDatabase(options.database),
+    },
+    timeoutMs,
+  );
+}
+
+export interface RuntimeShutdownActions {
+  readonly stopPublicIngress: () => Promise<void>;
+  readonly forceStopPublicIngress: () => void;
+  readonly abortLoops: () => void;
+  readonly drainShadow: () => Promise<void>;
+  readonly drainOutbox: () => Promise<void>;
+  readonly closeLoops: () => Promise<void>;
+  readonly checkpointWal: () => void;
+  readonly closePrivateListener: () => Promise<void>;
+  readonly forceStopPrivateListener: () => void;
+  readonly closeDatabase: () => void;
+}
+
+export class RuntimeShutdownError extends AggregateError {
+  public constructor(errors: readonly Error[]) {
+    super(errors, "Error Hub shutdown did not complete cleanly");
+    this.name = "RuntimeShutdownError";
   }
-  await options.privateApp.close();
-  closeDatabase(options.database);
+}
+
+export async function runBoundedShutdown(
+  actions: RuntimeShutdownActions,
+  timeoutMs: number,
+): Promise<void> {
+  const boundedTimeout = positiveSafeInteger(timeoutMs, "shutdown timeout");
+  const errors: Error[] = [];
+  const asyncStepTimeoutMs = Math.max(1, Math.floor(boundedTimeout / 5));
+  const publicStopped = await captureAsyncStep(
+    "stop public ingress",
+    actions.stopPublicIngress,
+    asyncStepTimeoutMs,
+    errors,
+  );
+  if (!publicStopped) {
+    captureSyncStep(
+      "force stop public ingress",
+      actions.forceStopPublicIngress,
+      errors,
+    );
+  }
+  captureSyncStep("abort loops", actions.abortLoops, errors);
+  await captureAsyncStep(
+    "drain shadow forwarding",
+    actions.drainShadow,
+    asyncStepTimeoutMs,
+    errors,
+  );
+  await captureAsyncStep(
+    "drain webhook outbox",
+    actions.drainOutbox,
+    asyncStepTimeoutMs,
+    errors,
+  );
+  await captureAsyncStep(
+    "close runtime loops",
+    actions.closeLoops,
+    asyncStepTimeoutMs,
+    errors,
+  );
+  captureSyncStep("checkpoint WAL", actions.checkpointWal, errors);
+  const privateStopped = await captureAsyncStep(
+    "close private listener",
+    actions.closePrivateListener,
+    asyncStepTimeoutMs,
+    errors,
+  );
+  if (!privateStopped) {
+    captureSyncStep(
+      "force stop private listener",
+      actions.forceStopPrivateListener,
+      errors,
+    );
+  }
+  captureSyncStep("close database", actions.closeDatabase, errors);
+  if (errors.length > 0) throw new RuntimeShutdownError(errors);
+}
+
+export function createRetryableClose(
+  action: () => Promise<void>,
+): () => Promise<void> {
+  let closed = false;
+  let active: Promise<void> | null = null;
+  return () => {
+    if (closed) return Promise.resolve();
+    if (active !== null) return active;
+    let actionResult: Promise<void>;
+    try {
+      actionResult = action();
+    } catch (error) {
+      actionResult = Promise.reject(error);
+    }
+    const attempt = actionResult.then(() => {
+      closed = true;
+    });
+    active = attempt.finally(() => {
+      active = null;
+    });
+    return active;
+  };
+}
+
+async function captureAsyncStep(
+  name: string,
+  action: () => Promise<void>,
+  timeoutMs: number,
+  errors: Error[],
+): Promise<boolean> {
+  try {
+    await promiseWithTimeout(action(), timeoutMs, name);
+    return true;
+  } catch (error) {
+    errors.push(shutdownStepError(name, error));
+    return false;
+  }
+}
+
+function captureSyncStep(
+  name: string,
+  action: () => void,
+  errors: Error[],
+): boolean {
+  try {
+    action();
+    return true;
+  } catch (error) {
+    errors.push(shutdownStepError(name, error));
+    return false;
+  }
+}
+
+async function promiseWithTimeout<T>(
+  value: Promise<T>,
+  timeoutMs: number,
+  name: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      value,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${name} exceeded its shutdown deadline`)),
+          timeoutMs,
+        );
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+function shutdownStepError(name: string, error: unknown): Error {
+  return new Error(
+    `${name}: ${error instanceof Error ? error.message : "unknown failure"}`,
+    { cause: error },
+  );
 }
 
 async function drainOutbox(dispatcher: WebhookDispatcher): Promise<void> {
@@ -332,6 +517,13 @@ function validatedPositiveOptions(
     }
   }
   return resolved;
+}
+
+function positiveSafeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive safe integer`);
+  }
+  return value;
 }
 
 function listenerUrl(app: FastifyInstance, configuredHost: string): URL {

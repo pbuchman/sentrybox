@@ -8,7 +8,10 @@ import { migrateDatabase } from "./storage/migrate.js";
 import { OutboxRepository } from "./storage/outbox-repository.js";
 import { ProjectRepository } from "./storage/project-repository.js";
 import { WebhookDispatcher } from "./webhooks/dispatcher.js";
-import { DEFAULT_RETENTION_CONFIG } from "./retention/storage-budget.js";
+import {
+  DEFAULT_RETENTION_CONFIG,
+  MAX_UNMEASURED_EVENT_PHYSICAL_BYTES,
+} from "./retention/storage-budget.js";
 import {
   type RetentionConfig,
   type PhysicalStorageUsage,
@@ -187,13 +190,15 @@ describe("shared operations composition", () => {
   });
 
   it("uses one tiny retention config for hysteresis, hard limits, admission, and private status", async () => {
+    const physicalCriticalBytes = 3 * MAX_UNMEASURED_EVENT_PHYSICAL_BYTES + 101;
+    const physicalTotalBytes = physicalCriticalBytes + 25;
     const tinyConfig: RetentionConfig = {
       eventAgeMs: 30 * 24 * 60 * 60_000,
       deliveryTtlMs: 7 * 24 * 60 * 60_000,
       logicalHighBytes: 400,
       logicalTargetBytes: 360,
-      physicalCriticalBytes: 475,
-      physicalTotalBytes: 500,
+      physicalCriticalBytes,
+      physicalTotalBytes,
       minimumFreeBytes: 10,
       batchSize: 1,
       incrementalVacuumPages: 1,
@@ -303,7 +308,11 @@ describe("shared operations composition", () => {
       )
       .run();
 
-    operations.storageSafety.observeUsage(tinyUsage(475), 201, NOW);
+    operations.storageSafety.observeUsage(
+      tinyUsage(physicalCriticalBytes),
+      201,
+      NOW,
+    );
     expect(
       (
         await publicApp.inject({
@@ -323,10 +332,10 @@ describe("shared operations composition", () => {
       ).json(),
     ).toMatchObject({
       storage: {
-        budgetBytes: 500,
+        budgetBytes: physicalTotalBytes,
         logicalHighBytes: 400,
         logicalTargetBytes: 360,
-        physicalCriticalBytes: 475,
+        physicalCriticalBytes,
         minimumFreeBytes: 10,
         safety: "critical",
       },
@@ -337,7 +346,7 @@ describe("shared operations composition", () => {
       database,
       operations,
       clock: () => new Date(NOW),
-      readPhysicalUsage: () => tinyUsage(500),
+      readPhysicalUsage: () => tinyUsage(physicalTotalBytes),
       emergencyCheckpoint: checkpointResult,
       incrementalVacuum: () => undefined,
     }).run();
@@ -404,7 +413,7 @@ function tinyUsage(totalBytes: number): PhysicalStorageUsage {
     temporaryBytes: 0,
     dataDirectoryOtherBytes: 0,
     totalBytes,
-    freeBytes: 1_000,
+    freeBytes: 10 * MAX_UNMEASURED_EVENT_PHYSICAL_BYTES,
   };
 }
 

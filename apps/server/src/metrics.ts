@@ -9,6 +9,7 @@ export type DispatchOutcome =
   | "retry"
   | "dead_letter"
   | "stale_lease";
+export type PhysicalMonitorOutcome = "success" | "failure" | "unstable";
 
 export class ErrorHubMetrics {
   readonly #ingest = fixedCounter([
@@ -29,6 +30,11 @@ export class ErrorHubMetrics {
     "retry",
     "dead_letter",
     "stale_lease",
+  ] as const);
+  readonly #physicalMonitor = fixedCounter([
+    "success",
+    "failure",
+    "unstable",
   ] as const);
   #parseDurationCount = 0;
   #parseDurationSum = 0;
@@ -68,6 +74,10 @@ export class ErrorHubMetrics {
 
   public recordDispatch(outcome: DispatchOutcome): void {
     increment(this.#dispatch, outcome, 1);
+  }
+
+  public recordPhysicalMonitor(outcome: PhysicalMonitorOutcome): void {
+    increment(this.#physicalMonitor, outcome, 1);
   }
 
   public render(input: {
@@ -123,6 +133,12 @@ export class ErrorHubMetrics {
     appendGauge(lines, "error_hub_outbox_deliveries", "state", outbox);
     appendGauge(lines, "error_hub_webhook_redrives", "state", redrives);
     appendCounter(lines, "error_hub_dispatch_total", "outcome", this.#dispatch);
+    appendCounter(
+      lines,
+      "error_hub_physical_monitor_samples_total",
+      "outcome",
+      this.#physicalMonitor,
+    );
     return `${lines.join("\n")}\n`;
   }
 }

@@ -18,7 +18,9 @@ import {
 } from "../operations.js";
 import {
   DEFAULT_RETENTION_CONFIG,
+  MAX_UNMEASURED_EVENT_PHYSICAL_BYTES,
   StorageSafetyState,
+  type RetentionConfig,
 } from "../retention/storage-budget.js";
 import type {
   ShadowForwardRequest,
@@ -219,6 +221,51 @@ describe("public Sentry envelope ingest", () => {
     expect(count(fixture.database, "events")).toBe(0);
     expect(count(fixture.database, "webhook_outbox")).toBe(0);
     expect(fixture.forwarded).toEqual([]);
+  });
+
+  it("reserves bounded physical growth for every admitted event in one envelope", async () => {
+    const growth = MAX_UNMEASURED_EVENT_PHYSICAL_BYTES;
+    const fixture = createFixture({
+      retentionConfig: {
+        eventAgeMs: 1_000,
+        deliveryTtlMs: 1_000,
+        logicalHighBytes: growth,
+        logicalTargetBytes: growth - 1,
+        physicalCriticalBytes: 3 * growth + 1,
+        physicalTotalBytes: 3 * growth + 1 + 256 * 1024 ** 2,
+        minimumFreeBytes: 1,
+        batchSize: 1,
+        incrementalVacuumPages: 1,
+      },
+    });
+    const envelope = envelopeWithItems(null, [
+      {
+        type: "event",
+        payload: {
+          event_id: eventId(5),
+          environment: "fixture",
+          level: "error",
+          message: "first bounded event",
+        },
+      },
+      {
+        type: "event",
+        payload: {
+          event_id: eventId(6),
+          environment: "fixture",
+          level: "error",
+          message: "second bounded event",
+        },
+      },
+    ]);
+
+    const response = await postEnvelope(fixture.app, envelope);
+
+    expect(response.statusCode).toBe(200);
+    expect(count(fixture.database, "events")).toBe(2);
+    expect(
+      fixture.operations.storageSafety.snapshot().unmeasuredIngestBytes,
+    ).toBe(2 * growth);
   });
 
   it("allows only exact configured browser origins and emits complete preflight headers", async () => {
@@ -1000,6 +1047,7 @@ interface FixtureOptions {
   readonly storageInitiallyUnknown?: boolean;
   readonly now?: () => Date;
   readonly limits?: PublicAppOptions["limits"];
+  readonly retentionConfig?: RetentionConfig;
 }
 
 function createFixture(options: FixtureOptions = {}): {
@@ -1078,7 +1126,9 @@ function createFixture(options: FixtureOptions = {}): {
     },
   };
   const operationalMetrics: { readonly type: string }[] = [];
-  const operations = createOperationsContext(DEFAULT_RETENTION_CONFIG);
+  const operations = createOperationsContext(
+    options.retentionConfig ?? DEFAULT_RETENTION_CONFIG,
+  );
   const metrics = operations.metrics;
   const storageSafety = operations.storageSafety;
   if (options.storageCritical === true) {
@@ -1172,15 +1222,15 @@ function eventEnvelope(event: Readonly<Record<string, unknown>>): Buffer {
 }
 
 function envelopeWithItems(
-  envelopeEventId: string,
+  envelopeEventId: string | null,
   items: readonly {
     readonly type: string;
     readonly payload: Readonly<Record<string, unknown>>;
   }[],
 ): Buffer {
-  const chunks: Buffer[] = [
-    Buffer.from(`${JSON.stringify({ event_id: envelopeEventId })}\n`),
-  ];
+  const envelopeHeader =
+    envelopeEventId === null ? {} : { event_id: envelopeEventId };
+  const chunks: Buffer[] = [Buffer.from(`${JSON.stringify(envelopeHeader)}\n`)];
   for (const item of items) {
     const payload = Buffer.from(JSON.stringify(item.payload));
     chunks.push(

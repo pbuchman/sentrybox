@@ -14,6 +14,7 @@ import type { WebhookHttpRequest } from "../../src/webhooks/dispatcher.js";
 import {
   NODE_EVENT_ID,
   PUBLIC_KEY,
+  WEB_PUBLIC_KEY,
   browserEnvelope855,
   browserFixtureEnvelopeGzip,
   nodeEnvelope855,
@@ -48,6 +49,7 @@ describe("Error Hub real-network end to end", () => {
       const browserId = (run === 1 ? "6" : "7").repeat(32);
       const debugId = (run === 1 ? "8" : "9").repeat(32);
       const infoId = (run === 1 ? "a" : "b").repeat(32);
+      const unknownReleaseId = (run === 1 ? "c" : "d").repeat(32);
       const requestId = `req-task-11-${String(run)}`;
       const directory = await mkdtemp(join(tmpdir(), "error-hub-e2e-"));
       temporaryDirectories.push(directory);
@@ -121,16 +123,20 @@ describe("Error Hub real-network end to end", () => {
         service: "browser-service",
         forbiddenValues: forbidden,
       });
-      const ingestUrl = new URL(
+      const backendIngestUrl = new URL(
         `/api/1/envelope/?sentry_key=${PUBLIC_KEY}`,
         runtime.publicUrl,
       );
+      const webIngestUrl = new URL(
+        `/api/2/envelope/?sentry_key=${WEB_PUBLIC_KEY}`,
+        runtime.publicUrl,
+      );
 
-      expect((await ingest(ingestUrl, firstNode)).status).toBe(200);
-      expect((await ingest(ingestUrl, firstNode)).status).toBe(200);
+      expect((await ingest(backendIngestUrl, firstNode)).status).toBe(200);
+      expect((await ingest(backendIngestUrl, firstNode)).status).toBe(200);
       expect(
         (
-          await ingest(ingestUrl, browser, {
+          await ingest(webIngestUrl, browser, {
             "content-encoding": "gzip",
             origin: "https://browser.test",
           })
@@ -139,7 +145,45 @@ describe("Error Hub real-network end to end", () => {
       expect(
         (
           await ingest(
-            ingestUrl,
+            backendIngestUrl,
+            nodeFixtureEnvelope({
+              eventId: unknownReleaseId,
+              timestampSeconds: seconds("2026-07-29T12:00:30.000Z"),
+              release: null,
+              service: "runtime-service",
+              requestId,
+              forbiddenValues: forbidden,
+            }),
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await ingest(
+            new URL(
+              `/api/1/envelope/?sentry_key=${WEB_PUBLIC_KEY}`,
+              runtime.publicUrl,
+            ),
+            firstNode,
+          )
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await ingest(
+            new URL(
+              `/api/2/envelope/?sentry_key=${PUBLIC_KEY}`,
+              runtime.publicUrl,
+            ),
+            browser,
+            { "content-encoding": "gzip", origin: "https://browser.test" },
+          )
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await ingest(
+            backendIngestUrl,
             nodeFixtureEnvelope({
               eventId: debugId,
               timestampSeconds: seconds("2026-07-29T12:02:00.000Z"),
@@ -154,7 +198,7 @@ describe("Error Hub real-network end to end", () => {
       expect(
         (
           await ingest(
-            ingestUrl,
+            backendIngestUrl,
             nodeFixtureEnvelope({
               eventId: infoId,
               timestampSeconds: seconds("2026-07-29T12:03:00.000Z"),
@@ -177,19 +221,69 @@ describe("Error Hub real-network end to end", () => {
         }>;
       }>(runtime, "/api/issues");
       expect(issues.items).toHaveLength(2);
-      const filtered = await privateJson<{ items: Array<{ id: number }> }>(
-        runtime,
-        "/api/issues?release=fixture-node%401.0.0&environment=fixture&status=unresolved&from=2026-07-29T11%3A59%3A59.000Z&to=2026-07-29T12%3A00%3A01.000Z",
-      );
       const nodeIssue = required(
-        issues.items.find((issue) => issue.id === filtered.items[0]?.id),
+        issues.items.find(
+          (issue) => issue.project.slug === "intexuraos-backend",
+        ),
         "node issue",
+      );
+      const browserIssue = required(
+        issues.items.find((issue) => issue.project.slug === "intexuraos-web"),
+        "browser issue",
       );
       expect(nodeIssue.project.slug).toBe("intexuraos-backend");
       expect(nodeIssue.status).toBe("unresolved");
-      expect(filtered.items).toEqual([
-        expect.objectContaining({ id: nodeIssue.id }),
+      expect(nodeIssue.count).toBe(2);
+      expect(browserIssue.count).toBe(1);
+      await expectIssueFilter(runtime, "project=intexuraos-backend", [
+        nodeIssue.id,
       ]);
+      await expectIssueFilter(runtime, "project=intexuraos-web", [
+        browserIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "project=missing", []);
+      await expectIssueFilter(runtime, "release=fixture-node%401.0.0", [
+        nodeIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "release=~v1%3An", [nodeIssue.id]);
+      await expectIssueFilter(runtime, "release=missing", []);
+      await expectIssueFilter(runtime, "environment=fixture", [
+        nodeIssue.id,
+        browserIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "environment=prod", []);
+      await expectIssueFilter(runtime, "service=runtime-service", [
+        nodeIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "service=browser-service", [
+        browserIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "service=missing", []);
+      await expectIssueFilter(runtime, "level=error", [
+        nodeIssue.id,
+        browserIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "level=warn", []);
+      await expectIssueFilter(runtime, "status=unresolved", [
+        nodeIssue.id,
+        browserIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "status=resolved", []);
+      await expectIssueFilter(
+        runtime,
+        "from=2026-07-29T11%3A59%3A59.000Z&to=2026-07-29T12%3A00%3A31.000Z",
+        [nodeIssue.id],
+      );
+      await expectIssueFilter(runtime, "from=2026-07-29T12%3A02%3A00.000Z", []);
+      await expectIssueFilter(runtime, "query=node%20fixture%20exception", [
+        nodeIssue.id,
+      ]);
+      await expectIssueFilter(runtime, "query=missing%20exception", []);
+      await expectIssueFilter(
+        runtime,
+        "project=intexuraos-backend&release=fixture-node%401.0.0&environment=fixture&service=runtime-service&level=error&status=unresolved&from=2026-07-29T11%3A59%3A59.000Z&to=2026-07-29T12%3A00%3A01.000Z&query=node",
+        [nodeIssue.id],
+      );
       const facets = await privateJson<{
         release: Array<{ value: string; count: number }>;
         environment: Array<{ value: string; count: number }>;
@@ -202,22 +296,29 @@ describe("Error Hub real-network end to end", () => {
         ]),
       );
       expect(facets.environment).toContainEqual(
-        expect.objectContaining({ value: "fixture", count: 2 }),
+        expect.objectContaining({ value: "fixture", count: 3 }),
       );
       expect(facets.status).toContainEqual(
-        expect.objectContaining({ value: "unresolved", count: 2 }),
+        expect.objectContaining({ value: "unresolved", count: 3 }),
       );
 
       const occurrences = await privateJson<{
         items: Array<{ rowId: number; id: string; requestId: string | null }>;
       }>(runtime, `/api/issues/${String(nodeIssue.id)}/events`);
-      expect(occurrences.items).toEqual([
-        expect.objectContaining({ id: NODE_EVENT_ID, requestId }),
-      ]);
+      expect(occurrences.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: NODE_EVENT_ID, requestId }),
+          expect.objectContaining({ id: unknownReleaseId, requestId }),
+        ]),
+      );
+      const firstNodeOccurrence = required(
+        occurrences.items.find((event) => event.id === NODE_EVENT_ID),
+        "first node occurrence",
+      );
       const event = await privateJson<{
         eventId: string;
         logLocator: { confidence: string; query: string };
-      }>(runtime, `/api/events/${String(occurrences.items[0]?.rowId)}`);
+      }>(runtime, `/api/events/${String(firstNodeOccurrence.rowId)}`);
       expect(event.eventId).toBe(NODE_EVENT_ID);
       expect(event.logLocator).toEqual(
         expect.objectContaining({ confidence: "exact_identifier" }),
@@ -247,7 +348,7 @@ describe("Error Hub real-network end to end", () => {
       expect(
         (
           await ingest(
-            ingestUrl,
+            backendIngestUrl,
             nodeFixtureEnvelope({
               eventId: nodeSecondId,
               timestampSeconds: seconds("2026-07-29T12:04:00.000Z"),
@@ -269,7 +370,7 @@ describe("Error Hub real-network end to end", () => {
       expect(detail).toMatchObject({
         status: "unresolved",
         generation: 2,
-        count: 2,
+        count: 3,
       });
       expect(detail.deliveries).toEqual([
         expect.objectContaining({ generation: 1, state: "delivered" }),
@@ -306,7 +407,7 @@ describe("Error Hub real-network end to end", () => {
 
       const eventDownload = await privateRequest(
         runtime,
-        `/api/events/${String(occurrences.items[0]?.rowId)}/download`,
+        `/api/events/${String(firstNodeOccurrence.rowId)}/download`,
       );
       expect(eventDownload.status).toBe(200);
       const downloadedEvent = (await eventDownload.json()) as { id: string };
@@ -321,7 +422,7 @@ describe("Error Hub real-network end to end", () => {
       const downloadedIssue = parseGzipNdjson(
         await issueDownload.arrayBuffer(),
       );
-      expect(downloadedIssue).toHaveLength(2);
+      expect(downloadedIssue).toHaveLength(3);
       const exported = await privateRequest(
         runtime,
         "/api/export?release=fixture-node%401.1.0",
@@ -412,6 +513,26 @@ function seedProject(
     projectId: 1,
     environment: "fixture",
     publicKey: PUBLIC_KEY,
+    allowedOrigins: [],
+    forwardingMode: "disabled",
+    forwardingSecretRef: null,
+    webhookMode: "live",
+    webhookTargetUrl: "https://code-agent.test/api/code/webhooks/sentry",
+    webhookSecretRef: "error-hub-webhook",
+    enabledAt: "2026-07-29T11:00:00.000Z",
+    webhookSecrets: secrets,
+  });
+  projects.create({
+    id: 2,
+    slug: "intexuraos-web",
+    name: "IntexuraOS web",
+    enabled: true,
+    createdAt: "2026-07-29T11:00:00.000Z",
+  });
+  projects.setIngestKey({
+    projectId: 2,
+    environment: "fixture",
+    publicKey: WEB_PUBLIC_KEY,
     allowedOrigins: ["https://browser.test"],
     forwardingMode: "disabled",
     forwardingSecretRef: null,
@@ -422,6 +543,20 @@ function seedProject(
     webhookSecrets: secrets,
   });
   database.close();
+}
+
+async function expectIssueFilter(
+  runtime: ErrorHubRuntime,
+  query: string,
+  expectedIds: readonly number[],
+): Promise<void> {
+  const result = await privateJson<{ items: Array<{ id: number }> }>(
+    runtime,
+    `/api/issues?${query}`,
+  );
+  expect(
+    result.items.map((issue) => issue.id).sort((left, right) => left - right),
+  ).toEqual([...expectedIds].sort((left, right) => left - right));
 }
 
 function ingest(

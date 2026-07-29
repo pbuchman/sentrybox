@@ -1,3 +1,5 @@
+import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
+
 export interface RetentionConfig {
   readonly eventAgeMs: number;
   readonly deliveryTtlMs: number;
@@ -11,6 +13,14 @@ export interface RetentionConfig {
 }
 
 const GIB = 1024 ** 3;
+
+/**
+ * One admitted event can originate from at most a 1 MiB decompressed envelope.
+ * Four times that bound reserves room for the retained payload plus bounded
+ * SQLite database/WAL page duplication, indexes, facets, and one outbox row.
+ */
+export const MAX_UNMEASURED_EVENT_PHYSICAL_BYTES =
+  4 * MAX_DECOMPRESSED_ENVELOPE_BYTES;
 
 export const DEFAULT_RETENTION_CONFIG: RetentionConfig = {
   eventAgeMs: 30 * 24 * 60 * 60_000,
@@ -46,6 +56,13 @@ export interface StorageSafetySnapshot {
   readonly logicalPayloadBytes: number | null;
   readonly oldestEventReceivedAt: string | null;
   readonly unmeasuredIngestBytes: number;
+  readonly physicalMonitor: {
+    readonly healthy: boolean | null;
+    readonly lastRun: string | null;
+    readonly lastSuccess: string | null;
+    readonly lastFailure: string | null;
+    readonly consecutiveFailures: number;
+  };
   readonly removedEvents: {
     readonly age: number;
     readonly budget: number;
@@ -68,6 +85,13 @@ export class StorageSafetyState {
     logicalPayloadBytes: null,
     oldestEventReceivedAt: null,
     unmeasuredIngestBytes: 0,
+    physicalMonitor: {
+      healthy: null,
+      lastRun: null,
+      lastSuccess: null,
+      lastFailure: null,
+      consecutiveFailures: 0,
+    },
     removedEvents: { age: 0, budget: 0 },
   };
   #reservationEpoch = 0;
@@ -84,6 +108,7 @@ export class StorageSafetyState {
           ? null
           : { ...this.#snapshot.physicalUsage },
       removedEvents: { ...this.#snapshot.removedEvents },
+      physicalMonitor: { ...this.#snapshot.physicalMonitor },
     };
   }
 
@@ -234,10 +259,47 @@ export class StorageSafetyState {
     };
   }
 
+  public markPhysicalMonitorFailure(completedAt: Date): void {
+    const timestamp = validDate(
+      completedAt,
+      "physical monitor failure",
+    ).toISOString();
+    this.#snapshot = {
+      ...this.#snapshot,
+      safety: this.#snapshot.safety === "critical" ? "critical" : "unsafe",
+      acceptingIngest: false,
+      physicalMonitor: {
+        ...this.#snapshot.physicalMonitor,
+        healthy: false,
+        lastRun: timestamp,
+        lastFailure: timestamp,
+        consecutiveFailures: Math.min(
+          Number.MAX_SAFE_INTEGER,
+          this.#snapshot.physicalMonitor.consecutiveFailures + 1,
+        ),
+      },
+    };
+  }
+
+  public markPhysicalMonitorSuccess(completedAt: Date): void {
+    const timestamp = validDate(
+      completedAt,
+      "physical monitor success",
+    ).toISOString();
+    this.#snapshot = {
+      ...this.#snapshot,
+      physicalMonitor: {
+        ...this.#snapshot.physicalMonitor,
+        healthy: true,
+        lastRun: timestamp,
+        lastSuccess: timestamp,
+        consecutiveFailures: 0,
+      },
+    };
+  }
+
   private reservationBytes(units: number): number {
-    const bytes =
-      (this.#config.physicalTotalBytes - this.#config.physicalCriticalBytes) *
-      units;
+    const bytes = MAX_UNMEASURED_EVENT_PHYSICAL_BYTES * units;
     if (!Number.isSafeInteger(bytes) || bytes <= 0) {
       throw new RangeError("ingest reservation bytes exceed the safe range");
     }

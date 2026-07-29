@@ -3,6 +3,7 @@ import { gzipSync } from "node:zlib";
 
 export const NODE_EVENT_ID = "11111111111111111111111111111111";
 export const PUBLIC_KEY = "task-11-public-key";
+export const WEB_PUBLIC_KEY = "task-11-web-public-key";
 
 export const nodeEnvelope855 = readFileSync(
   new URL(
@@ -21,7 +22,7 @@ export const browserEnvelope855 = readFileSync(
 export interface FixtureEnvelopeOptions {
   readonly eventId: string;
   readonly timestampSeconds: number;
-  readonly release: string;
+  readonly release: string | null;
   readonly service: string;
   readonly requestId?: string;
   readonly level?: "debug" | "info" | "error" | "fatal";
@@ -62,7 +63,8 @@ function customizeEnvelope(
   payload.event_id = options.eventId;
   payload.timestamp = new Date(options.timestampSeconds * 1_000).toISOString();
   payload.environment = "fixture";
-  payload.release = options.release;
+  if (options.release === null) delete payload.release;
+  else payload.release = options.release;
   payload.server_name = options.service;
   payload.level = options.level ?? "error";
   payload.fingerprint = ["task-11-runtime-group"];

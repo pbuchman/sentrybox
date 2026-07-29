@@ -121,6 +121,13 @@ export class HealthStatusService {
         lastFailure: snapshot.lastFailure,
         removedEvents: snapshot.removedEvents,
       },
+      physicalMonitor: {
+        healthy: snapshot.physicalMonitor.healthy,
+        lastRun: snapshot.physicalMonitor.lastRun,
+        lastSuccess: snapshot.physicalMonitor.lastSuccess,
+        lastFailure: snapshot.physicalMonitor.lastFailure,
+        consecutiveFailures: snapshot.physicalMonitor.consecutiveFailures,
+      },
       ingest: { accepting: snapshot.acceptingIngest },
       outbox: {
         pending: outbox.pending,
