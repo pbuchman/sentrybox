@@ -14,6 +14,8 @@ readonly physical_warning_bytes=$((9 * 1024 * 1024 * 1024 / 2))
 readonly ingest_disabled_bytes=$((19 * 1024 * 1024 * 1024 / 4))
 readonly monitor_max_interval_seconds=$((10 * 60))
 readonly restore_test_max_age_seconds=$((35 * 24 * 60 * 60))
+readonly restore_test_future_skew_seconds=$((5 * 60))
+readonly metrics_max_bytes=$((256 * 1024))
 
 emit_monitor_result() {
   local priority="$1"
@@ -64,6 +66,16 @@ file_age_exceeds() {
   modified="$(stat -c '%Y' "${file}")"
   [[ "${now}" =~ ^[0-9]+$ && "${modified}" =~ ^[0-9]+$ ]] || return 0
   (( now - modified > limit_seconds ))
+}
+
+file_is_beyond_future_skew() {
+  local file="$1"
+  local skew_seconds="$2"
+  local now modified
+  now="$(date +%s)"
+  modified="$(stat -c '%Y' "${file}")"
+  [[ "${now}" =~ ^[0-9]+$ && "${modified}" =~ ^[0-9]+$ ]] || return 0
+  (( modified - now > skew_seconds ))
 }
 
 read_monitor_baseline() {
@@ -123,9 +135,10 @@ write_monitor_baseline() {
     "SentryBox monitor baseline"
 }
 
-backup_state_is_disabled() {
+read_backup_state() {
   local line key value
-  local version="" checked_at="" status="" reason=""
+  local version="" checked_at="" external_status="" external_reason=""
+  local local_scrub_status="" local_scrub_reason=""
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ "${line}" == *=* ]] || return 1
     key="${line%%=*}"
@@ -139,21 +152,40 @@ backup_state_is_disabled() {
         [[ -z "${checked_at}" ]] || return 1
         checked_at="${value}"
         ;;
-      STATUS)
-        [[ -z "${status}" ]] || return 1
-        status="${value}"
+      EXTERNAL_STATUS)
+        [[ -z "${external_status}" ]] || return 1
+        external_status="${value}"
         ;;
-      REASON)
-        [[ -z "${reason}" ]] || return 1
-        reason="${value}"
+      EXTERNAL_REASON)
+        [[ -z "${external_reason}" ]] || return 1
+        external_reason="${value}"
+        ;;
+      LOCAL_SCRUB_STATUS)
+        [[ -z "${local_scrub_status}" ]] || return 1
+        local_scrub_status="${value}"
+        ;;
+      LOCAL_SCRUB_REASON)
+        [[ -z "${local_scrub_reason}" ]] || return 1
+        local_scrub_reason="${value}"
         ;;
       *) return 1 ;;
     esac
   done <"${error_hub_backup_state_file}"
   [[ "${version}" == "1" \
-    && "${status}" == "disabled_degraded" \
-    && "${reason}" == "no_external_target" ]] \
-    && bounded_metric_integer "${checked_at}"
+    && "${external_status}" == "disabled_degraded" \
+    && "${external_reason}" == "no_external_target" ]] \
+    || return 1
+  bounded_metric_integer "${checked_at}" || return 1
+  case "${local_scrub_status}:${local_scrub_reason}" in
+    success:none | \
+      failure:lock_unavailable | \
+      failure:deployment_state_invalid | \
+      failure:retained_snapshot_invalid | \
+      failure:retained_scrub_failed | \
+      failure:scrub_incomplete) ;;
+    *) return 1 ;;
+  esac
+  BACKUP_LOCAL_SCRUB_STATUS="${local_scrub_status}"
 }
 
 alerts=()
@@ -167,10 +199,31 @@ if [[ "${ready_status}" != "200" ]]; then
 fi
 
 metrics_available=1
-if ! curl --silent --show-error --fail --max-time 10 \
-  "${private_origin}/metrics" >"${metrics_file}"; then
+metrics_curl_status=0
+if (
+  ulimit -f "$((metrics_max_bytes / 1024))"
+  curl --silent --show-error --fail --max-time 10 \
+    --max-filesize "${metrics_max_bytes}" "${private_origin}/metrics"
+) >"${metrics_file}"; then
+  metrics_file_bytes="$(stat -c '%s' "${metrics_file}")"
+  if [[ ! "${metrics_file_bytes}" =~ ^[0-9]+$ ]] \
+    || (( metrics_file_bytes > metrics_max_bytes )); then
+    metrics_available=0
+    alerts+=(metrics_oversized)
+    : >"${metrics_file}"
+  fi
+else
+  metrics_curl_status=$?
+  metrics_file_bytes="$(stat -c '%s' "${metrics_file}" 2>/dev/null || true)"
   metrics_available=0
-  alerts+=(metrics_unavailable)
+  if [[ "${metrics_curl_status}" == 63 \
+    || ( "${metrics_file_bytes}" =~ ^[0-9]+$ \
+      && "${metrics_file_bytes}" -ge "${metrics_max_bytes}" ) ]]; then
+    alerts+=(metrics_oversized)
+  else
+    alerts+=(metrics_unavailable)
+  fi
+  : >"${metrics_file}"
 fi
 
 physical_bytes="$(metric_value 'sentrybox_storage_physical_bytes' || true)"
@@ -193,7 +246,9 @@ elif [[ ! "${retention_success}:${retention_failure}" =~ ^(0:0|1:0)$ ]]; then
 fi
 
 dead_letters="$(metric_value 'sentrybox_outbox_deliveries{state="dead_letter"}' || true)"
-if bounded_metric_integer "${dead_letters}" && (( dead_letters > 0 )); then
+if ! bounded_metric_integer "${dead_letters}"; then
+  alerts+=(dead_letter_metric_unavailable)
+elif (( dead_letters > 0 )); then
   alerts+=(dead_letter_webhook)
 fi
 
@@ -255,9 +310,13 @@ if [[ -e "${error_hub_backup_state_file}" \
   || -L "${error_hub_backup_state_file}" ]]; then
   if ! error_hub_require_root_private_file \
     "${error_hub_backup_state_file}" "SentryBox backup state" \
-    || ! backup_state_is_disabled; then
+    || ! read_backup_state; then
     alerts+=(backup_state_invalid)
+  elif [[ "${BACKUP_LOCAL_SCRUB_STATUS}" == "failure" ]]; then
+    alerts+=(backup_scrub_failed)
   fi
+else
+  alerts+=(backup_scrub_unavailable)
 fi
 # Home Dev has no external backup transport. A retained rollback snapshot is
 # deliberately never interpreted as a successful off-host backup.
@@ -269,6 +328,10 @@ if [[ -e "${error_hub_restore_success_file}" \
     "${error_hub_restore_success_file}" \
     "SentryBox restore-test success marker"; then
     alerts+=(restore_test_state_invalid)
+  elif file_is_beyond_future_skew \
+    "${error_hub_restore_success_file}" \
+    "${restore_test_future_skew_seconds}"; then
+    alerts+=(restore_test_future)
   elif file_age_exceeds \
     "${error_hub_restore_success_file}" "${restore_test_max_age_seconds}"; then
     alerts+=(restore_test_stale)

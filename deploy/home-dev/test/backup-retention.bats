@@ -31,6 +31,21 @@ case "${*: -1}" in
     printf '%s\n' "${ERROR_HUB_FAKE_READY_STATUS:-200}"
     ;;
   */metrics)
+    max_filesize=''
+    while (( $# > 0 )); do
+      case "$1" in
+        --max-filesize)
+          max_filesize="$2"
+          shift 2
+          ;;
+        *) shift ;;
+      esac
+    done
+    [[ "${max_filesize}" == 262144 ]] || exit 64
+    if [[ "${ERROR_HUB_FAKE_METRICS_OVERSIZED:-0}" == 1 ]]; then
+      head -c 262145 /dev/zero | tr '\0' x
+      exit 63
+    fi
     cat "${ERROR_HUB_FAKE_METRICS}"
     ;;
   *)
@@ -82,8 +97,24 @@ write_backup_degraded_state() {
   printf '%s\n' \
     'VERSION=1' \
     "CHECKED_AT_EPOCH=$(date +%s)" \
-    'STATUS=disabled_degraded' \
-    'REASON=no_external_target' >"${state}"
+    'EXTERNAL_STATUS=disabled_degraded' \
+    'EXTERNAL_REASON=no_external_target' \
+    'LOCAL_SCRUB_STATUS=success' \
+    'LOCAL_SCRUB_REASON=none' >"${state}"
+  chown 0:0 "${state}"
+  chmod 0600 "${state}"
+}
+
+write_backup_failed_state() {
+  local reason="$1"
+  local state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  printf '%s\n' \
+    'VERSION=1' \
+    "CHECKED_AT_EPOCH=$(date +%s)" \
+    'EXTERNAL_STATUS=disabled_degraded' \
+    'EXTERNAL_REASON=no_external_target' \
+    'LOCAL_SCRUB_STATUS=failure' \
+    "LOCAL_SCRUB_REASON=${reason}" >"${state}"
   chown 0:0 "${state}"
   chmod 0600 "${state}"
 }
@@ -203,8 +234,73 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_disabled_degraded' "${ERROR_HUB_MONITOR_LOG}"
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_unavailable,backup_disabled_degraded' \
+    "${ERROR_HUB_MONITOR_LOG}"
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
+}
+
+@test "monitor reports a failed local retained scrub separately from the missing external target" {
+  write_metrics 4831838208 0 1 0 0 0 0
+  write_backup_failed_state retained_scrub_failed
+  write_restore_success
+
+  run "${repository_root}/deploy/home-dev/monitor.sh"
+
+  [ "${status}" -ne 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_failed,backup_disabled_degraded' \
+    "${ERROR_HUB_MONITOR_LOG}"
+}
+
+@test "monitor bounds the metrics response and never publishes a baseline from an oversized body" {
+  write_metrics 4831838208 0 1 0 0 0 0
+  write_backup_degraded_state
+  write_restore_success
+  export ERROR_HUB_FAKE_METRICS_OVERSIZED=1
+
+  run "${repository_root}/deploy/home-dev/monitor.sh"
+
+  [ "${status}" -ne 0 ]
+  grep -Fq 'metrics_oversized' "${ERROR_HUB_MONITOR_LOG}"
+  [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/monitor-baseline" ]
+}
+
+@test "monitor alerts when the restore marker is beyond bounded future clock skew" {
+  write_metrics 4831838208 0 1 0 0 0 0
+  write_backup_degraded_state
+  write_restore_success
+  future_epoch="$(( $(date +%s) + 10 * 60 ))"
+  touch -d "@${future_epoch}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success"
+
+  run "${repository_root}/deploy/home-dev/monitor.sh"
+
+  [ "${status}" -ne 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=backup_disabled_degraded,restore_test_future' \
+    "${ERROR_HUB_MONITOR_LOG}"
+}
+
+@test "monitor alerts when the dead-letter metric is missing or malformed" {
+  write_backup_degraded_state
+  write_restore_success
+  for variant in missing malformed; do
+    write_metrics 4831838208 0 1 0 0 0 0
+    if [[ "${variant}" == missing ]]; then
+      sed -i '/sentrybox_outbox_deliveries{state="dead_letter"}/d' \
+        "${ERROR_HUB_FAKE_METRICS}"
+    else
+      sed -i \
+        's/sentrybox_outbox_deliveries{state="dead_letter"} 0/sentrybox_outbox_deliveries{state="dead_letter"} NaN/' \
+        "${ERROR_HUB_FAKE_METRICS}"
+    fi
+    : >"${ERROR_HUB_MONITOR_LOG}"
+
+    run "${repository_root}/deploy/home-dev/monitor.sh"
+
+    [ "${status}" -ne 0 ]
+    grep -Fx \
+      'SENTRYBOX_ALERTS=dead_letter_metric_unavailable,backup_disabled_degraded' \
+      "${ERROR_HUB_MONITOR_LOG}"
+  done
 }
 
 @test "monitor rejects hard-linked counter and restore state" {
@@ -251,8 +347,10 @@ write_monitor_baseline() {
   printf '%s\n' \
     'VERSION=1' \
     "CHECKED_AT_EPOCH=$(date +%s)" \
-    'STATUS=disabled_degraded' \
-    'REASON=no_external_target' >"${fixture_root}/unsafe-backup-state"
+    'EXTERNAL_STATUS=disabled_degraded' \
+    'EXTERNAL_REASON=no_external_target' \
+    'LOCAL_SCRUB_STATUS=success' \
+    'LOCAL_SCRUB_REASON=none' >"${fixture_root}/unsafe-backup-state"
   chmod 0600 "${fixture_root}/unsafe-backup-state"
   ln "${fixture_root}/unsafe-backup-state" \
     "${fixture_root}/var/lib/sentrybox-deploy/backup.state"

@@ -71,31 +71,46 @@ esac
 readonly restore_copy="${temporary_directory}/restore.sqlite"
 readonly restore_container="sentrybox-restore-test-$$"
 container_attempted=0
+temporary_tree_present=1
 restore_success_temporary=""
+
+cleanup_resources() {
+  local cleanup_status=0
+  if (( container_attempted == 1 )); then
+    if docker rm --force "${restore_container}" >/dev/null 2>&1; then
+      container_attempted=0
+    else
+      printf 'Restore-test container cleanup failed: %s\n' \
+        "${restore_container}" >&2
+      cleanup_status=1
+    fi
+  fi
+  if (( temporary_tree_present == 1 )); then
+    if rm -rf -- "${temporary_directory}" \
+      && [[ ! -e "${temporary_directory}" \
+        && ! -L "${temporary_directory}" ]]; then
+      temporary_tree_present=0
+    else
+      printf 'Restore-test temporary-tree cleanup failed: %s\n' \
+        "${temporary_directory}" >&2
+      cleanup_status=1
+    fi
+  fi
+  return "${cleanup_status}"
+}
 
 cleanup() {
   local exit_status=$?
-  local cleanup_status=0
   trap - EXIT INT TERM
-  if (( container_attempted == 1 )) \
-    && ! docker rm --force "${restore_container}" >/dev/null 2>&1; then
-    printf 'Restore-test container cleanup failed: %s\n' \
-      "${restore_container}" >&2
-    cleanup_status=1
-  fi
   if [[ -n "${restore_success_temporary}" ]] \
     && ! rm -f -- "${restore_success_temporary}"; then
     printf 'Restore-test success-record cleanup failed.\n' >&2
-    cleanup_status=1
+    if (( exit_status == 0 )); then
+      exit_status=1
+    fi
   fi
-  if ! rm -rf -- "${temporary_directory}" \
-    || [[ -e "${temporary_directory}" || -L "${temporary_directory}" ]]; then
-    printf 'Restore-test temporary-tree cleanup failed: %s\n' \
-      "${temporary_directory}" >&2
-    cleanup_status=1
-  fi
-  if (( cleanup_status != 0 && exit_status == 0 )); then
-    exit_status="${cleanup_status}"
+  if ! cleanup_resources && (( exit_status == 0 )); then
+    exit_status=1
   fi
   exit "${exit_status}"
 }
@@ -126,6 +141,10 @@ docker run --name "${restore_container}" --interactive \
   --input-type=module - restore-test \
   <&7
 exec 7<&-
+
+if ! cleanup_resources; then
+  exit 1
+fi
 
 restore_success_temporary="$(
   mktemp "${error_hub_state_directory}/.restore-test-success.XXXXXX"

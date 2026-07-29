@@ -56,7 +56,9 @@ setup() {
 }
 
 teardown() {
-  rm -rf "${fixture_root}"
+  PATH="${PATH#"${fixture_root}/fake-bin:"}"
+  export PATH
+  /bin/rm -rf "${fixture_root}"
 }
 
 write_valid_request() {
@@ -148,6 +150,12 @@ if [ "$1" = run ]; then
     [ -n "${retained_root}" ] || exit 1
     [ -n "${retained_name}" ] || exit 1
     [ -f "${retained_root}/${retained_name}" ] || exit 1
+    if [ "${ERROR_HUB_FAKE_RETAINED_CRASH:-0}" = 1 ] \
+      && [ ! -e "${ERROR_HUB_FAKE_STATE}/retained-crashed" ]; then
+      : >"${ERROR_HUB_FAKE_STATE}/retained-crashed"
+      kill -KILL "${PPID}"
+      exit 1
+    fi
     [ "${ERROR_HUB_FAKE_RETAINED_FAIL:-0}" = 1 ] && exit 1
     exit 0
   fi
@@ -296,6 +304,21 @@ fi
 exec /bin/mv "$@"
 EOF
 
+  cat >"${fixture_root}/fake-bin/rm" <<'EOF'
+#!/bin/sh
+for argument in "$@"; do
+  case "${argument}" in
+    */restore-test.[A-Za-z0-9]*)
+      [ "${ERROR_HUB_FAKE_RESTORE_TREE_CLEANUP_FAIL:-0}" = 1 ] && exit 1
+      ;;
+    */.retained-finalize)
+      [ "${ERROR_HUB_FAKE_RETAINED_CLEANUP_FAIL:-0}" = 1 ] && exit 1
+      ;;
+  esac
+done
+exec /bin/rm "$@"
+EOF
+
   cat >"${fixture_root}/fake-bin/caddy" <<'EOF'
 #!/bin/sh
 printf 'caddy %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
@@ -317,6 +340,30 @@ EOF
   cat >"${fixture_root}/fake-bin/systemctl" <<'EOF'
 #!/bin/sh
 printf 'systemctl %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+if [ "$1" = enable ]; then
+  shift
+  [ "$1" = --now ] || exit 65
+  shift
+  for unit in "$@"; do
+    if [ "${ERROR_HUB_FAKE_TIMER_START_FAIL:-}" = "${unit}" ]; then
+      exit 1
+    fi
+    : >"${ERROR_HUB_FAKE_STATE}/active-${unit}"
+  done
+  exit 0
+fi
+if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
+  [ -f "${ERROR_HUB_FAKE_STATE}/active-$3" ]
+  exit
+fi
+if [ "$1" = list-timers ]; then
+  for unit in "$@"; do :; done
+  [ "${ERROR_HUB_FAKE_TIMER_NEXT_MISSING:-}" = "${unit}" ] && exit 0
+  [ -f "${ERROR_HUB_FAKE_STATE}/active-${unit}" ] || exit 0
+  printf 'Wed 2026-07-29 12:00:00 CEST 4min left n/a n/a %s %s\n' \
+    "${unit}" "${unit%.timer}.service"
+  exit 0
+fi
 if [ "$*" = 'reload caddy' ]; then
   count_file="${ERROR_HUB_FAKE_STATE}/caddy-reload-count"
   count=0
@@ -399,6 +446,36 @@ EOF
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
+}
+
+@test "install starts every operational timer and verifies its next activation" {
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  for timer in \
+    sentrybox-backup.timer \
+    sentrybox-monitor.timer \
+    sentrybox-restore-test.timer; do
+    [ -f "${fixture_root}/fake-state/active-${timer}" ]
+    grep -F "systemctl is-active --quiet ${timer}" "${ERROR_HUB_COMMAND_LOG}"
+    grep -F "systemctl list-timers --all --no-legend --no-pager ${timer}" \
+      "${ERROR_HUB_COMMAND_LOG}"
+  done
+}
+
+@test "install fails when an operational timer did not start or has no next activation" {
+  export ERROR_HUB_FAKE_TIMER_START_FAIL=sentrybox-monitor.timer
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+
+  unset ERROR_HUB_FAKE_TIMER_START_FAIL
+  export ERROR_HUB_FAKE_TIMER_NEXT_MISSING=sentrybox-restore-test.timer
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"next activation"* ]]
 }
 
 @test "install rejects a linked deployment state directory without mutating its target" {
@@ -900,10 +977,12 @@ EOF
   [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = '1000:1000' ]
   backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
   [ "$(stat -c '%a:%u:%g:%h' "${backup_state}")" = '600:0:0:1' ]
-  grep -Fx 'STATUS=disabled_degraded' "${backup_state}"
-  grep -Fx 'REASON=no_external_target' "${backup_state}"
+  grep -Fx 'EXTERNAL_STATUS=disabled_degraded' "${backup_state}"
+  grep -Fx 'EXTERNAL_REASON=no_external_target' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=none' "${backup_state}"
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
-  run grep -E 'src=.*/backups/\.retained-finalize\.[A-Za-z0-9]+,dst=/retained' \
+  run grep -F "src=${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize,dst=/retained" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -F "src=${fixture_root}/home/pbuchman/services/sentrybox/backups,dst=/retained" \
@@ -919,6 +998,10 @@ EOF
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"disabled/degraded"* ]]
   [[ "${output}" == *"no retained snapshot"* ]]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'EXTERNAL_STATUS=disabled_degraded' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_STATUS=failure' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=retained_snapshot_invalid' "${backup_state}"
 }
 
 @test "scheduled backup does not scrub the rollback snapshot while deployment holds the lock" {
@@ -937,6 +1020,84 @@ EOF
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'LOCAL_SCRUB_STATUS=failure' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=lock_unavailable' "${backup_state}"
+}
+
+@test "scheduled backup recovers a validated retained-finalize staging tree after interruption" {
+  write_runtime_state
+  printf 'predeploy-good\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  export ERROR_HUB_FAKE_RETAINED_CRASH=1
+
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+  [ -d "${staging}" ]
+  [ -f "${staging}/.retained.sqlite.COPY000" ]
+
+  unset ERROR_HUB_FAKE_RETAINED_CRASH
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"no external Home Dev backup target"* ]]
+  [ ! -e "${staging}" ]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=none' "${backup_state}"
+}
+
+@test "scheduled backup refuses an unsafe retained-finalize staging tree without deleting it" {
+  write_runtime_state
+  printf 'predeploy-good\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+  install -d -o 1000 -g 1000 -m 0700 "${staging}"
+  printf 'preserve-me\n' >"${staging}/unexpected"
+  chown 1000:1000 "${staging}/unexpected"
+  chmod 0600 "${staging}/unexpected"
+
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"unsafe retained-finalize staging"* ]]
+  [ "$(cat "${staging}/unexpected")" = preserve-me ]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'LOCAL_SCRUB_STATUS=failure' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=retained_scrub_failed' "${backup_state}"
+}
+
+@test "scheduled backup reports retained-finalize staging cleanup failure" {
+  write_runtime_state
+  printf 'predeploy-good\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  export ERROR_HUB_FAKE_RETAINED_CLEANUP_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"staging cleanup failed"* ]]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'LOCAL_SCRUB_STATUS=failure' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=retained_scrub_failed' "${backup_state}"
+}
+
+@test "scheduled backup records a retained snapshot scrub failure" {
+  write_runtime_state
+  printf 'corrupt-retained-snapshot\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  export ERROR_HUB_FAKE_RETAINED_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"retained snapshot scrub failed"* ]]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'EXTERNAL_STATUS=disabled_degraded' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_STATUS=failure' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=retained_scrub_failed' "${backup_state}"
 }
 
 @test "restore test validates a private copy with the current runtime and never mounts live data" {
@@ -1030,16 +1191,40 @@ EOF
   write_runtime_state
   printf 'predeploy-good\n' \
     >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  marker="${fixture_root}/var/lib/sentrybox-deploy/restore-test.success"
+  printf 'previous-validation\n' >"${marker}"
+  chmod 0600 "${marker}"
+  marker_before="$(stat -c '%i:%Y:%s' "${marker}"):$(sha256sum "${marker}" | cut -d' ' -f1)"
   export ERROR_HUB_FAKE_RESTORE_CLEANUP_FAIL=1
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"container cleanup failed"* ]]
+  [ "$(stat -c '%i:%Y:%s' "${marker}"):$(sha256sum "${marker}" | cut -d' ' -f1)" = \
+    "${marker_before}" ]
   run find "${fixture_root}/var/lib/sentrybox-deploy" -maxdepth 1 \
     -type d -name 'restore-test.*' -print
   [ "${status}" -eq 0 ]
   [ -z "${output}" ]
+}
+
+@test "restore test leaves the existing success marker unchanged when temporary-tree cleanup fails" {
+  write_runtime_state
+  printf 'predeploy-good\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  marker="${fixture_root}/var/lib/sentrybox-deploy/restore-test.success"
+  printf 'previous-validation\n' >"${marker}"
+  chmod 0600 "${marker}"
+  marker_before="$(stat -c '%i:%Y:%s' "${marker}"):$(sha256sum "${marker}" | cut -d' ' -f1)"
+  export ERROR_HUB_FAKE_RESTORE_TREE_CLEANUP_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/restore-test.sh"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"temporary-tree cleanup failed"* ]]
+  [ "$(stat -c '%i:%Y:%s' "${marker}"):$(sha256sum "${marker}" | cut -d' ' -f1)" = \
+    "${marker_before}" ]
 }
 
 @test "restore test preserves the 15 GiB host reserve before copying the snapshot" {
@@ -1344,7 +1529,7 @@ EOF
   run grep -Fx 'AccuracySec=30s' "${monitor_timer}"
   [ "${status}" -eq 0 ]
   run grep -Fx 'Persistent=true' "${monitor_timer}"
-  [ "${status}" -eq 0 ]
+  [ "${status}" -ne 0 ]
   run grep -F 'Persistent=true' "${restore_timer}"
   [ "${status}" -eq 0 ]
   run grep -F 'ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh' "${restore_unit}"

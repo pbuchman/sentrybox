@@ -85,7 +85,7 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
       options.operations.metrics.recordIngest("rejected");
     }
     if (
-      request.method === "POST" &&
+      (request.method === "POST" || request.method === "OPTIONS") &&
       (reply.statusCode === 429 || reply.statusCode === 503)
     ) {
       options.operations.metrics.recordIngestResponse(reply.statusCode);

@@ -198,11 +198,30 @@ for unit in \
 done
 
 systemctl daemon-reload
-systemctl enable \
+systemctl enable --now \
   sentrybox.service \
   sentrybox-backup.timer \
   sentrybox-monitor.timer \
   sentrybox-restore-test.timer >/dev/null
+for timer in \
+  sentrybox-backup.timer \
+  sentrybox-monitor.timer \
+  sentrybox-restore-test.timer; do
+  if ! systemctl is-active --quiet "${timer}"; then
+    printf 'SentryBox operational timer is not active: %s\n' "${timer}" >&2
+    exit 1
+  fi
+  timer_schedule="$(
+    systemctl list-timers --all --no-legend --no-pager "${timer}"
+  )"
+  if [[ -z "${timer_schedule}" \
+    || ! "${timer_schedule}" =~ [[:space:]]${timer}[[:space:]] \
+    || "${timer_schedule}" =~ ^[[:space:]]*(n/a|-)($|[[:space:]]) ]]; then
+    printf 'SentryBox operational timer has no next activation: %s\n' \
+      "${timer}" >&2
+    exit 1
+  fi
+done
 
 error_hub_validate_caddy >/dev/null
 systemctl reload caddy

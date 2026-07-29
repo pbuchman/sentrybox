@@ -8,7 +8,9 @@ sudo /home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
 
 The installed `sentrybox-monitor.timer` runs this check every five minutes,
 with a bounded 30-second randomized delay. The oneshot service writes only to
-the host journal and has no separate log file. The command exits `0` only when
+the host journal and has no separate log file. This is a monotonic timer: it
+starts two minutes after boot and does not replay checks missed while the host
+was down. The command exits `0` only when
 all checks are healthy. It exits non-zero for an alert and sends a structured
 record to the host journal with
 `SENTRYBOX_COMPONENT=operations`, `SENTRYBOX_CHECK=home_dev`, and a sanitized
@@ -33,10 +35,13 @@ endpoints plus root-private operational state under
 - physical data at or above `4.75 GiB` (`5,100,273,664` bytes), where ingest
   must be disabled by the runtime;
 - a failed latest retention run or any dead-letter webhook;
+- unavailable or oversized private metrics (responses are capped at `256 KiB`);
 - a delta of two or more application-generated `429` or `503` ingest
   responses since the previous five-minute observation; and
-- external backup status `disabled/degraded`; and
-- a successful restore test older than 35 days.
+- external backup status `disabled/degraded`, independently from a failed or
+  unavailable local retained-snapshot scrub; and
+- a successful restore test older than 35 days or future-dated by more than
+  five minutes.
 
 The application counters do not include `429` or `503` responses generated at
 the Caddy or another proxy edge. The monitor stores the prior application
@@ -50,9 +55,12 @@ check failed after a later retention run succeeds.
 The current Home Dev installation intentionally has no external backup target.
 Its daily backup unit is therefore expected to report `disabled/degraded` and
 exit non-zero instead of creating unbounded root-filesystem snapshots. It
-records that outcome separately in root-private `backup.state`; the local
-`predeploy.sqlite` rollback snapshot is never treated as external backup
-success, regardless of its modification time. With no transport configured,
+records that outcome separately in root-private `backup.state`, alongside the
+latest local retained-snapshot scrub outcome. Lock contention, an invalid
+snapshot, or a failed scrub is an additional alert and is never collapsed into
+the expected external degradation. The local `predeploy.sqlite` rollback
+snapshot is never treated as external backup success, regardless of its
+modification time. With no transport configured,
 the backup job never creates `backup.success`, so
 `backup_disabled_degraded` is the expected monitor result. A future success
 marker may be published only after a real off-host upload and checksum
