@@ -60,6 +60,9 @@ describe("ErrorHubMetrics", () => {
     metrics.recordDispatch("retry");
     metrics.recordDispatch("dead_letter");
     metrics.recordDispatch("stale_lease");
+    metrics.recordIngestResponse(429);
+    metrics.recordIngestResponse(429);
+    metrics.recordIngestResponse(503);
 
     const rendered = metrics.render({ database, storage });
 
@@ -84,6 +87,12 @@ describe("ErrorHubMetrics", () => {
     expect(rendered).toContain(
       'sentrybox_dispatch_total{outcome="stale_lease"} 1',
     );
+    expect(rendered).toContain(
+      'sentrybox_ingest_http_responses_total{status="429"} 2',
+    );
+    expect(rendered).toContain(
+      'sentrybox_ingest_http_responses_total{status="503"} 1',
+    );
     expect(rendered).toContain("sentrybox_parse_duration_seconds_count 1");
     expect(rendered).toContain("sentrybox_storage_physical_bytes 135");
     expect(rendered).toContain("sentrybox_storage_logical_bytes 321");
@@ -98,7 +107,7 @@ describe("ErrorHubMetrics", () => {
 
     expect(
       labels.every((label) =>
-        /^((outcome|reason|state)="[a-z_]+")$/u.test(label),
+        /^((outcome|reason|state)="[a-z_]+"|status="(429|503)")$/u.test(label),
       ),
     ).toBe(true);
     expect(rendered).not.toMatch(

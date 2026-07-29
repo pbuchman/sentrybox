@@ -8,7 +8,7 @@ readonly repository_root
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
 
-for executable_asset in backup.sh restore-test.sh; do
+for executable_asset in backup.sh monitor.sh restore-test.sh; do
   if [[ ! -f "${script_directory}/${executable_asset}" \
     || -L "${script_directory}/${executable_asset}" \
     || ! -x "${script_directory}/${executable_asset}" ]]; then

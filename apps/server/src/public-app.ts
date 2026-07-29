@@ -84,6 +84,12 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
     if (request.method === "POST" && reply.statusCode >= 400) {
       options.operations.metrics.recordIngest("rejected");
     }
+    if (
+      request.method === "POST" &&
+      (reply.statusCode === 429 || reply.statusCode === 503)
+    ) {
+      options.operations.metrics.recordIngestResponse(reply.statusCode);
+    }
   });
   registerIngestRoute(app, options, limits);
   app.get("/health/live", async () => ({ status: "ok" }));

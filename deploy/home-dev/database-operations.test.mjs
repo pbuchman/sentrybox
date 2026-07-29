@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,7 +122,7 @@ test("preflight rejects duplicate project/environment and public-key identities"
   }
 });
 
-test("online backup includes committed WAL data in a readable snapshot", async () => {
+test("online backup includes committed WAL data with matching restored counts and checksum", async () => {
   const current = fixture();
   const backupPath = join(current.directory, "backup.sqlite");
   try {
@@ -129,15 +130,13 @@ test("online backup includes committed WAL data in a readable snapshot", async (
       "CREATE TABLE backup_probe(value TEXT NOT NULL); INSERT INTO backup_probe(value) VALUES ('retained')",
     );
     await createOnlineBackup(current.databasePath, backupPath);
-    current.database.close();
+    const expected = backupSummary(current.database);
     const backup = new Database(backupPath, {
       readonly: true,
       fileMustExist: true,
     });
     try {
-      assert.deepEqual(backup.prepare("SELECT value FROM backup_probe").get(), {
-        value: "retained",
-      });
+      assert.deepEqual(backupSummary(backup), expected);
     } finally {
       backup.close();
     }
@@ -146,6 +145,27 @@ test("online backup includes committed WAL data in a readable snapshot", async (
     rmSync(current.directory, { recursive: true, force: true });
   }
 });
+
+function backupSummary(database) {
+  const rows = database
+    .prepare(
+      `SELECT p.id, p.slug, p.name, p.enabled,
+              (SELECT COUNT(*) FROM project_ingest_keys AS k WHERE k.project_id = p.id) AS keys
+       FROM projects AS p
+       ORDER BY p.id`,
+    )
+    .all();
+  return {
+    projects: database.prepare("SELECT COUNT(*) AS total FROM projects").get()
+      .total,
+    keys: database
+      .prepare("SELECT COUNT(*) AS total FROM project_ingest_keys")
+      .get().total,
+    probes: database.prepare("SELECT COUNT(*) AS total FROM backup_probe").get()
+      .total,
+    checksum: createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
+  };
+}
 
 test("rollback validation rejects a migration newer than the previous runtime", () => {
   const current = fixture();

@@ -936,6 +936,12 @@ describe("public Sentry envelope ingest", () => {
     expect(response.headers["retry-after"]).toBe("60");
     expect(count(fixture.database, "events")).toBe(0);
     expect(fixture.forwarded).toEqual([]);
+    expect(
+      fixture.metrics.render({
+        database: fixture.database,
+        storage: fixture.operations.storageSafety,
+      }),
+    ).toContain('sentrybox_ingest_http_responses_total{status="503"} 1');
   });
 
   it("fails closed with a bounded retryable 503 before storage safety has a successful sample", async () => {

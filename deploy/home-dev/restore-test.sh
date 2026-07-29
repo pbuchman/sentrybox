@@ -71,6 +71,7 @@ esac
 readonly restore_copy="${temporary_directory}/restore.sqlite"
 readonly restore_container="sentrybox-restore-test-$$"
 container_attempted=0
+restore_success_temporary=""
 
 cleanup() {
   local exit_status=$?
@@ -80,6 +81,11 @@ cleanup() {
     && ! docker rm --force "${restore_container}" >/dev/null 2>&1; then
     printf 'Restore-test container cleanup failed: %s\n' \
       "${restore_container}" >&2
+    cleanup_status=1
+  fi
+  if [[ -n "${restore_success_temporary}" ]] \
+    && ! rm -f -- "${restore_success_temporary}"; then
+    printf 'Restore-test success-record cleanup failed.\n' >&2
     cleanup_status=1
   fi
   if ! rm -rf -- "${temporary_directory}" \
@@ -120,5 +126,12 @@ docker run --name "${restore_container}" --interactive \
   --input-type=module - restore-test \
   <&7
 exec 7<&-
+
+restore_success_temporary="$(
+  mktemp "${error_hub_state_directory}/.restore-test-success.XXXXXX"
+)"
+chmod 0600 "${restore_success_temporary}"
+mv -f "${restore_success_temporary}" "${error_hub_state_directory}/restore-test.success"
+restore_success_temporary=""
 
 printf 'Pre-deployment SentryBox backup passed restore validation.\n'

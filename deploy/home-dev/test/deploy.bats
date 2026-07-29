@@ -910,6 +910,7 @@ EOF
   [ "$(cat "${fixture_root}/fake-state/restore-copy")" = 'predeploy-good' ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
+  [ -f "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success" ]
   run grep -F 'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]

@@ -67,9 +67,14 @@ Success is the journal message `Pre-deployment SentryBox backup passed restore
 validation.` A failure is a recovery-readiness incident; never overwrite the
 live database with an unvalidated snapshot.
 
+On success, the restore test atomically updates the private
+`/var/lib/sentrybox-deploy/restore-test.success` marker. The operational monitor
+uses only this marker's age; never create or modify it manually to suppress a
+recovery alert.
+
 ## Installation verification
 
-`install.sh` refuses to enable the timers unless `backup.sh` and
+`install.sh` refuses to enable the timers unless `backup.sh`, `monitor.sh`, and
 `restore-test.sh` are regular executable files. It runs `systemd-analyze verify`
 over the runtime, deployment, backup, and restore units before reloading systemd.
 
