@@ -120,6 +120,19 @@ export class StorageSafetyState {
     };
   }
 
+  public observePhysicalUsage(physicalUsage: PhysicalStorageUsage): void {
+    const physical = validatePhysicalUsage(physicalUsage);
+    const physicallyCritical =
+      physical.totalBytes >= this.#config.physicalCriticalBytes ||
+      physical.freeBytes < this.#config.minimumFreeBytes;
+    this.#snapshot = {
+      ...this.#snapshot,
+      safety: physicallyCritical ? "critical" : this.#snapshot.safety,
+      acceptingIngest: false,
+      physicalUsage: physical,
+    };
+  }
+
   public markSuccess(
     completedAt: Date,
     removedEvents: { readonly age: number; readonly budget: number },

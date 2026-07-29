@@ -370,15 +370,12 @@ describe("RetentionSweeper", () => {
     const hard = usage({
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalTotalBytes,
     });
-    let samples = 0;
     const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
     const result = await createSweeper({
       safetyState: state,
       config: { batchSize: 1 },
-      readPhysicalUsage: () => {
-        samples += 1;
-        return samples === 1 ? safe : hard;
-      },
+      readPhysicalUsage: () =>
+        eventIds().includes(first.eventRowId) ? safe : hard,
       emergencyCheckpoint: () => ({
         busy: 1,
         logFrames: 9,
@@ -445,22 +442,19 @@ describe("RetentionSweeper", () => {
     const critical = usage({
       totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
     });
-    let samples = 0;
     const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
-    const preparedSql: string[] = [];
-    const originalPrepare = database.prepare.bind(database);
-    vi.spyOn(database, "prepare").mockImplementation((sql) => {
-      preparedSql.push(sql);
-      return originalPrepare(sql);
-    });
 
     const result = await createSweeper({
       safetyState: state,
       config: { batchSize: 1 },
-      readPhysicalUsage: () => {
-        samples += 1;
-        return samples === 1 ? usage() : critical;
-      },
+      readPhysicalUsage: () =>
+        (
+          database
+            .prepare("SELECT COUNT(*) AS count FROM webhook_redrives")
+            .get() as { count: number }
+        ).count === 0
+          ? critical
+          : usage(),
       emergencyCheckpoint: () => ({
         busy: 1,
         logFrames: 10,
@@ -490,13 +484,6 @@ describe("RetentionSweeper", () => {
             snapshot.acceptingIngest === false,
         ),
     ).toBe(true);
-    expect(
-      preparedSql.filter((sql) =>
-        /SELECT received_at\s+FROM events INDEXED BY idx_events_retention_received/iu.test(
-          sql,
-        ),
-      ),
-    ).toHaveLength(samples + 2);
   });
 
   it("preserves a sampled physical-critical classification when emergency reclaim throws", async () => {
@@ -580,6 +567,120 @@ describe("RetentionSweeper", () => {
       retentionKnownSuccessful: false,
       lastFailure: "cleanup_failed",
     });
+  });
+
+  it.each([
+    [
+      "physical usage is critical",
+      usage({
+        totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
+      }),
+    ],
+    [
+      "free space is below the minimum",
+      usage({
+        freeBytes: DEFAULT_RETENTION_CONFIG.minimumFreeBytes - 1,
+      }),
+    ],
+  ])(
+    "classifies and reclaims before any reconciliation progress write when %s",
+    async (_name, criticalUsage) => {
+      record({ fingerprint: "a", receivedAt: "2026-08-22T00:00:00.000Z" });
+      record({ fingerprint: "b", receivedAt: "2026-08-23T00:00:00.000Z" });
+      const order: string[] = [];
+      const originalPrepare = database.prepare.bind(database);
+      vi.spyOn(database, "prepare").mockImplementation((sql) => {
+        if (/UPDATE retention_accounting\s+SET reconciliation_/iu.test(sql)) {
+          order.push("reconciliation_progress");
+        }
+        return originalPrepare(sql);
+      });
+
+      const result = await createSweeper({
+        config: { batchSize: 1 },
+        readPhysicalUsage: () => {
+          order.push("physical_sample");
+          return criticalUsage;
+        },
+        emergencyCheckpoint: () => {
+          order.push("emergency_reclaim");
+          return { busy: 0, logFrames: 1, checkpointedFrames: 1 };
+        },
+      }).run();
+
+      expect(result).toMatchObject({
+        success: false,
+        failure: "physical_storage_critical",
+        removedEvents: { age: 0, budget: 0 },
+      });
+      expect(order.slice(0, 3)).toEqual([
+        "physical_sample",
+        "emergency_reclaim",
+        "physical_sample",
+      ]);
+      expect(order).not.toContain("reconciliation_progress");
+      expect(eventIds()).toHaveLength(2);
+    },
+  );
+
+  it("re-samples after each reconciliation step and stops when usage becomes critical", async () => {
+    const rows = [
+      record({ fingerprint: "a", receivedAt: "2026-08-22T00:00:00.000Z" }),
+      record({ fingerprint: "b", receivedAt: "2026-08-23T00:00:00.000Z" }),
+      record({ fingerprint: "c", receivedAt: "2026-08-24T00:00:00.000Z" }),
+    ];
+    const order: string[] = [];
+    const originalPrepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      if (/UPDATE retention_accounting\s+SET reconciliation_/iu.test(sql)) {
+        order.push("reconciliation_progress");
+      }
+      return originalPrepare(sql);
+    });
+    let samples = 0;
+    let yields = 0;
+
+    const result = await createSweeper({
+      config: { batchSize: 1 },
+      readPhysicalUsage: () => {
+        samples += 1;
+        order.push("physical_sample");
+        return samples === 1
+          ? usage()
+          : usage({
+              totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
+            });
+      },
+      emergencyCheckpoint: () => {
+        order.push("emergency_reclaim");
+        return { busy: 0, logFrames: 1, checkpointedFrames: 1 };
+      },
+      yieldControl: () => {
+        yields += 1;
+      },
+    }).run();
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "physical_storage_critical",
+      removedEvents: { age: 0, budget: 0 },
+    });
+    expect(order[0]).toBe("physical_sample");
+    expect(order.indexOf("reconciliation_progress")).toBeGreaterThan(0);
+    expect(order.indexOf("physical_sample", 1)).toBeGreaterThan(
+      order.indexOf("reconciliation_progress"),
+    );
+    expect(yields).toBe(0);
+    expect(
+      database
+        .prepare(
+          `SELECT reconciliation_cursor_id
+           FROM retention_accounting
+           WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({ reconciliation_cursor_id: rows[0]!.eventRowId });
+    expect(eventIds()).toHaveLength(3);
   });
 
   it("drains bounded reconciliation despite insert and delete mutations between steps", async () => {
@@ -708,27 +809,62 @@ describe("RetentionSweeper", () => {
     expect(eventIds()).toEqual([]);
   });
 
+  it("fails closed before cleanup when an occurrence lands in the initial sample handoff", async () => {
+    const initialSample = deferred<PhysicalStorageUsage>();
+    let samples = 0;
+    const run = createSweeper({
+      readPhysicalUsage: () => {
+        samples += 1;
+        return samples === 1 ? initialSample.promise : usage();
+      },
+    }).run();
+    await vi.waitFor(() => expect(samples).toBe(1));
+
+    initialSample.resolve(usage());
+    let inserted: ReturnType<typeof record> | undefined;
+    queueMicrotask(() => {
+      inserted = record({
+        receivedAt: "2026-07-01T00:00:00.000Z",
+      });
+    });
+    const result = await run;
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "cleanup_failed",
+      removedEvents: { age: 0, budget: 0 },
+    });
+    expect(inserted).toBeDefined();
+    expect(eventIds()).toEqual([inserted!.eventRowId]);
+  });
+
   it("publishes post-sample accounting when an ingest commits during a per-batch await", async () => {
     const config = tinyConfig();
     const state = new StorageSafetyState(config);
     state.observeUsage(usage(), 0, null);
     state.markSuccess(new Date(NOW), { age: 0, budget: 0 });
-    record({ receivedAt: "2026-07-01T00:00:00.000Z" });
+    const expired = record({ receivedAt: "2026-07-01T00:00:00.000Z" });
     const batchSample = deferred<PhysicalStorageUsage>();
-    let samples = 0;
+    let deferredBatchSample = false;
     const safetyAtYield: ReturnType<StorageSafetyState["snapshot"]>[] = [];
     const run = createSweeper({
       safetyState: state,
       config,
       readPhysicalUsage: () => {
-        samples += 1;
-        return samples === 2 ? batchSample.promise : usage();
+        if (
+          deferredBatchSample === false &&
+          !eventIds().includes(expired.eventRowId)
+        ) {
+          deferredBatchSample = true;
+          return batchSample.promise;
+        }
+        return usage();
       },
       yieldControl: async () => {
         safetyAtYield.push(state.snapshot());
       },
     }).run();
-    await vi.waitFor(() => expect(samples).toBe(2));
+    await vi.waitFor(() => expect(deferredBatchSample).toBe(true));
     const inserted = record({ receivedAt: "2026-08-22T00:00:00.000Z" });
     setLogicalBytes([inserted], [config.logicalHighBytes + 1]);
 
@@ -742,20 +878,107 @@ describe("RetentionSweeper", () => {
     });
   });
 
+  it("fails closed before the next cleanup batch when an occurrence lands in the post-yield handoff", async () => {
+    const first = record({
+      fingerprint: "a",
+      receivedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const second = record({
+      fingerprint: "b",
+      receivedAt: "2026-07-02T00:00:00.000Z",
+    });
+    const postBatchYield = deferred<void>();
+    let waitingAfterFirstBatch = false;
+    const run = createSweeper({
+      config: { batchSize: 1 },
+      yieldControl: () => {
+        if (
+          waitingAfterFirstBatch === false &&
+          !eventIds().includes(first.eventRowId)
+        ) {
+          waitingAfterFirstBatch = true;
+          return postBatchYield.promise;
+        }
+      },
+    }).run();
+    await vi.waitFor(() => expect(waitingAfterFirstBatch).toBe(true));
+
+    postBatchYield.resolve();
+    let inserted: ReturnType<typeof record> | undefined;
+    queueMicrotask(() => {
+      inserted = record({ receivedAt: "2026-08-22T00:00:00.000Z" });
+    });
+    const result = await run;
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "cleanup_failed",
+      removedEvents: { age: 1, budget: 0 },
+    });
+    expect(inserted).toBeDefined();
+    expect(eventIds()).toEqual([second.eventRowId, inserted!.eventRowId]);
+  });
+
+  it("fails closed before cleanup when an occurrence lands in the emergency-resample handoff", async () => {
+    const critical = usage({
+      totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes,
+    });
+    const recovered = usage({
+      totalBytes: DEFAULT_RETENTION_CONFIG.physicalCriticalBytes - 1,
+    });
+    const emergencySample = deferred<PhysicalStorageUsage>();
+    let samples = 0;
+    const run = createSweeper({
+      readPhysicalUsage: () => {
+        samples += 1;
+        if (samples === 1) return critical;
+        if (samples === 2) return emergencySample.promise;
+        return recovered;
+      },
+    }).run();
+    await vi.waitFor(() => expect(samples).toBe(2));
+
+    emergencySample.resolve(recovered);
+    let inserted: ReturnType<typeof record> | undefined;
+    queueMicrotask(() => {
+      inserted = record({
+        receivedAt: "2026-07-01T00:00:00.000Z",
+      });
+    });
+    const result = await run;
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "cleanup_failed",
+      removedEvents: { age: 0, budget: 0 },
+    });
+    expect(inserted).toBeDefined();
+    expect(eventIds()).toEqual([inserted!.eventRowId]);
+  });
+
   it("fails closed when an ingest commits during the final async physical sample", async () => {
     const config = tinyConfig();
     const state = new StorageSafetyState(config);
     const finalSample = deferred<PhysicalStorageUsage>();
-    let samples = 0;
+    record({ receivedAt: "2026-07-01T00:00:00.000Z" });
+    let checkpointed = false;
+    let samplingFinalUsage = false;
     const run = createSweeper({
       safetyState: state,
       config,
       readPhysicalUsage: () => {
-        samples += 1;
-        return samples === 2 ? finalSample.promise : usage();
+        if (checkpointed && samplingFinalUsage === false) {
+          samplingFinalUsage = true;
+          return finalSample.promise;
+        }
+        return usage();
+      },
+      checkpoint: () => {
+        checkpointed = true;
+        return { busy: 0, logFrames: 1, checkpointedFrames: 1 };
       },
     }).run();
-    await vi.waitFor(() => expect(samples).toBe(2));
+    await vi.waitFor(() => expect(samplingFinalUsage).toBe(true));
     const inserted = record({ receivedAt: "2026-08-22T00:00:00.000Z" });
     setLogicalBytes([inserted], [config.logicalHighBytes + 1]);
 
@@ -770,6 +993,49 @@ describe("RetentionSweeper", () => {
       logicalPayloadBytes: config.logicalHighBytes + 1,
     });
     expect(eventIds()).toEqual([inserted.eventRowId]);
+  });
+
+  it("does not mark success when an occurrence lands in the final sample handoff", async () => {
+    const state = new StorageSafetyState(DEFAULT_RETENTION_CONFIG);
+    const finalSample = deferred<PhysicalStorageUsage>();
+    record({ receivedAt: "2026-07-01T00:00:00.000Z" });
+    let checkpointed = false;
+    let samplingFinalUsage = false;
+    const run = createSweeper({
+      safetyState: state,
+      readPhysicalUsage: () => {
+        if (checkpointed && samplingFinalUsage === false) {
+          samplingFinalUsage = true;
+          return finalSample.promise;
+        }
+        return usage();
+      },
+      checkpoint: () => {
+        checkpointed = true;
+        return { busy: 0, logFrames: 1, checkpointedFrames: 1 };
+      },
+    }).run();
+    await vi.waitFor(() => expect(samplingFinalUsage).toBe(true));
+
+    finalSample.resolve(usage());
+    let inserted: ReturnType<typeof record> | undefined;
+    queueMicrotask(() => {
+      inserted = record({ receivedAt: "2026-08-22T00:00:00.000Z" });
+    });
+    const result = await run;
+
+    expect(result).toMatchObject({
+      success: false,
+      failure: "cleanup_failed",
+      removedEvents: { age: 1, budget: 0 },
+    });
+    expect(inserted).toBeDefined();
+    expect(eventIds()).toEqual([inserted!.eventRowId]);
+    expect(state.snapshot()).toMatchObject({
+      acceptingIngest: false,
+      retentionKnownSuccessful: false,
+      lastFailure: "cleanup_failed",
+    });
   });
 });
 

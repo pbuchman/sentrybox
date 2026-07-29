@@ -187,6 +187,16 @@ export function registerIngestRoute(
         return sendSentryError(reply, rateLimitError(projectDecision, limits));
       }
 
+      if (!options.operations.storageSafety.snapshot().acceptingIngest) {
+        return sendSentryError(
+          reply,
+          new SentryHttpError(
+            503,
+            "Ingest storage is temporarily unavailable.",
+            limits.retryAfterSeconds,
+          ),
+        );
+      }
       try {
         for (const preparedEvent of prepared.events) {
           if (preparedEvent.event === null) continue;

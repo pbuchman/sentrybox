@@ -3,11 +3,13 @@ import type { ErrorHubDatabase } from "../storage/database.js";
 export interface RetentionStorageAccountingSnapshot {
   readonly logicalPayloadBytes: number;
   readonly oldestEventReceivedAt: string | null;
+  readonly mutationRevision: number;
 }
 
 export interface RetentionAccountingReconciliation {
   readonly complete: boolean;
   readonly scannedEvents: number;
+  readonly mutationRevision: number;
 }
 
 interface AccountingRow {
@@ -42,7 +44,20 @@ export function readRetentionStorageAccounting(
       "retention logical payload bytes",
     ),
     oldestEventReceivedAt: oldest?.received_at ?? null,
+    mutationRevision: safeNonNegativeInteger(
+      accounting.mutation_revision,
+      "retention accounting mutation revision",
+    ),
   };
+}
+
+export function readRetentionMutationRevision(
+  database: ErrorHubDatabase,
+): number {
+  return safeNonNegativeInteger(
+    readAccountingRow(database).mutation_revision,
+    "retention accounting mutation revision",
+  );
 }
 
 export function reconcileRetentionAccountingStep(
@@ -130,7 +145,11 @@ export function reconcileRetentionAccountingStep(
           )
           .run(lastId, payloadBytes, revision);
       }
-      return { complete, scannedEvents: rows.length };
+      return {
+        complete,
+        scannedEvents: rows.length,
+        mutationRevision: revision,
+      };
     })
     .immediate();
 }

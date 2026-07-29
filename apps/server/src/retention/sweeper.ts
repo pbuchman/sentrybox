@@ -6,6 +6,7 @@ import {
 } from "./storage-budget.js";
 import {
   readRetentionStorageAccounting,
+  readRetentionMutationRevision,
   reconcileRetentionAccountingStep,
   type RetentionStorageAccountingSnapshot,
 } from "./accounting.js";
@@ -66,6 +67,11 @@ interface PublishedStorageSample extends RetentionStorageAccountingSnapshot {
   readonly physical: PhysicalStorageUsage;
 }
 
+interface PhysicalOnlyStorageSample {
+  readonly physical: PhysicalStorageUsage;
+  readonly mutationRevision: number;
+}
+
 export class RetentionSweeper {
   readonly #database: ErrorHubDatabase;
   readonly #clock: () => Date;
@@ -108,28 +114,72 @@ export class RetentionSweeper {
     let logical = 0;
     let oldest: string | null = null;
     let stoppedAtHardLimit = false;
+    const physicalFailure = (): RetentionRunResult => {
+      this.#operations.storageSafety.markFailure(
+        "physical_storage_critical",
+        now,
+      );
+      this.#operations.metrics.recordRetention("failure", removedEvents);
+      return result(
+        false,
+        "physical_storage_critical",
+        removedEvents,
+        removedOutbox,
+        removedRedrives,
+        batches,
+        checkpoint,
+        physical,
+        logical,
+        oldest,
+      );
+    };
     try {
       this.#operations.storageSafety.beginVerification();
+      let verificationSample = this.requireFreshPhysicalSample(
+        await this.samplePhysicalForReconciliation(),
+      );
+      physical = verificationSample.physical;
+      if (this.isPhysicalCritical(physical)) {
+        return physicalFailure();
+      }
       for (;;) {
         const reconciliation = reconcileRetentionAccountingStep(
           this.#database,
           this.#config.batchSize,
         );
+        verificationSample = this.requireFreshPhysicalSample(
+          await this.samplePhysicalForReconciliation(),
+        );
+        physical = verificationSample.physical;
+        if (this.isPhysicalCritical(physical)) {
+          return physicalFailure();
+        }
+        if (
+          verificationSample.mutationRevision !==
+          reconciliation.mutationRevision
+        ) {
+          throw new Error(
+            "retention accounting changed after reconciliation step",
+          );
+        }
         if (reconciliation.complete) break;
         await this.#yieldControl();
+        verificationSample = this.requireFreshPhysicalSample(
+          await this.samplePhysicalForReconciliation(),
+        );
+        physical = verificationSample.physical;
+        if (this.isPhysicalCritical(physical)) {
+          return physicalFailure();
+        }
       }
+      let currentSample = this.requireFreshPublishedSample(
+        this.publishFreshAccounting(physical),
+      );
       ({
         physical,
         logicalPayloadBytes: logical,
         oldestEventReceivedAt: oldest,
-      } = await this.sampleAndPublish());
-      if (this.isPhysicalCritical(physical)) {
-        ({
-          physical,
-          logicalPayloadBytes: logical,
-          oldestEventReceivedAt: oldest,
-        } = await this.emergencyReclaimAndResample());
-      }
+      } = currentSample);
       stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
       const ageCutoff = new Date(
         now.getTime() - this.#config.eventAgeMs,
@@ -141,11 +191,14 @@ export class RetentionSweeper {
         removedEvents.age += candidates.length;
         batches += 1;
         this.verifyEventBatchAccounting(logical, candidates);
+        currentSample = this.requireFreshPublishedSample(
+          await this.afterBatch(),
+        );
         ({
           physical,
           logicalPayloadBytes: logical,
           oldestEventReceivedAt: oldest,
-        } = await this.afterBatch());
+        } = currentSample);
         stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
       }
 
@@ -162,11 +215,14 @@ export class RetentionSweeper {
           removedEvents.budget += candidates.length;
           batches += 1;
           this.verifyEventBatchAccounting(logical, candidates);
+          currentSample = this.requireFreshPublishedSample(
+            await this.afterBatch(),
+          );
           ({
             physical,
             logicalPayloadBytes: logical,
             oldestEventReceivedAt: oldest,
-          } = await this.afterBatch());
+          } = currentSample);
           stoppedAtHardLimit = this.isHardPhysicalLimit(physical);
         }
       }
@@ -180,11 +236,16 @@ export class RetentionSweeper {
         removedRedrives += redriveCleanup.removed;
         batches += redriveCleanup.batches;
         if (redriveCleanup.sample !== null) {
+          currentSample = this.requireFreshPublishedSample(
+            redriveCleanup.sample,
+          );
           ({
             physical,
             logicalPayloadBytes: logical,
             oldestEventReceivedAt: oldest,
-          } = redriveCleanup.sample);
+          } = currentSample);
+        } else {
+          currentSample = this.requireFreshPublishedSample(currentSample);
         }
         stoppedAtHardLimit = redriveCleanup.stoppedAtHardLimit;
       }
@@ -193,11 +254,16 @@ export class RetentionSweeper {
         removedOutbox += outboxCleanup.removed;
         batches += outboxCleanup.batches;
         if (outboxCleanup.sample !== null) {
+          currentSample = this.requireFreshPublishedSample(
+            outboxCleanup.sample,
+          );
           ({
             physical,
             logicalPayloadBytes: logical,
             oldestEventReceivedAt: oldest,
-          } = outboxCleanup.sample);
+          } = currentSample);
+        } else {
+          currentSample = this.requireFreshPublishedSample(currentSample);
         }
         stoppedAtHardLimit = outboxCleanup.stoppedAtHardLimit;
       }
@@ -206,42 +272,32 @@ export class RetentionSweeper {
         checkpoint = this.#checkpoint();
         validateCheckpoint(checkpoint);
         this.#incrementalVacuum(this.#config.incrementalVacuumPages);
-      }
-
-      ({
-        physical,
-        logicalPayloadBytes: logical,
-        oldestEventReceivedAt: oldest,
-      } = await this.sampleAndPublish());
-      if (this.isPhysicalCritical(physical)) {
+        currentSample = this.requireFreshPublishedSample(
+          await this.sampleAndPublish(),
+        );
+        if (this.isPhysicalCritical(currentSample.physical)) {
+          currentSample = this.requireFreshPublishedSample(
+            await this.emergencyReclaimAndResample(),
+          );
+        }
         ({
           physical,
           logicalPayloadBytes: logical,
           oldestEventReceivedAt: oldest,
-        } = await this.emergencyReclaimAndResample());
+        } = currentSample);
       }
       if (this.isPhysicalCritical(physical)) {
-        this.#operations.storageSafety.markFailure(
-          "physical_storage_critical",
-          now,
-        );
-        this.#operations.metrics.recordRetention("failure", removedEvents);
-        return result(
-          false,
-          "physical_storage_critical",
-          removedEvents,
-          removedOutbox,
-          removedRedrives,
-          batches,
-          checkpoint,
-          physical,
-          logical,
-          oldest,
-        );
+        return physicalFailure();
       }
       if (logical > this.#config.logicalHighBytes) {
         throw new Error("logical payload usage changed after cleanup");
       }
+      currentSample = this.requireFreshPublishedSample(currentSample);
+      ({
+        physical,
+        logicalPayloadBytes: logical,
+        oldestEventReceivedAt: oldest,
+      } = currentSample);
       this.#operations.storageSafety.markSuccess(now, removedEvents);
       this.#operations.metrics.recordRetention("success", removedEvents);
       return result(
@@ -257,8 +313,12 @@ export class RetentionSweeper {
         oldest,
       );
     } catch {
-      ({ logicalPayloadBytes: logical, oldestEventReceivedAt: oldest } =
-        readRetentionStorageAccountingSafely(this.#database));
+      const accounting = readRetentionStorageAccountingSafely(this.#database);
+      logical = accounting.logicalPayloadBytes;
+      oldest = accounting.oldestEventReceivedAt;
+      if (physical !== null) {
+        this.#operations.storageSafety.observeUsage(physical, logical, oldest);
+      }
       this.#operations.storageSafety.markFailure("cleanup_failed", now);
       this.#operations.metrics.recordRetention("failure", removedEvents);
       return result(
@@ -449,7 +509,7 @@ export class RetentionSweeper {
         .immediate();
       removed += ids.length;
       batches += 1;
-      sample = await this.afterBatch();
+      sample = this.requireFreshPublishedSample(await this.afterBatch());
       if (this.isHardPhysicalLimit(sample.physical)) {
         return { removed, batches, sample, stoppedAtHardLimit: true };
       }
@@ -457,17 +517,40 @@ export class RetentionSweeper {
   }
 
   private async afterBatch(): Promise<PublishedStorageSample> {
-    let sample = await this.sampleAndPublish();
+    let sample = this.requireFreshPublishedSample(
+      await this.sampleAndPublish(),
+    );
     if (this.isPhysicalCritical(sample.physical)) {
-      sample = await this.emergencyReclaimAndResample();
+      sample = this.requireFreshPublishedSample(
+        await this.emergencyReclaimAndResample(),
+      );
     }
     await this.#yieldControl();
-    return this.publishFreshAccounting(sample.physical);
+    return this.requireFreshPublishedSample(sample);
   }
 
   private async sampleAndPublish(): Promise<PublishedStorageSample> {
     const physical = await this.#readPhysicalUsage();
     return this.publishFreshAccounting(physical);
+  }
+
+  private async samplePhysicalForReconciliation(): Promise<PhysicalOnlyStorageSample> {
+    let sample = this.requireFreshPhysicalSample(
+      await this.samplePhysicalOnly(),
+    );
+    if (this.isPhysicalCritical(sample.physical)) {
+      validateCheckpoint(this.#emergencyCheckpoint());
+      this.#incrementalVacuum(this.#config.incrementalVacuumPages);
+      sample = this.requireFreshPhysicalSample(await this.samplePhysicalOnly());
+    }
+    return sample;
+  }
+
+  private async samplePhysicalOnly(): Promise<PhysicalOnlyStorageSample> {
+    const physical = await this.#readPhysicalUsage();
+    const mutationRevision = readRetentionMutationRevision(this.#database);
+    this.#operations.storageSafety.observePhysicalUsage(physical);
+    return { physical, mutationRevision };
   }
 
   private publishFreshAccounting(
@@ -480,6 +563,35 @@ export class RetentionSweeper {
       accounting.oldestEventReceivedAt,
     );
     return { physical, ...accounting };
+  }
+
+  private requireFreshPhysicalSample(
+    sample: PhysicalOnlyStorageSample,
+  ): PhysicalOnlyStorageSample {
+    if (
+      readRetentionMutationRevision(this.#database) !== sample.mutationRevision
+    ) {
+      throw new Error(
+        "retention accounting changed across physical sample handoff",
+      );
+    }
+    return sample;
+  }
+
+  private requireFreshPublishedSample(
+    sample: PublishedStorageSample,
+  ): PublishedStorageSample {
+    const accounting = readRetentionStorageAccounting(this.#database);
+    if (
+      accounting.mutationRevision !== sample.mutationRevision ||
+      accounting.logicalPayloadBytes !== sample.logicalPayloadBytes ||
+      accounting.oldestEventReceivedAt !== sample.oldestEventReceivedAt
+    ) {
+      throw new Error(
+        "retention accounting changed across storage sample handoff",
+      );
+    }
+    return sample;
   }
 
   private async emergencyReclaimAndResample(): Promise<PublishedStorageSample> {

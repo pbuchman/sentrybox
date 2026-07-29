@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { MAX_DECOMPRESSED_ENVELOPE_BYTES } from "@intexura-error-hub/protocol";
 import { openDatabase, type ErrorHubDatabase } from "../storage/database.js";
@@ -12,7 +12,10 @@ import type { OutboxDraft } from "../storage/outbox-repository.js";
 import { ProjectRepository } from "../storage/project-repository.js";
 import { createPublicApp, type PublicAppOptions } from "../public-app.js";
 import { ErrorHubMetrics } from "../metrics.js";
-import { createOperationsContext } from "../operations.js";
+import {
+  createOperationsContext,
+  type OperationsContext,
+} from "../operations.js";
 import {
   DEFAULT_RETENTION_CONFIG,
   StorageSafetyState,
@@ -867,6 +870,31 @@ describe("public Sentry envelope ingest", () => {
     expect(response.headers["retry-after"]).toBe("60");
   });
 
+  it("rejects a request admitted before verification when its occurrence write starts after verification", async () => {
+    const fixture = createFixture();
+    const storageSafety = fixture.operations.storageSafety;
+    const readSnapshot = storageSafety.snapshot.bind(storageSafety);
+    let admissionChecks = 0;
+    vi.spyOn(storageSafety, "snapshot").mockImplementation(() => {
+      const snapshot = readSnapshot();
+      admissionChecks += 1;
+      if (admissionChecks === 1) {
+        queueMicrotask(() => {
+          storageSafety.beginVerification();
+        });
+      }
+      return snapshot;
+    });
+
+    const response = await postEnvelope(fixture.app, NODE_FIXTURE);
+
+    expectSentryError(response, 503);
+    expect(admissionChecks).toBe(2);
+    expect(count(fixture.database, "events")).toBe(0);
+    expect(count(fixture.database, "webhook_outbox")).toBe(0);
+    expect(fixture.forwarded).toEqual([]);
+  });
+
   it("maps unexpected internal failures to a bounded retryable 500", async () => {
     const fixture = createFixture({
       now() {
@@ -982,6 +1010,7 @@ function createFixture(options: FixtureOptions = {}): {
   readonly forwarded: ShadowForwardRequest[];
   readonly operationalMetrics: { readonly type: string }[];
   readonly metrics: ErrorHubMetrics;
+  readonly operations: OperationsContext;
 } {
   const database = openDatabase(":memory:");
   openDatabases.push(database);
@@ -1105,6 +1134,7 @@ function createFixture(options: FixtureOptions = {}): {
     forwarded,
     operationalMetrics,
     metrics,
+    operations,
   };
 }
 
