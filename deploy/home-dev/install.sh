@@ -17,7 +17,7 @@ for executable_asset in backup.sh monitor.sh restore-test.sh; do
     exit 1
   fi
 done
-for required_command in caddy cp mktemp systemd-analyze; do
+for required_command in caddy cp mktemp sleep systemd-analyze; do
   error_hub_require_command "${required_command}"
 done
 
@@ -203,6 +203,10 @@ systemctl enable --now \
   sentrybox-backup.timer \
   sentrybox-monitor.timer \
   sentrybox-restore-test.timer >/dev/null
+# The monitor oneshot has TimeoutStartSec=30s. Keep a small bounded margin so an
+# immediate OnBootSec activation can finish before its next schedule is checked.
+readonly timer_schedule_attempts=36
+readonly timer_schedule_wait_seconds=1
 for timer in \
   sentrybox-backup.timer \
   sentrybox-monitor.timer \
@@ -211,12 +215,24 @@ for timer in \
     printf 'SentryBox operational timer is not active: %s\n' "${timer}" >&2
     exit 1
   fi
-  timer_schedule="$(
-    systemctl list-timers --all --no-legend --no-pager "${timer}"
-  )"
-  if [[ -z "${timer_schedule}" \
-    || ! "${timer_schedule}" =~ [[:space:]]${timer}[[:space:]] \
-    || "${timer_schedule}" =~ ^[[:space:]]*(n/a|-)($|[[:space:]]) ]]; then
+  timer_schedule_ready=0
+  for ((timer_schedule_attempt = 1; \
+    timer_schedule_attempt <= timer_schedule_attempts; \
+    timer_schedule_attempt++)); do
+    timer_schedule="$(
+      systemctl list-timers --all --no-legend --no-pager "${timer}"
+    )"
+    if [[ -n "${timer_schedule}" \
+      && "${timer_schedule}" =~ [[:space:]]${timer}[[:space:]] \
+      && ! "${timer_schedule}" =~ ^[[:space:]]*(n/a|-)($|[[:space:]]) ]]; then
+      timer_schedule_ready=1
+      break
+    fi
+    if (( timer_schedule_attempt < timer_schedule_attempts )); then
+      sleep "${timer_schedule_wait_seconds}"
+    fi
+  done
+  if (( timer_schedule_ready == 0 )); then
     printf 'SentryBox operational timer has no next activation: %s\n' \
       "${timer}" >&2
     exit 1

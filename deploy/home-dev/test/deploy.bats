@@ -358,6 +358,11 @@ if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
 fi
 if [ "$1" = list-timers ]; then
   for unit in "$@"; do :; done
+  if [ "${ERROR_HUB_FAKE_TIMER_NEXT_DELAY_ONCE:-}" = "${unit}" ] \
+    && [ ! -f "${ERROR_HUB_FAKE_STATE}/timer-next-delayed-${unit}" ]; then
+    : >"${ERROR_HUB_FAKE_STATE}/timer-next-delayed-${unit}"
+    exit 0
+  fi
   [ "${ERROR_HUB_FAKE_TIMER_NEXT_MISSING:-}" = "${unit}" ] && exit 0
   [ -f "${ERROR_HUB_FAKE_STATE}/active-${unit}" ] || exit 0
   printf 'Wed 2026-07-29 12:00:00 CEST 4min left n/a n/a %s %s\n' \
@@ -385,6 +390,15 @@ EOF
 printf 'systemd-analyze %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 [ "${ERROR_HUB_FAKE_SYSTEMD_VERIFY_FAIL:-0}" = 1 ] && exit 1
 exit 0
+EOF
+
+  cat >"${fixture_root}/fake-bin/sleep" <<'EOF'
+#!/bin/sh
+printf 'sleep %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+if [ "$*" = 1 ]; then
+  exit 0
+fi
+exec /bin/sleep "$@"
 EOF
 
   for command in caddy systemctl systemd-analyze; do
@@ -464,6 +478,18 @@ EOF
   done
 }
 
+@test "install waits for an immediate timer activation to expose its next activation" {
+  export ERROR_HUB_FAKE_TIMER_NEXT_DELAY_ONCE=sentrybox-monitor.timer
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ "$(grep -Fc \
+    'systemctl list-timers --all --no-legend --no-pager sentrybox-monitor.timer' \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+}
+
 @test "install fails when an operational timer did not start or has no next activation" {
   export ERROR_HUB_FAKE_TIMER_START_FAIL=sentrybox-monitor.timer
   run "${repository_root}/deploy/home-dev/install.sh" \
@@ -476,6 +502,9 @@ EOF
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"next activation"* ]]
+  [ "$(grep -Fc \
+    'systemctl list-timers --all --no-legend --no-pager sentrybox-restore-test.timer' \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 36 ]
 }
 
 @test "install rejects a linked deployment state directory without mutating its target" {
