@@ -39,6 +39,7 @@ export async function runMain(
     publicIngestHosts: commaSeparated(
       environment.ERROR_HUB_PUBLIC_INGEST_HOSTS ?? "errors.intexuraos.cloud",
     ),
+    grafanaExploreUrl: readGrafanaExploreUrl(environment),
     secrets,
     publicLimits: {
       globalRateLimit: publicConfig.globalRateLimit,
@@ -57,6 +58,48 @@ export async function runMain(
     },
   });
   await waitForShutdown(runtime.close);
+}
+
+export function readGrafanaExploreUrl(environment: Environment): URL | null {
+  const value = environment.ERROR_HUB_GRAFANA_EXPLORE_URL?.trim();
+  if (value === undefined || value.length === 0) return null;
+  const shape =
+    /^https:\/\/[A-Za-z0-9.-]+(?::([0-9]{1,5}))?\/explore\?orgId=[0-9]+&datasource=[A-Za-z0-9_-]{1,128}$/u.exec(
+      value,
+    );
+  const explicitPort = shape?.[1];
+  if (
+    shape === null ||
+    (explicitPort !== undefined && Number(explicitPort) > 65_535)
+  ) {
+    throw new Error(
+      "Grafana Explore URL must be credential-free HTTPS /explore with exactly one numeric orgId and one valid datasource parameter",
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      "Grafana Explore URL must be a valid credential-free HTTPS URL",
+    );
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.pathname !== "/explore" ||
+    url.hash.length > 0 ||
+    url.searchParams.getAll("orgId").length !== 1 ||
+    !/^\d+$/u.test(url.searchParams.get("orgId") ?? "") ||
+    url.searchParams.getAll("datasource").length !== 1 ||
+    !/^[A-Za-z0-9_-]{1,128}$/u.test(url.searchParams.get("datasource") ?? "")
+  ) {
+    throw new Error(
+      "Grafana Explore URL must be credential-free HTTPS /explore with exactly one numeric orgId and one valid datasource parameter",
+    );
+  }
+  return url;
 }
 
 async function waitForShutdown(close: () => Promise<void>): Promise<void> {

@@ -34,6 +34,8 @@ readonly error_hub_database_operations="${error_hub_checkout}/deploy/home-dev/da
 readonly error_hub_caddy_directory="${error_hub_prefix}/etc/caddy/Caddyfile.d"
 readonly error_hub_caddy_fragment="${error_hub_caddy_directory}/sentrybox.caddy"
 readonly error_hub_caddy_deploy_fragment="${error_hub_caddy_directory}/sentrybox-deploy.caddy"
+readonly error_hub_caddy_normal_source="${error_hub_checkout}/deploy/home-dev/caddy-sentrybox.caddy"
+readonly error_hub_caddy_maintenance_source="${error_hub_checkout}/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
 readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
 readonly error_hub_caddy_validation_root="${error_hub_state_directory}/caddy-validation"
 readonly error_hub_caddy_validation_config="${error_hub_caddy_validation_root}/config"
@@ -63,6 +65,26 @@ error_hub_validate_caddy() {
     caddy validate --config "${error_hub_caddy_config}"
 }
 
+error_hub_apply_caddy_fragment() {
+  local eh_source_fragment="$1"
+  local eh_temporary_fragment="${error_hub_caddy_fragment}.tmp.$$"
+  if [[ ! -f "${eh_source_fragment}" || -L "${eh_source_fragment}" ]]; then
+    printf 'Caddy route source must be a regular checked-in file: %s\n' \
+      "${eh_source_fragment}" >&2
+    return 1
+  fi
+  if ! install -m 0644 "${eh_source_fragment}" "${eh_temporary_fragment}"; then
+    rm -f "${eh_temporary_fragment}"
+    return 1
+  fi
+  if ! mv -f "${eh_temporary_fragment}" "${error_hub_caddy_fragment}"; then
+    rm -f "${eh_temporary_fragment}"
+    return 1
+  fi
+  error_hub_validate_caddy >/dev/null || return $?
+  systemctl reload caddy
+}
+
 error_hub_require_runtime_environment() {
   local eh_mode eh_owner eh_links
   local -a eh_lines=()
@@ -79,11 +101,26 @@ error_hub_require_runtime_environment() {
     return 1
   fi
   mapfile -t eh_lines <"${error_hub_runtime_environment_file}"
-  if (( ${#eh_lines[@]} != 1 )) \
+  if (( ${#eh_lines[@]} < 1 || ${#eh_lines[@]} > 2 )) \
     || [[ ! "${eh_lines[0]}" =~ ^ERROR_HUB_REQUIRED_SECRET_REFERENCES=[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$ ]]; then
-    printf 'SentryBox runtime environment must contain exactly one valid reference list.\n' >&2
+    printf 'SentryBox runtime environment must contain one valid reference list and at most one Grafana URL.\n' >&2
     return 1
   fi
+  if (( ${#eh_lines[@]} == 2 )) \
+    && ! error_hub_valid_grafana_environment_line "${eh_lines[1]}"; then
+    printf 'SentryBox Grafana Explore URL must be credential-free HTTPS with orgId and datasource.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_valid_grafana_environment_line() {
+  local eh_line="$1"
+  local eh_port=""
+  if [[ ! "${eh_line}" =~ ^ERROR_HUB_GRAFANA_EXPLORE_URL=https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?/explore\?orgId=[0-9]+\&datasource=[A-Za-z0-9_-]{1,128}$ ]]; then
+    return 1
+  fi
+  eh_port="${BASH_REMATCH[2]:-}"
+  [[ -z "${eh_port}" ]] || (( 10#${eh_port} <= 65535 ))
 }
 
 error_hub_require_immutable_image() {

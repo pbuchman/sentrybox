@@ -16,6 +16,8 @@ setup() {
   export ERROR_HUB_SUDO_BIN="${fake_bin}/sudo"
   export ERROR_HUB_CURL_BIN="${fake_bin}/curl"
   export ERROR_HUB_NODE_BIN="$(command -v node)"
+  maintenance_container_name="sentrybox-maintenance-contract-$$-${RANDOM}"
+  maintenance_headers="${fixture_directory}/maintenance-headers"
   unset ERROR_HUB_PRIVATE_ORIGIN
 
   printf '%s\n' '{"BackendState":"Running","Self":{"Online":true,"DNSName":"unit-test-node.example.ts.net."}}' >"${FAKE_TAILSCALE_STATUS_JSON}"
@@ -74,6 +76,7 @@ SCRIPT
 }
 
 teardown() {
+  docker rm --force "${maintenance_container_name}" >/dev/null 2>&1 || true
   rm -rf "${fixture_directory}"
 }
 
@@ -152,4 +155,52 @@ run_tailscale_setup() {
   run "${repository_root}/deploy/home-dev/test/verify-caddy-routes.sh"
 
   [ "${status}" -eq 0 ]
+}
+
+@test "checked-in maintenance route returns bounded 503 responses with Retry-After" {
+  caddy_image="caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+  maintenance_fragment="${repository_root}/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+
+  run docker run --rm \
+    --volume "${maintenance_fragment}:/etc/caddy/Caddyfile:ro" \
+    "${caddy_image}" \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  [ "${status}" -eq 0 ]
+
+  docker run --detach \
+    --name "${maintenance_container_name}" \
+    --publish 127.0.0.1::80 \
+    --volume "${maintenance_fragment}:/etc/caddy/Caddyfile:ro" \
+    "${caddy_image}" \
+    caddy run --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+  port_mapping="$(docker port "${maintenance_container_name}" 80/tcp)"
+  host_port="${port_mapping##*:}"
+  [[ "${host_port}" =~ ^[0-9]+$ ]]
+
+  maintenance_ready=false
+  for _attempt in {1..40}; do
+    status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+      --max-time 5 --header 'Host: errors.intexuraos.cloud' \
+      "http://127.0.0.1:${host_port}/not-exposed" || true)"
+    if [[ "${status}" == "404" ]]; then
+      maintenance_ready=true
+      break
+    fi
+    sleep 0.25
+  done
+  [ "${maintenance_ready}" = true ]
+
+  for method in POST OPTIONS; do
+    status="$(curl --silent --output /dev/null --dump-header "${maintenance_headers}" \
+      --write-out '%{http_code}' --max-time 5 --request "${method}" \
+      --header 'Host: errors.intexuraos.cloud' \
+      "http://127.0.0.1:${host_port}/api/1/envelope/")"
+    [ "${status}" = 503 ]
+    tr -d '\r' <"${maintenance_headers}" | grep -Eiq '^Retry-After: 120$'
+  done
+
+  status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --max-time 5 --request GET --header 'Host: errors.intexuraos.cloud' \
+    "http://127.0.0.1:${host_port}/api/1/envelope/")"
+  [ "${status}" = 404 ]
 }

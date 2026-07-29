@@ -324,6 +324,9 @@ describe("Error Hub real-network end to end", () => {
         expect.objectContaining({ confidence: "exact_identifier" }),
       );
       expect(JSON.stringify(event.logLocator)).toContain(
+        `requestId=${requestId}`,
+      );
+      expect(JSON.stringify(event.logLocator)).not.toContain(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       );
 

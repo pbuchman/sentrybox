@@ -370,7 +370,8 @@ lifecycle remain separate explicit operations.
 SentryBox does not ingest `info` or `debug` logs. It builds a locator from fields
 already present in Sentry events produced by the shared Pino transport:
 
-1. exact `traceId`, `requestId`, `taskId`, or another correlation identifier;
+1. an exact Pino-extra correlation field, preferring `requestId`, then
+   `taskId`, then an explicitly logged `traceId`;
 2. service, environment, and exact original log timestamp;
 3. normalized message and a ±2 minute time window as fallback.
 
@@ -381,7 +382,10 @@ Every event view contains:
 - the exact time range, service, environment, and identifiers used;
 - an explanation when a browser-only event is not expected to have a server log.
 
-The generated query uses exact identifier matching first. It never claims an
+SDK-generated `contexts.trace.trace_id` values are retained as diagnostic
+context but are not treated as log identifiers because they are not present in
+the original Pino line. The generated query matches the complete correlation
+field/value token in either PM2 text or production Pino JSON. It never claims an
 exact match when only the timestamp/message fallback is available.
 
 Changing only the DSN cannot retroactively place a new SentryBox event ID into the

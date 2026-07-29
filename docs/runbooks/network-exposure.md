@@ -19,9 +19,12 @@ no application login because tailnet ACLs are the access boundary.
 The canonical fragments are:
 
 - `deploy/home-dev/caddy-sentrybox.caddy`
+- `deploy/home-dev/caddy-sentrybox-maintenance.caddy`
 - `deploy/home-dev/caddy-sentrybox-deploy.caddy`
 
-Installation copies those canonical sources to these live paths:
+Installation copies the normal ingest and deploy callback sources to these live
+paths; the maintenance source stays versioned in the canonical checkout until
+a deployment or operator window activates it:
 
 - `/etc/caddy/Caddyfile.d/sentrybox.caddy`
 - `/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy`
@@ -29,9 +32,23 @@ Installation copies those canonical sources to these live paths:
 The Home Dev Caddyfile imports `/etc/caddy/Caddyfile.d/*.caddy`; it does not
 import either source directly from the deployment checkout. When
 `sentrybox-deploy.service` runs the deployment transaction, only the live
-`sentrybox.caddy` ingest fragment is temporarily replaced by the maintenance
-route and then restored from `deploy/home-dev/caddy-sentrybox.caddy`. The live
-deploy callback fragment remains unchanged.
+`sentrybox.caddy` ingest fragment is temporarily replaced from the checked-in
+maintenance fragment and then restored from `deploy/home-dev/caddy-sentrybox.caddy`.
+The maintenance route returns `503` plus `Retry-After: 120` for both envelope
+methods. The live deploy callback fragment remains unchanged.
+
+For an operator change, run the complete change through the checked-in wrapper:
+
+```bash
+sudo ./deploy/home-dev/maintenance-window.sh -- /absolute/path/to/operator-command argument
+```
+
+The wrapper holds `/run/lock/sentrybox-deploy.lock`, installs the checked-in
+maintenance fragment, validates the complete Caddy configuration before each
+reload, and restores the normal fragment on success, command failure, or a
+handled signal. The operator command must contain the complete transaction; do
+not enter maintenance in one command and perform the change after its lock has
+been released.
 
 From the repository root, run the canonical installer as root with the actual
 private tailnet origin:

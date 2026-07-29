@@ -53,6 +53,7 @@ export interface StartRuntimeOptions {
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly publicIngestHosts: readonly string[];
+  readonly grafanaExploreUrl?: URL | null;
   readonly secrets: Pick<SecretStore, "references" | "resolve">;
   readonly retentionConfig?: RetentionConfig;
   readonly publicLimits?: Partial<PublicIngestLimits>;
@@ -167,6 +168,7 @@ export async function startRuntime(
       allowedHosts: options.allowedHosts,
       allowedOrigins: options.allowedOrigins,
       publicIngestHosts: options.publicIngestHosts,
+      grafanaExploreUrl: options.grafanaExploreUrl ?? null,
       secrets: options.secrets,
     });
     registerStaticUi(privateApp, { root: options.staticRoot });

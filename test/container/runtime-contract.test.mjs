@@ -116,7 +116,7 @@ test("operator commands load deployment state explicitly", async () => {
     Array.from(
       runbook.matchAll(/--config \/run\/config\/sentrybox-projects\.json/gu),
     ).length,
-    6,
+    7,
   );
   const disableSection =
     runbook
@@ -125,6 +125,26 @@ test("operator commands load deployment state explicitly", async () => {
   assert.match(disableSection, /\/home\/pbuchman\/services\/sentrybox\/env/u);
   assert.match(disableSection, /\/var\/lib\/sentrybox-deploy\/runtime\.env/u);
   assert.match(disableSection, /remove[^.]*HMAC[^.]*name/iu);
+});
+
+test("maintenance transition arms recovery before the bounded service stop", async () => {
+  const runbook = await source("docs/runbooks/project-configuration.md");
+  const wrapper = await source("deploy/home-dev/maintenance-window.sh");
+  const service = await source("deploy/home-dev/sentrybox.service");
+
+  assert.match(
+    runbook,
+    /service_recovery_required=1[\s\S]*?systemctl stop sentrybox\.service/u,
+  );
+  assert.match(service, /^TimeoutStopSec=2min$/mu);
+  assert.match(service, /^TimeoutStartSec=10min$/mu);
+  assert.match(wrapper, /readonly operator_stop_timeout_seconds=120/u);
+  assert.match(wrapper, /readonly operator_start_timeout_seconds=600/u);
+  assert.match(wrapper, /readonly operator_readiness_margin_seconds=30/u);
+  assert.match(
+    wrapper,
+    /operator_stop_timeout_seconds \+ operator_start_timeout_seconds \+ operator_readiness_margin_seconds/u,
+  );
 });
 
 test("verification is bounded and never installs packages at runtime", async () => {

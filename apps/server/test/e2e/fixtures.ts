@@ -68,8 +68,9 @@ function customizeEnvelope(
   payload.server_name = options.service;
   payload.level = options.level ?? "error";
   payload.fingerprint = ["task-11-runtime-group"];
+  const extra = record(payload.extra);
   if (options.requestId !== undefined) {
-    payload.tags = { requestId: options.requestId };
+    extra.requestId = options.requestId;
   }
   if (options.forbiddenValues !== undefined) {
     const [authorization = "", cookie = "", password = "", token = ""] =
@@ -77,10 +78,18 @@ function customizeEnvelope(
     payload.request = {
       headers: { Authorization: authorization, Cookie: cookie },
     };
-    payload.extra = { password, access_token: token };
+    extra.password = password;
+    extra.access_token = token;
   }
+  if (Object.keys(extra).length > 0) payload.extra = extra;
   return Buffer.from(
     `${JSON.stringify(envelopeHeader)}\n${rawItemHeader}\n${JSON.stringify(payload)}`,
     "utf8",
   );
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...(value as Readonly<Record<string, unknown>>) }
+    : {};
 }
