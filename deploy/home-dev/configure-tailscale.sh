@@ -124,7 +124,7 @@ rollback_on_failure() {
   local exit_status="$?"
   trap - EXIT
   if [[ "${mapping_changed}" == "true" ]]; then
-    if ! "${sudo_bin}" "${tailscale_bin}" serve "--https=${serve_port}" off >/dev/null; then
+    if ! "${sudo_bin}" "${tailscale_bin}" serve --yes "--https=${serve_port}" off >/dev/null; then
       printf 'Failed to roll back the new Tailscale Serve mapping.\n' >&2
     fi
   fi
@@ -141,7 +141,7 @@ fi
 
 if [[ "${mapping_state}" == "absent" ]]; then
   mapping_changed=true
-  "${sudo_bin}" "${tailscale_bin}" serve --bg "--https=${serve_port}" "${proxy_target}" >/dev/null
+  "${sudo_bin}" "${tailscale_bin}" serve --yes --bg "--https=${serve_port}" "${proxy_target}" >/dev/null
 fi
 
 serve_json="$(${sudo_bin} "${tailscale_bin}" serve status --json)"
