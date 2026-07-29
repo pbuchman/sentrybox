@@ -1,0 +1,36 @@
+[Unit]
+Description=Intexura Error Hub container
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/intexura-error-hub-deploy/current.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/pbuchman/deploy/intexura-error-hub
+EnvironmentFile=/var/lib/intexura-error-hub-deploy/current.env
+Environment=ERROR_HUB_RUNTIME_UID=1000
+Environment=ERROR_HUB_RUNTIME_GID=1000
+UMask=0077
+ExecStartPre=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/preflight.sh ${ERROR_HUB_IMAGE}
+ExecStart=/usr/bin/docker compose --file /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/compose.yaml up -d --wait --remove-orphans
+ExecReload=/usr/bin/docker compose --file /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/compose.yaml up -d --wait --remove-orphans
+ExecStop=/usr/bin/docker compose --file /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/compose.yaml stop --timeout 30
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

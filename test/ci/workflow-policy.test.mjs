@@ -116,6 +116,9 @@ test("pull-request CI is read-only and exercises every required gate", async () 
     "scan-type: fs",
     "scanners: secret",
     "docker/build-push-action",
+    "bats/bats:1.12.0@sha256:0257e4f5326dd37046e94d4b8ce07c293447be80a9db6d6dfff1d50d07617e2e",
+    "node --test deploy/home-dev/database-operations.test.mjs",
+    "shellcheck deploy/home-dev/*.sh",
   ]) {
     assert.ok(workflow.includes(required), `CI is missing ${required}`);
   }

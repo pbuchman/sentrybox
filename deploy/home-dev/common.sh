@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2034 # This file exposes constants and state to sourcing scripts.
+
+if [[ -n "${ERROR_HUB_TEST_ROOT:-}" ]]; then
+  if [[ "${ERROR_HUB_TEST_MODE:-}" != "1" \
+    || "${ERROR_HUB_TEST_ROOT}" != /tmp/* \
+    || "${ERROR_HUB_TEST_ROOT}" == *".."* \
+    || ! -d "${ERROR_HUB_TEST_ROOT}" ]]; then
+    printf 'ERROR_HUB_TEST_ROOT is allowed only for an explicit disposable test root.\n' >&2
+    exit 1
+  fi
+  readonly error_hub_prefix="${ERROR_HUB_TEST_ROOT}"
+else
+  readonly error_hub_prefix=""
+fi
+
+readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/intexura-error-hub"
+readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/intexura-error-hub"
+readonly error_hub_environment_file="${error_hub_service_root}/env"
+readonly error_hub_data_directory="${error_hub_service_root}/data"
+readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
+readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/intexura-error-hub-backups"
+readonly error_hub_state_directory="${error_hub_prefix}/var/lib/intexura-error-hub-deploy"
+readonly error_hub_lock_file="${error_hub_prefix}/run/lock/intexura-error-hub-deploy.lock"
+readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
+readonly error_hub_current_state="${error_hub_state_directory}/current.env"
+readonly error_hub_previous_state="${error_hub_state_directory}/previous.env"
+readonly error_hub_compose_file="${error_hub_checkout}/deploy/home-dev/compose.yaml"
+readonly error_hub_project_config="${error_hub_checkout}/deploy/home-dev/config.example.json"
+readonly error_hub_caddy_fragment="${error_hub_prefix}/etc/caddy/Caddyfile.d/intexura-error-hub.caddy"
+readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
+readonly error_hub_repository="pbuchman/intexura-error-hub"
+readonly error_hub_workflow="Release Error Hub Image"
+readonly error_hub_image_repository="ghcr.io/pbuchman/intexura-error-hub"
+
+error_hub_require_command() {
+  local eh_command_name="$1"
+  if ! command -v "${eh_command_name}" >/dev/null 2>&1; then
+    printf 'Required executable is unavailable: %s\n' "${eh_command_name}" >&2
+    return 1
+  fi
+}
+
+error_hub_require_immutable_image() {
+  local eh_candidate_image="${1:-}"
+  if [[ ! "${eh_candidate_image}" =~ ^ghcr\.io/pbuchman/intexura-error-hub@sha256:[0-9a-f]{64}$ ]]; then
+    printf 'An immutable Error Hub image digest is required; tags including latest are forbidden.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_require_sha() {
+  local eh_candidate_sha="${1:-}"
+  if [[ ! "${eh_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'A full lowercase 40-character commit SHA is required.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_require_private_origin() {
+  local eh_candidate_origin="${1:-}"
+  if [[ ! "${eh_candidate_origin}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]]; then
+    printf 'ERROR_HUB_PRIVATE_ORIGIN must be an exact HTTPS origin.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_require_free_space() {
+  local eh_disk_path="$1"
+  local eh_available_kib
+  eh_available_kib="$(df -Pk "${eh_disk_path}" | awk 'NR == 2 { print $4 }')"
+  if [[ ! "${eh_available_kib}" =~ ^[0-9]+$ ]] \
+    || (( eh_available_kib < 15 * 1024 * 1024 )); then
+    printf 'At least 15 GiB of free Home Dev disk space is required.\n' >&2
+    return 1
+  fi
+}
+
+error_hub_read_state() {
+  local eh_requested_state_file="$1"
+  local eh_state_line eh_state_key eh_state_value
+  local eh_state_image="" eh_state_origin="" eh_state_sha=""
+  [[ -f "${eh_requested_state_file}" && ! -L "${eh_requested_state_file}" ]] || {
+    printf 'Deployment state is unavailable: %s\n' "${eh_requested_state_file}" >&2
+    return 1
+  }
+  while IFS= read -r eh_state_line || [[ -n "${eh_state_line}" ]]; do
+    [[ "${eh_state_line}" == *=* ]] || {
+      printf 'Deployment state contains a malformed line.\n' >&2
+      return 1
+    }
+    eh_state_key="${eh_state_line%%=*}"
+    eh_state_value="${eh_state_line#*=}"
+    case "${eh_state_key}" in
+      ERROR_HUB_IMAGE)
+        [[ -z "${eh_state_image}" ]] || return 1
+        eh_state_image="${eh_state_value}"
+        ;;
+      ERROR_HUB_PRIVATE_ORIGIN)
+        [[ -z "${eh_state_origin}" ]] || return 1
+        eh_state_origin="${eh_state_value}"
+        ;;
+      ERROR_HUB_DEPLOYED_SHA)
+        [[ -z "${eh_state_sha}" ]] || return 1
+        eh_state_sha="${eh_state_value}"
+        ;;
+      *)
+        printf 'Deployment state contains an unsupported key.\n' >&2
+        return 1
+        ;;
+    esac
+  done <"${eh_requested_state_file}"
+  error_hub_require_immutable_image "${eh_state_image}"
+  error_hub_require_private_origin "${eh_state_origin}"
+  error_hub_require_sha "${eh_state_sha}"
+  ERROR_HUB_STATE_IMAGE="${eh_state_image}"
+  ERROR_HUB_STATE_PRIVATE_ORIGIN="${eh_state_origin}"
+  ERROR_HUB_STATE_SHA="${eh_state_sha}"
+}
+
+error_hub_write_state() {
+  local eh_requested_state_file="$1"
+  local eh_requested_image="$2"
+  local eh_requested_origin="$3"
+  local eh_requested_sha="$4"
+  local eh_state_temporary="${eh_requested_state_file}.tmp.$$"
+  error_hub_require_immutable_image "${eh_requested_image}"
+  error_hub_require_private_origin "${eh_requested_origin}"
+  error_hub_require_sha "${eh_requested_sha}"
+  mkdir -p "${error_hub_state_directory}"
+  umask 077
+  {
+    printf 'ERROR_HUB_IMAGE=%s\n' "${eh_requested_image}"
+    printf 'ERROR_HUB_PRIVATE_ORIGIN=%s\n' "${eh_requested_origin}"
+    printf 'ERROR_HUB_DEPLOYED_SHA=%s\n' "${eh_requested_sha}"
+  } >"${eh_state_temporary}"
+  chmod 0600 "${eh_state_temporary}"
+  mv -f "${eh_state_temporary}" "${eh_requested_state_file}"
+}
+
+error_hub_compose_up() {
+  local eh_compose_image="$1"
+  local eh_compose_origin="$2"
+  error_hub_require_immutable_image "${eh_compose_image}"
+  error_hub_require_private_origin "${eh_compose_origin}"
+  ERROR_HUB_IMAGE="${eh_compose_image}" \
+    ERROR_HUB_PRIVATE_ORIGIN="${eh_compose_origin}" \
+    docker compose --file "${error_hub_compose_file}" \
+      up -d --wait --remove-orphans
+}
+
+error_hub_health_checks() {
+  local eh_health_origin="$1"
+  error_hub_require_private_origin "${eh_health_origin}"
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    --header "Host: ${eh_health_origin#https://}" \
+    http://127.0.0.1:8141/health/ready >/dev/null
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    https://errors.intexuraos.cloud/health/live >/dev/null
+}

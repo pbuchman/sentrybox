@@ -43,6 +43,14 @@ jobs:
           bats deploy/home-dev/test/network-contract.bats
       - name: Verify repository and workflow contracts
         run: node --test test/ci/workflow-policy.test.mjs test/container/runtime-contract.test.mjs
+      - name: Verify Home Dev deployment assets
+        run: |
+          node --test deploy/home-dev/database-operations.test.mjs
+          docker run --rm --entrypoint sh \
+            --volume "$PWD:/code:ro" --workdir /code \
+            bats/bats:1.12.0@sha256:0257e4f5326dd37046e94d4b8ce07c293447be80a9db6d6dfff1d50d07617e2e \
+            -c 'apk add --no-cache jq >/dev/null && bats deploy/home-dev/test'
+          shellcheck deploy/home-dev/*.sh
       - name: Check formatting
         run: pnpm format:check
       - name: Lint

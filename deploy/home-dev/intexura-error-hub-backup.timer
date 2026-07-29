@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Intexura Error Hub backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=intexura-error-hub-backup.service
+
+[Install]
+WantedBy=timers.target

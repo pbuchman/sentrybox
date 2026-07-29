@@ -1,0 +1,25 @@
+[Unit]
+Description=Verify an Intexura Error Hub backup by restoring it
+After=docker.service
+ConditionFileIsExecutable=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/restore-test.sh
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pbuchman/deploy/intexura-error-hub
+ExecStart=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/restore-test.sh
+TimeoutStartSec=45min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pbuchman/services/intexura-error-hub-backups
+ReadWritePaths=/var/lib/intexura-error-hub-deploy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
