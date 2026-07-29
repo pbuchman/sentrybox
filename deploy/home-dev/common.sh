@@ -243,7 +243,7 @@ error_hub_run_synthetic_public_check() (
       ;;
   esac
 
-  # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap below.
+  # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap below.
   cleanup_synthetic_public_check() {
     local eh_exit_status=$?
     local eh_cleanup_status=0
