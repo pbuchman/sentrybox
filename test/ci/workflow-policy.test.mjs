@@ -1,0 +1,196 @@
+import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const root = new URL("../../", import.meta.url);
+const workflowsDirectory = new URL(".github/workflows/", root);
+
+async function source(path) {
+  return readFile(new URL(path, root), "utf8");
+}
+
+function jobBlocks(workflow) {
+  const lines = workflow.split("\n");
+  const jobsIndex = lines.findIndex((line) => line === "jobs:");
+  assert.notEqual(jobsIndex, -1, "workflow has no jobs mapping");
+
+  const blocks = [];
+  let current = null;
+  for (const line of lines.slice(jobsIndex + 1)) {
+    if (/^\S/u.test(line)) break;
+
+    const job = /^  ([a-zA-Z0-9_-]+):\s*$/u.exec(line);
+    if (job !== null) {
+      if (current !== null) blocks.push(current);
+      current = { name: job[1], lines: [line] };
+    } else if (current !== null) {
+      current.lines.push(line);
+    }
+  }
+  if (current !== null) blocks.push(current);
+  return blocks.map(({ name, lines: blockLines }) => ({
+    name,
+    source: blockLines.join("\n"),
+  }));
+}
+
+test("every workflow job is GitHub-hosted and PR payloads cannot control commands", async () => {
+  const names = (await readdir(workflowsDirectory)).filter((name) =>
+    /\.ya?ml$/u.test(name),
+  );
+  assert.ok(names.length >= 2, "CI and release workflows are required");
+
+  for (const name of names) {
+    const workflow = await source(`.github/workflows/${name}`);
+    assert.doesNotMatch(
+      workflow,
+      /\bself-hosted\b/u,
+      `${name} uses self-hosted`,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /\b(?:pull_request_target|issue_comment|repository_dispatch)\s*:/u,
+      `${name} accepts a privileged, payload-driven trigger`,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /\$\{\{\s*(?:github\.event|github\.head_ref)\b/u,
+      `${name} interpolates pull-request payload data`,
+    );
+
+    for (const job of jobBlocks(workflow)) {
+      assert.match(
+        job.source,
+        /^    runs-on:\s*ubuntu-latest\s*$/mu,
+        `${name}:${job.name} is not pinned to a GitHub-hosted runner label`,
+      );
+    }
+  }
+});
+
+test("every external action is pinned to a full commit SHA", async () => {
+  const names = (await readdir(workflowsDirectory)).filter((name) =>
+    /\.ya?ml$/u.test(name),
+  );
+
+  for (const name of names) {
+    const workflow = await source(`.github/workflows/${name}`);
+    const references = Array.from(
+      workflow.matchAll(/^\s+(?:-\s+)?uses:\s*([^\s#]+)/gmu),
+      (match) => match[1],
+    );
+    assert.ok(references.length > 0, `${name} has no action references`);
+    for (const reference of references) {
+      assert.match(
+        reference,
+        /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+@[0-9a-f]{40}$/u,
+        `${name} contains an unpinned action: ${reference}`,
+      );
+    }
+  }
+});
+
+test("pull-request CI is read-only and exercises every required gate", async () => {
+  const workflow = await source(".github/workflows/ci.yml");
+
+  assert.match(workflow, /^name:\s*CI$/mu);
+  assert.match(workflow, /^\s{2}pull_request:\s*$/mu);
+  assert.match(workflow, /^permissions:\s*\n\s{2}contents:\s*read$/mu);
+  assert.doesNotMatch(workflow, /^\s+packages:\s*write$/mu);
+  assert.doesNotMatch(workflow, /\bpush:\s*true\b/u);
+  assert.doesNotMatch(workflow, /docker\/login-action/u);
+  assert.doesNotMatch(workflow, /\bsecrets\./u);
+
+  for (const required of [
+    "pnpm format:check",
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm build",
+    "pnpm test",
+    "pnpm test:integration",
+    "playwright install --with-deps chromium",
+    "pnpm licenses list --prod --json",
+    "pnpm audit --audit-level=high",
+    "scan-type: fs",
+    "scanners: secret",
+    "docker/build-push-action",
+  ]) {
+    assert.ok(workflow.includes(required), `CI is missing ${required}`);
+  }
+});
+
+test("main-only release publishes one immutable amd64 tag with attestations", async () => {
+  const workflow = await source(".github/workflows/release-image.yml");
+
+  assert.match(workflow, /^name:\s*Release Error Hub Image$/mu);
+  assert.match(workflow, /^\s{2}push:\s*$/mu);
+  assert.match(workflow, /^\s{4}branches:\s*\[main\]\s*$/mu);
+  assert.doesNotMatch(workflow, /^\s{2}pull_request:\s*$/mu);
+  assert.doesNotMatch(workflow, /\bworkflow_dispatch\b/u);
+  assert.doesNotMatch(workflow, /(?:^|[:@])latest(?:$|\s)/mu);
+
+  const release = jobBlocks(workflow).find((job) => job.name === "release");
+  assert.ok(release, "release job is missing");
+  assert.match(release.source, /^    needs:\s*verify$/mu);
+  assert.match(release.source, /^      contents:\s*read$/mu);
+  assert.match(release.source, /^      packages:\s*write$/mu);
+  assert.equal(
+    Array.from(
+      release.source.matchAll(/^\s+([a-z-]+):\s*write$/gmu),
+      (match) => match[1],
+    ).join(","),
+    "packages",
+  );
+  assert.match(
+    workflow,
+    /ghcr\.io\/pbuchman\/intexura-error-hub:sha-\$\{\{\s*github\.sha\s*\}\}/u,
+  );
+  assert.match(workflow, /platforms:\s*linux\/amd64/u);
+  assert.match(workflow, /push:\s*true/u);
+  assert.match(workflow, /sbom:\s*true/u);
+  assert.match(workflow, /provenance:\s*mode=max/u);
+  assert.match(workflow, /Refuse to overwrite an existing commit tag/u);
+  assert.match(
+    workflow,
+    /manifests\/sha-\$GITHUB_SHA[\s\S]*?404\)[\s\S]*?200\)/u,
+  );
+  assert.match(workflow, /steps\.publish\.outputs\.digest/u);
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/u);
+});
+
+test("image reference validator accepts only the repository SHA tag and digest", async () => {
+  const script = fileURLToPath(
+    new URL("scripts/ci/verify-image-ref.mjs", root),
+  );
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  const digest = `sha256:${"a".repeat(64)}`;
+  const valid = `ghcr.io/pbuchman/intexura-error-hub:sha-${sha}`;
+
+  assert.equal(spawnSync(process.execPath, [script, valid, sha]).status, 0);
+  assert.equal(
+    spawnSync(process.execPath, [script, valid, sha, digest]).status,
+    0,
+  );
+
+  for (const args of [
+    ["ghcr.io/pbuchman/intexura-error-hub:latest", sha],
+    [`ghcr.io/pbuchman/intexura-error-hub:sha-${sha.slice(0, 12)}`, sha],
+    [valid, "f".repeat(40)],
+    [valid, sha, "sha256:abcd"],
+  ]) {
+    assert.notEqual(spawnSync(process.execPath, [script, ...args]).status, 0);
+  }
+});
+
+test("Dependabot tracks lockfile, Actions, and pinned base image updates", async () => {
+  const dependabot = await source(".github/dependabot.yml");
+  for (const ecosystem of ["npm", "github-actions", "docker"]) {
+    assert.ok(
+      dependabot.includes(`package-ecosystem: ${ecosystem}`),
+      `Dependabot is missing ${ecosystem}`,
+    );
+  }
+  assert.doesNotMatch(dependabot, /target-branch:\s*(?!main\b)/u);
+});

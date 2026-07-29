@@ -1,0 +1,231 @@
+name: Release Error Hub Image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-error-hub-image-main
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CI: true
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.23.1
+          package-manager-cache: false
+      - name: Install pinned dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Verify repository and workflow contracts
+        run: node --test test/ci/workflow-policy.test.mjs test/container/runtime-contract.test.mjs
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build application and workspace packages
+        run: pnpm build
+      - name: Run unit, protocol, and MCP compatibility tests
+        run: pnpm test
+      - name: Run integration tests
+        run: pnpm test:integration
+      - name: Check production dependency licenses
+        env:
+          LICENSE_REPORT: ${{ runner.temp }}/licenses.json
+        run: |
+          test -s LICENSE
+          test -s apps/web/public/fonts/Atkinson-Hyperlegible-OFL.txt
+          test -s apps/web/public/fonts/JetBrains-Mono-OFL.txt
+          pnpm licenses list --prod --json > "$LICENSE_REPORT"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const allowed = new Set([
+            "0BSD",
+            "Apache-2.0",
+            "BSD-2-Clause",
+            "BSD-3-Clause",
+            "BlueOak-1.0",
+            "CC0-1.0",
+            "ISC",
+            "MIT",
+            "MIT-0",
+            "Python-2.0",
+          ]);
+          const report = JSON.parse(readFileSync(process.env.LICENSE_REPORT, "utf8"));
+          const unsupported = Object.keys(report).filter((license) => !allowed.has(license));
+          if (unsupported.length > 0) {
+            throw new Error(`Unsupported production licenses: ${unsupported.join(", ")}`);
+          }
+          NODE
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high
+      - name: Scan repository for committed secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          skip-dirs: node_modules,dist,coverage,playwright-report,test-results
+          format: table
+          exit-code: "1"
+          hide-progress: true
+          timeout: 10m
+          cache: false
+          version: v0.72.0
+      - name: Install Chromium
+        run: pnpm --filter @intexura-error-hub/web exec playwright install --with-deps chromium
+      - name: Run Playwright operator flow
+        run: pnpm --filter @intexura-error-hub/web e2e
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build linux/amd64 container without publishing
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          push: false
+          provenance: false
+          sbom: false
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_REF: ghcr.io/pbuchman/intexura-error-hub:sha-${{ github.sha }}
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    steps:
+      - name: Check out verified commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.23.1
+          package-manager-cache: false
+      - name: Verify immutable image reference
+        run: node scripts/ci/verify-image-ref.mjs "$IMAGE_REF" "$GITHUB_SHA"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build exact image for pre-publish scanning
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ${{ env.IMAGE_REF }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/pbuchman/intexura-error-hub
+            org.opencontainers.image.revision=${{ github.sha }}
+          push: false
+          provenance: false
+          sbom: false
+      - name: Scan image before registry credentials are available
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_REF }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+          hide-progress: true
+          timeout: 10m
+          cache: false
+          version: v0.72.0
+      - name: Refuse to overwrite an existing commit tag
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          registry_token="$({
+            curl --fail --silent --show-error \
+              --user "$GITHUB_ACTOR:$GHCR_TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:pbuchman/intexura-error-hub:pull"
+          } | node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const response = JSON.parse(readFileSync(0, "utf8"));
+            const token = response.token ?? response.access_token;
+            if (typeof token !== "string" || token.length === 0) process.exit(1);
+            process.stdout.write(token);
+          ')"
+          manifest_status="$(
+            curl --silent --show-error \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              --request HEAD \
+              --header "Authorization: Bearer $registry_token" \
+              --header "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/pbuchman/intexura-error-hub/manifests/sha-$GITHUB_SHA"
+          )"
+          case "$manifest_status" in
+            404) ;;
+            200)
+              echo "Refusing to overwrite immutable image tag sha-$GITHUB_SHA" >&2
+              exit 1
+              ;;
+            *)
+              echo "Unable to prove image tag absence (GHCR HTTP $manifest_status)" >&2
+              exit 1
+              ;;
+          esac
+      - name: Log in to GHCR after the scan passes
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable image with SBOM and provenance
+        id: publish
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          tags: ${{ env.IMAGE_REF }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/pbuchman/intexura-error-hub
+            org.opencontainers.image.revision=${{ github.sha }}
+          push: true
+          sbom: true
+          provenance: mode=max
+      - name: Verify and summarize published digest
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          node scripts/ci/verify-image-ref.mjs "$IMAGE_REF" "$GITHUB_SHA" "$IMAGE_DIGEST"
+          {
+            echo "## Error Hub image"
+            echo
+            echo "- Reference: \`$IMAGE_REF\`"
+            echo "- Digest: \`$IMAGE_DIGEST\`"
+            echo "- Platform: \`linux/amd64\`"
+            echo "- Attestations: \`SBOM + provenance\`"
+          } >> "$GITHUB_STEP_SUMMARY"
