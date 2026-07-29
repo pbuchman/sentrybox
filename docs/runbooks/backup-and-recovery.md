@@ -79,7 +79,8 @@ recovery alert.
 
 `install.sh` refuses to enable the timers unless `backup.sh`, `monitor.sh`, and
 `restore-test.sh` are regular executable files. It runs `systemd-analyze verify`
-over the runtime, deployment, backup, and restore units before reloading systemd.
+over the runtime, deployment, backup, monitor, and restore units before reloading
+systemd.
 
 ```bash
 sudo systemd-analyze verify \
@@ -87,6 +88,8 @@ sudo systemd-analyze verify \
   /etc/systemd/system/sentrybox-deploy.service \
   /etc/systemd/system/sentrybox-backup.service \
   /etc/systemd/system/sentrybox-backup.timer \
+  /etc/systemd/system/sentrybox-monitor.service \
+  /etc/systemd/system/sentrybox-monitor.timer \
   /etc/systemd/system/sentrybox-restore-test.service \
   /etc/systemd/system/sentrybox-restore-test.timer
 ```
