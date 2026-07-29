@@ -1,5 +1,6 @@
 [Unit]
 Description=Verify an SentryBox backup by restoring it
+Requires=docker.service
 After=docker.service
 ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh
 
@@ -14,8 +15,12 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/pbuchman/services/sentrybox/backups
+ReadOnlyPaths=/home/pbuchman/services/sentrybox/backups
 ReadWritePaths=/var/lib/sentrybox-deploy
+ReadWritePaths=/run/lock
+InaccessiblePaths=/home/pbuchman/services/sentrybox/data
+InaccessiblePaths=/home/pbuchman/services/sentrybox/env
+InaccessiblePaths=/home/pbuchman/services/sentrybox/deploy
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

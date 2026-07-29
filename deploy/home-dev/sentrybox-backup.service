@@ -16,6 +16,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/pbuchman/services/sentrybox/backups
 ReadWritePaths=/var/lib/sentrybox-deploy
+ReadWritePaths=/run/lock
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
