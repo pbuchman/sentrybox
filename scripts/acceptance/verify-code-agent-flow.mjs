@@ -9,6 +9,7 @@ import {
 } from "./emit-controlled-issue.mjs";
 
 const CODE_AGENT_DEV_BASE_URL = "https://dev.intexuraos.cloud/api/code";
+const CODE_AGENT_TASK_PAGE_LIMIT = 100;
 const ORGANIZATION_SLUG = "intexuraos";
 const MUTATION_CONFIRMATION = "delete-controlled-task-and-resolve-dev-issue";
 const PHASES = new Set([
@@ -360,10 +361,11 @@ async function closeControlledTransition({
   return { ...validated, status: "resolved", controlledTaskDeleted: true };
 }
 
-async function listCodeAgentTasks(fetchImpl, runtime) {
+export async function listCodeAgentTasks(fetchImpl, runtime) {
   const tasks = [];
+  const seenCursors = new Set();
   let cursor = null;
-  for (let page = 0; page < 10; page += 1) {
+  for (let page = 0; page < CODE_AGENT_TASK_PAGE_LIMIT; page += 1) {
     const query = new URLSearchParams({ limit: "100" });
     if (cursor !== null) query.set("cursor", cursor);
     const result = record(
@@ -371,11 +373,16 @@ async function listCodeAgentTasks(fetchImpl, runtime) {
       "Code Agent task page",
     );
     tasks.push(...array(result.tasks, "Code Agent tasks"));
-    cursor =
+    const nextCursor =
       result.nextCursor === undefined
         ? null
         : string(result.nextCursor, "Code Agent next cursor");
-    if (cursor === null) return tasks;
+    if (nextCursor === null) return tasks;
+    if (seenCursors.has(nextCursor)) {
+      throw new Error("repeated Code Agent pagination cursor");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
   throw new Error("Code Agent task pagination exceeded the acceptance bound");
 }
