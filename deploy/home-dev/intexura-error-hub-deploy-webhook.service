@@ -1,0 +1,52 @@
+[Unit]
+Description=Intexura Error Hub verified GitHub deployment webhook
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/deploy-webhook.mjs
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/pbuchman/deploy/intexura-error-hub
+ExecStart=/usr/bin/node deploy/home-dev/deploy-webhook.mjs
+LoadCredential=github-webhook-secret:/home/pbuchman/services/intexura-error-hub-deploy/github-webhook-secret
+StateDirectory=intexura-error-hub-deploy
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=intexura-error-hub-deploy-webhook
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=50
+MemoryMax=128M
+TasksMax=32
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/intexura-error-hub-deploy
+InaccessiblePaths=/home/pbuchman/services/intexura-error-hub/data /var/run/docker.sock /home/pbuchman/.docker
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
