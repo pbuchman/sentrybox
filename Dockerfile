@@ -19,6 +19,11 @@ COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
+COPY apps apps
+COPY packages packages
+COPY scripts/admin/generate-project-config.mjs scripts/admin/generate-project-config.mjs
+COPY scripts/admin/validate-project-config.mjs scripts/admin/validate-project-config.mjs
+COPY LICENSE LICENSE
 
 RUN pnpm install --frozen-lockfile
 
@@ -26,12 +31,6 @@ RUN sqlite_dir=/workspace/node_modules/.pnpm/better-sqlite3@13.0.1/node_modules/
   && rm -rf "${sqlite_dir}/prebuilds" "${sqlite_dir}/build" \
   && cd "${sqlite_dir}" \
   && /workspace/node_modules/.bin/node-gyp rebuild --release --force_build=1 --nodedir=/usr/local
-
-COPY apps apps
-COPY packages packages
-COPY scripts/admin/generate-project-config.mjs scripts/admin/generate-project-config.mjs
-COPY scripts/admin/validate-project-config.mjs scripts/admin/validate-project-config.mjs
-COPY LICENSE LICENSE
 
 RUN pnpm build \
   && pnpm --filter @intexura-error-hub/server deploy --legacy --prod /opt/error-hub \

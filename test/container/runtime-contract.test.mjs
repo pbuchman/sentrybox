@@ -41,6 +41,14 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
     patchCopy < frozenInstall,
     "the patched dependency must be copied before the frozen install",
   );
+  assert.ok(
+    dockerfile.indexOf("COPY apps apps") < frozenInstall,
+    "workspace sources must be copied before install so Docker cannot replace package node_modules links",
+  );
+  assert.ok(
+    dockerfile.indexOf("COPY packages packages") < frozenInstall,
+    "workspace packages must be copied before install so Docker cannot replace package node_modules links",
+  );
 
   const runtime = dockerfile.split(/\bAS runtime\b/u)[1] ?? "";
   assert.doesNotMatch(runtime, /\b(?:apt|apt-get|apk|dnf|yum)\b/u);
