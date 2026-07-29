@@ -1,10 +1,15 @@
 # Project configuration
 
-This runbook creates the two IntexuraOS projects and their four
-environment-bound Sentry-compatible DSNs. It never stores a clear Hub public
-key in a repository file, SQLite column, container log, or validation output.
+SentryBox supports multiple applications and projects. Every configured
+project/environment pair receives its own Sentry-compatible DSN, so another
+application that already uses a Sentry SDK can report by changing only its DSN;
+its SDK call sites stay unchanged.
 
-## Fixed configuration
+This runbook installs the bundled Home Dev sample: two IntexuraOS projects and
+their four environment-bound DSNs. It never stores a clear SentryBox public key
+in a repository file, SQLite column, container log, or validation output.
+
+## Bundled Home Dev sample configuration
 
 The non-secret manifest at
 `deploy/home-dev/config.example.json` is mounted read-only in the container as
@@ -26,9 +31,9 @@ keys and localhost lookalikes remain invalid.
 
 ## Prerequisites
 
-1. Start the Error Hub once so its database migrations complete.
+1. Start SentryBox once so its database migrations complete.
 2. Put the four current legacy Sentry DSNs in
-   `/home/pbuchman/services/intexura-error-hub/env`, using the reference names
+   `/home/pbuchman/services/sentrybox/env`, using the reference names
    from `deploy/home-dev/env.example`. Set mode `0600` and the runtime UID/GID.
 3. Do not add the Code Agent HMAC values yet. The credential parser rejects
    entries that are not in `ERROR_HUB_REQUIRED_SECRET_REFERENCES`.
@@ -37,10 +42,10 @@ keys and localhost lookalikes remain invalid.
 
 ## Generate the four DSNs once
 
-Run from `/home/pbuchman/deploy/intexura-error-hub/deploy/home-dev`:
+Run from `/home/pbuchman/deploy/sentrybox/deploy/home-dev`:
 
 ```bash
-docker compose exec error-hub node \
+docker compose exec sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json
@@ -60,7 +65,7 @@ therefore cannot rotate keys implicitly or print an existing key again.
 Validate the stored non-secret state:
 
 ```bash
-docker compose exec -T error-hub node \
+docker compose exec -T sentrybox node \
   scripts/admin/validate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
@@ -76,7 +81,7 @@ state. It never emits a hash or DSN.
 Do this only after the shadow phase and the Code Agent reservation fix have
 been verified.
 
-1. Put public ingest into the checked-in maintenance route and stop the Hub.
+1. Put public ingest into the checked-in maintenance route and stop SentryBox.
 2. For the dev cutover, add only `CODE_AGENT_HMAC_DEV` to the mode-`0600`
    credential file without printing its value. Add `CODE_AGENT_HMAC_PROD` only
    during the later production cutover.
@@ -85,7 +90,7 @@ been verified.
    transition with one explicit UTC baseline:
 
 ```bash
-docker compose run --rm --no-deps error-hub node \
+docker compose run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
@@ -97,7 +102,7 @@ docker compose run --rm --no-deps error-hub node \
    same baseline:
 
 ```bash
-docker compose exec -T error-hub node \
+docker compose exec -T sentrybox node \
   scripts/admin/validate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
@@ -117,7 +122,7 @@ For rollback, use the same maintenance window and atomically clear only the
 selected environment's live destination fields:
 
 ```bash
-docker compose run --rm --no-deps error-hub node \
+docker compose run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \
@@ -134,7 +139,7 @@ After the required stable observation window, permanently stop forwarding the
 selected environment to Sentry without manual SQL:
 
 ```bash
-docker compose run --rm --no-deps error-hub node \
+docker compose run --rm --no-deps sentrybox node \
   scripts/admin/generate-project-config.mjs \
   --database /data/error-hub.sqlite \
   --config /run/config/error-hub-projects.json \

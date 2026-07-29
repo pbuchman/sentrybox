@@ -67,7 +67,7 @@ export function validateAcceptanceSnapshot(input) {
   if (!PHASES.has(phase) || phase === "close") {
     if (phase !== "close") throw new TypeError("verification phase is invalid");
   }
-  const issue = record(input.issue, "Hub issue");
+  const issue = record(input.issue, "SentryBox issue");
   const expectedGeneration = phase === "regression" ? 2 : 1;
   const expectedOccurrences = expectedGeneration;
   equal(issue.title, input.identity.title, "controlled issue title");
@@ -78,9 +78,9 @@ export function validateAcceptanceSnapshot(input) {
     expectedOccurrences,
     "controlled issue occurrence count",
   );
-  const project = record(issue.project, "Hub issue project");
+  const project = record(issue.project, "SentryBox issue project");
   equal(project.slug, CONTROLLED_PROJECT_SLUG, "controlled issue project");
-  const facets = record(issue.facets, "Hub issue facets");
+  const facets = record(issue.facets, "SentryBox issue facets");
   requireFacet(
     facets.environment,
     CONTROLLED_ENVIRONMENT,
@@ -94,35 +94,39 @@ export function validateAcceptanceSnapshot(input) {
     "release",
   );
 
-  const deliveries = array(issue.deliveries, "Hub deliveries");
+  const deliveries = array(issue.deliveries, "SentryBox deliveries");
   if (deliveries.length !== expectedGeneration) {
     throw new Error(
-      `expected ${String(expectedGeneration)} Hub delivery row(s), received ${String(deliveries.length)}`,
+      `expected ${String(expectedGeneration)} SentryBox delivery row(s), received ${String(deliveries.length)}`,
     );
   }
   for (let generation = 1; generation <= expectedGeneration; generation += 1) {
     const delivery = deliveries.find(
       (candidate) =>
-        record(candidate, "Hub delivery").generation === generation,
+        record(candidate, "SentryBox delivery").generation === generation,
     );
     if (delivery === undefined) {
       throw new Error(
-        `Hub delivery generation ${String(generation)} is missing`,
+        `SentryBox delivery generation ${String(generation)} is missing`,
       );
     }
     equal(
-      record(delivery, "Hub delivery").state,
+      record(delivery, "SentryBox delivery").state,
       "delivered",
-      `Hub delivery generation ${String(generation)} state`,
+      `SentryBox delivery generation ${String(generation)} state`,
     );
   }
 
   const eventIds = new Set(
-    array(input.events, "Hub events").map((value) => {
-      const event = record(value, "Hub event");
-      equal(event.environment, CONTROLLED_ENVIRONMENT, "Hub event environment");
-      equal(event.release, CONTROLLED_RELEASE, "Hub event release");
-      return string(event.id, "Hub event id");
+    array(input.events, "SentryBox events").map((value) => {
+      const event = record(value, "SentryBox event");
+      equal(
+        event.environment,
+        CONTROLLED_ENVIRONMENT,
+        "SentryBox event environment",
+      );
+      equal(event.release, CONTROLLED_RELEASE, "SentryBox event release");
+      return string(event.id, "SentryBox event id");
     }),
   );
   const initialId = deriveControlledIdentity(
@@ -136,7 +140,7 @@ export function validateAcceptanceSnapshot(input) {
           deriveControlledIdentity(input.identity.runId, "regression").eventId,
         ])
       : new Set([initialId]);
-  equalSets(eventIds, expectedEventIds, "Hub event identities");
+  equalSets(eventIds, expectedEventIds, "SentryBox event identities");
 
   const tasks = array(input.tasks, "Code Agent tasks");
   if (tasks.length !== 1) {
@@ -149,7 +153,7 @@ export function validateAcceptanceSnapshot(input) {
   equal(task.workerType, input.defaultWorkerType, "Code Task worker type");
   if (!string(task.prompt, "Code Task prompt").includes(input.issueUrl)) {
     throw new Error(
-      "Code Task prompt does not contain the exact Hub issue URL",
+      "Code Task prompt does not contain the exact SentryBox issue URL",
     );
   }
   const taskId = string(task.id, "Code Task id");
@@ -190,7 +194,7 @@ export function validateAcceptanceSnapshot(input) {
   }
 
   return {
-    issueId: positiveInteger(issue.id, "Hub issue id"),
+    issueId: positiveInteger(issue.id, "SentryBox issue id"),
     issueUrl: input.issueUrl,
     taskId,
     linearIssueId,
@@ -253,19 +257,23 @@ async function loadAcceptanceSnapshot({ runtime, identity, fetchImpl }) {
   issueListUrl.searchParams.set("limit", "100");
   const issueList = record(
     await fetchJson(fetchImpl, issueListUrl, {}),
-    "Hub issue list",
+    "SentryBox issue list",
   );
-  const matchingIssues = array(issueList.items, "Hub issue list items").filter(
-    (value) => record(value, "Hub issue list item").title === identity.title,
+  const matchingIssues = array(
+    issueList.items,
+    "SentryBox issue list items",
+  ).filter(
+    (value) =>
+      record(value, "SentryBox issue list item").title === identity.title,
   );
   if (matchingIssues.length !== 1) {
     throw new Error(
-      `expected exactly one controlled Hub issue, received ${String(matchingIssues.length)}`,
+      `expected exactly one controlled SentryBox issue, received ${String(matchingIssues.length)}`,
     );
   }
   const issueId = positiveInteger(
-    record(matchingIssues[0], "Hub issue list item").id,
-    "Hub issue id",
+    record(matchingIssues[0], "SentryBox issue list item").id,
+    "SentryBox issue id",
   );
   const [issue, events, settings, tasks] = await Promise.all([
     fetchJson(
@@ -295,7 +303,10 @@ async function loadAcceptanceSnapshot({ runtime, identity, fetchImpl }) {
   ).toString();
   return {
     issue,
-    events: array(record(events, "Hub events page").items, "Hub events"),
+    events: array(
+      record(events, "SentryBox events page").items,
+      "SentryBox events",
+    ),
     tasks: tasks.filter((value) =>
       string(
         record(value, "Code Agent task").prompt,
@@ -343,9 +354,9 @@ async function closeControlledTransition({
         body: "{}",
       },
     ),
-    "resolved Hub issue",
+    "resolved SentryBox issue",
   );
-  equal(resolved.status, "resolved", "resolved Hub issue status");
+  equal(resolved.status, "resolved", "resolved SentryBox issue status");
   return { ...validated, status: "resolved", controlledTaskDeleted: true };
 }
 

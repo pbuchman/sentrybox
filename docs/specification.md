@@ -1,18 +1,23 @@
-# Intexura Error Hub — Product and Architecture Specification
+# SentryBox — Product and Architecture Specification
 
 | Field | Value |
 | --- | --- |
-| Status | Complete design; implementation has not started |
+| Status | Implemented MVP; SentryBox identity migration in progress |
 | Date | 2026-07-28 |
-| Repository | `pbuchman/intexura-error-hub` |
+| Repository | `pbuchman/sentrybox` |
 | Deployment target | Home Dev |
-| Primary consumer | IntexuraOS |
+| Product scope | Independent self-hosted tracking for multiple projects |
 
 ## 1. Executive decision
 
-Intexura Error Hub is a standalone public open-source repository and a single
-self-hosted application deployed on Home Dev. It replaces only the Sentry
-capabilities currently used by IntexuraOS:
+SentryBox is an independent, self-hosted, Sentry-compatible error tracker for
+multiple applications and projects. Each configured project/environment pair
+receives its own standard Sentry-compatible DSN. An application that already
+uses a Sentry SDK can report to SentryBox by changing only that DSN; its SDK
+capture and logging call sites remain unchanged.
+
+The first bundled deployment is the IntexuraOS integration on Home Dev. It uses
+SentryBox to:
 
 1. receive application warnings, errors, and fatal events through the existing Sentry SDKs;
 2. normalize, redact, retain, and group occurrences into issues;
@@ -54,7 +59,8 @@ source-map hosting, user management, or arbitrary alert rules.
 - Expose the UI, private API, and worker read API only through Tailscale.
 - Require no application-level login for the UI.
 - Retain data for at most 30 days and keep all runtime data within a 5 GiB
-  physical storage budget.
+  physical storage budget. Both limits are fixed product safety boundaries,
+  not user-configurable settings.
 
 ### 2.2 Explicit non-goals
 
@@ -69,9 +75,10 @@ source-map hosting, user management, or arbitrary alert rules.
 - Automatic issue resolution when a pull request is created or merged.
 - Renaming the existing IntexuraOS `sentry` task contracts during migration.
 
-## 3. Verified current-state constraints
+## 3. Bundled Home Dev integration
 
-The design is based on the following verified IntexuraOS behavior:
+The bundled sample and initial cutover are based on the following verified
+IntexuraOS behavior:
 
 - All backend loggers already pass through `@intexuraos/infra-sentry`.
 - The Pino transport sends levels 40, 50, and 60 through the Sentry Node SDK.
@@ -86,15 +93,15 @@ The design is based on the following verified IntexuraOS behavior:
   tasks, and passes a `sentryIssue` context to the orchestrator.
 - The worker currently fetches issue details and events through the official
   Sentry MCP server and completes with `SENTRY_AGENT_FINAL`.
-- Dev and production already ship complete PM2 logs to Grafana Loki. The Hub
+- Dev and production already ship complete PM2 logs to Grafana Loki. SentryBox
   therefore needs a locator into those logs, not another copy of them.
 - Home Dev currently has about 34 GiB free on a 97% used root filesystem. The
   5 GiB limit is a hard safety boundary, not a target size.
 
-The Hub starts with two logical projects. Environment is deliberately not
-encoded in the project name:
+The Home Dev sample starts with two IntexuraOS logical projects. Environment is
+deliberately not encoded in the project name:
 
-| Hub project slug | Application surface | Environments |
+| Home Dev project slug | Application surface | Environments |
 | --- | --- | --- |
 | `intexuraos-backend` | all backend services and workers | `dev`, `prod` |
 | `intexuraos-web` | React web application | `dev`, `prod` |
@@ -104,9 +111,10 @@ The `service` facet distinguishes individual backend services. During shadow
 forwarding, `(project, environment)` selects the corresponding one of the four
 legacy Sentry DSNs.
 
-Each logical project has two ingest credentials: one restricted to `dev` and
-one restricted to `prod`. This produces four DSNs without splitting the two
-logical projects. The environment in an event is client-controlled, so it is
+Each configured project/environment pair receives its own Sentry-compatible
+DSN. In this sample, each logical project has one ingest credential restricted
+to `dev` and another restricted to `prod`, producing four DSNs without splitting
+the two projects. The environment in an event is client-controlled, so it is
 accepted only when it exactly matches the environment bound to the DSN key.
 This prevents a public browser DSN from selecting a production Code Agent route.
 
@@ -152,9 +160,11 @@ resolve, delete, webhook-administration, or worker endpoints.
 
 ### 5.1 DSN contract
 
-Each `(project, environment)` pair receives a random public key. Both keys for a
-logical project use the same numeric project ID, so grouping and filtering still
-see one project. The DSN is:
+Each configured `(project, environment)` pair receives a random public key and
+its own standard Sentry-compatible DSN. Keys for the same logical project use
+the same numeric project ID, so grouping and filtering still see one project.
+Applications can adopt the DSN without changing their existing Sentry SDK call
+sites. The DSN is:
 
 ```text
 https://<public-key>@<public-ingest-host>/<numeric-project-id>
@@ -166,7 +176,7 @@ The JavaScript SDK derives this endpoint:
 POST /api/<numeric-project-id>/envelope/?sentry_version=7&sentry_key=<public-key>&sentry_client=<sdk>
 ```
 
-The public key is an identifier and abuse-control input, not a secret. The Hub
+The public key is an identifier and abuse-control input, not a secret. SentryBox
 accepts an event only when project ID and public key map to the same enabled
 project and the event environment matches the environment bound to that key.
 Project identity and routing environment from event tags are never trusted over
@@ -187,7 +197,7 @@ The first release supports:
 - browser CORS for an exact configured origin allowlist;
 - optional migration forwarding to the original Sentry DSN.
 
-The Hub parses all item headers but returns success while discarding unsupported
+SentryBox parses all item headers but returns success while discarding unsupported
 `transaction`, `span`, `session`, `sessions`, `client_report`, and unknown item
 types. This prevents the existing SDK from retrying intentionally unsupported
 telemetry. Binary item types and attachments are rejected at the item level and
@@ -209,7 +219,7 @@ Events with `trace`, `debug`, `info`, or an unsupported level receive a normal
 
 ### 5.4 Normalization and redaction
 
-The Hub normalizes and stores only bounded data required for diagnosis:
+SentryBox normalizes and stores only bounded data required for diagnosis:
 
 - exception type, value, mechanism, and frames;
 - formatted message and logger;
@@ -218,7 +228,7 @@ The Hub normalizes and stores only bounded data required for diagnosis:
 - request method and sanitized URL without credentials or sensitive query values;
 - trace, request, task, session, and correlation identifiers when present;
 - redacted contexts and extra data;
-- original event timestamp and Hub receive timestamp.
+- original event timestamp and SentryBox receive timestamp.
 
 Before any database write, recursive server-side redaction removes values under
 case-insensitive keys matching credentials, authorization, cookies, tokens,
@@ -226,7 +236,7 @@ passwords, secrets, API keys, request bodies, user-authored content fields, and
 `contentPreview`. Top-level error messages and exception values remain diagnostic
 after secret-pattern redaction and size limits. Header allowlisting keeps only
 diagnostic headers such as method, host, content type, user agent, trace, and
-request ID. The Hub never stores the unredacted request body.
+request ID. SentryBox never stores the unredacted request body.
 
 Limits after normalization:
 
@@ -245,7 +255,7 @@ Truncation is explicit in stored metadata and visible in the event UI.
 ### 5.5 Migration-only shadow forwarding
 
 Shadow forwarding is configured only by the trusted `(project, environment)`
-ingest-key record. After project/key/environment validation, the Hub may relay
+ingest-key record. After project/key/environment validation, SentryBox may relay
 the original envelope to that record's fixed legacy Sentry DSN. It rewrites the
 transport endpoint and DSN authentication, preserves event IDs and item bytes,
 and never accepts a destination from the event or request.
@@ -351,12 +361,12 @@ States are `unresolved` and `resolved`.
   webhook deliveries in one transaction. The UI states that deletion cannot be
   undone. A later matching event creates a new issue and generation.
 
-The Hub does not infer resolution from pull-request state. Code fixes and issue
+SentryBox does not infer resolution from pull-request state. Code fixes and issue
 lifecycle remain separate explicit operations.
 
 ## 9. Correlation with full IntexuraOS logs
 
-The Hub does not ingest `info` or `debug` logs. It builds a locator from fields
+SentryBox does not ingest `info` or `debug` logs. It builds a locator from fields
 already present in Sentry events produced by the shared Pino transport:
 
 1. exact `traceId`, `requestId`, `taskId`, or another correlation identifier;
@@ -373,7 +383,7 @@ Every event view contains:
 The generated query uses exact identifier matching first. It never claims an
 exact match when only the timestamp/message fallback is available.
 
-Changing only the DSN cannot retroactively place a new Hub event ID into the
+Changing only the DSN cannot retroactively place a new SentryBox event ID into the
 already-written Pino line. Guaranteed one-to-one event IDs are therefore not an
 MVP requirement. A later shared-transport enhancement may write one correlation
 ID to both outputs without changing individual services.
@@ -431,7 +441,7 @@ Created payload:
 }
 ```
 
-Creation and regression both use `event_alert.triggered`. The Hub's internal
+Creation and regression both use `event_alert.triggered`. SentryBox's internal
 generation governs exactly-once outbox creation, while the payload's stable
 `event_id` identifies the external transition and remains unchanged on retry.
 The corrected Code Agent reservation uses that event ID and stable issue ID; no
@@ -462,7 +472,7 @@ immediate, 30s, 2m, 10m, 1h, 6h, then every 12h for 7 days
   only a new issue or regression committed after that instant creates a pending
   delivery. This prevents a cutover backlog flood.
 
-Only one webhook is emitted for a new issue generation. The Hub never sends a
+Only one webhook is emitted for a new issue generation. SentryBox never sends a
 webhook for every repeated occurrence. The outbox records whether its internal
 cause was `created` or `regressed`, even though both Code Agent deliveries use
 the compatible `event_alert.triggered` action.
@@ -487,26 +497,26 @@ outside the migration scope.
 
 ### 11.2 Required Code Agent reliability prerequisite
 
-Before enabling Hub webhooks, the Code Agent reservation must become a retryable
+Before enabling SentryBox webhooks, the Code Agent reservation must become a retryable
 state machine. The current flow can permanently wedge when it reserves a webhook
 before task creation, and its problem-level dedupe depends on title rather than a
 stable issue identity.
 
 The migration changes only this boundary:
 
-- transition identity for Hub alerts: organization + project + issue ID +
+- transition identity for SentryBox alerts: organization + project + issue ID +
   payload event ID, with the existing legacy fallback for old Sentry payloads;
 - reservation states: `reserved`, `task_created`, `failed`;
 - a bounded lease allows retry after a crashed reservation;
 - an active task or an open pull request blocks duplicates;
 - a merged/closed prior task does not block a later regression generation;
-- the Hub delivery ID is recorded for audit but issue identity controls dedupe.
+- the SentryBox delivery ID is recorded for audit but issue identity controls dedupe.
 
 No general queue, Linear, dispatcher, or completion refactor is included.
 
 ### 11.3 Worker evidence API
 
-To minimize worker changes, the Hub exposes only the Sentry REST read subset
+To minimize worker changes, SentryBox exposes only the Sentry REST read subset
 required by the pinned official MCP client:
 
 ```text
@@ -523,23 +533,23 @@ frequency, first/last seen, culprit, event entries, exception frames,
 breadcrumbs, tags, contexts, environment, release, and timestamps.
 
 The worker configuration pins `@sentry/mcp-server@0.37.0`, sets its self-hosted
-host to the private Hub hostname, and disables unsupported Seer functionality.
-The Hub CI runs a compatibility test through that pinned MCP version. Upgrading
+host to the private SentryBox hostname, and disables unsupported Seer functionality.
+SentryBox CI runs a compatibility test through that pinned MCP version. Upgrading
 the MCP package requires this test to pass before changing the pin.
 
 This is a compatibility facade, not a commitment to implement the complete
 Sentry API. Unsupported endpoints return a structured 404.
 
 During migration, the worker keeps the existing Sentry MCP entry for historical
-Sentry tasks and adds a Hub-specific MCP entry. The prompt chooses by issue URL
+Sentry tasks and adds a SentryBox-specific MCP entry. The prompt chooses by issue URL
 host. After all historical tasks are terminal, the old entry and SaaS token may
 be removed in a separate cleanup.
 
-The Hub container is never attached to the privileged Code Worker Docker
+SentryBox container is never attached to the privileged Code Worker Docker
 network. Before enabling automation, a disposable real worker container must
 prove HTTPS access to the private Tailscale hostname. If the existing bridge
 cannot route to the host tailnet address, deployment adds a narrow host gateway
-route for the worker; it does not expose or attach the Hub admin listener to the
+route for the worker; it does not expose or attach the SentryBox admin listener to the
 worker network.
 
 ## 12. Private HTTP API
@@ -603,9 +613,10 @@ normalized facet rows.
 
 ## 14. Retention and disk safety
 
-The live runtime data directory has a 5 GiB total budget including database,
-WAL, and temporary database files. Retained backups require an external-backed
-destination and are not accumulated on the root filesystem.
+The live runtime data directory has a fixed, non-configurable 5 GiB total budget
+including database, WAL, and temporary database files. Event retention is also
+fixed at 30 days and is not user-configurable. Retained backups require an
+external-backed destination and are not accumulated on the root filesystem.
 
 - Events older than 30 days by `received_at` are removed hourly.
 - Each deletion batch atomically recomputes retained issue counts, first/last
@@ -669,7 +680,7 @@ only actions. Motion is limited to 150 ms state transitions and is disabled by
 Desktop:
 
 ```text
-┌ Intexura Error Hub ───── Unresolved 24 ───── Storage 1.8 / 5 GiB ┐
+┌ SentryBox ───── Unresolved 24 ───── Storage 1.8 / 5 GiB ┐
 │ Project ▾  Version ▾  Environment ▾  Service ▾  Level ▾  Search │
 ├──┬───────────────────────────────────────────┬──────┬────────────┤
 │▌ │ TypeError: cannot read ...               │ 143  │ 2 min ago  │
@@ -730,7 +741,7 @@ next recovery action.
 - There is no app login, cookie session, or bearer token for human UI access.
 - Destructive private API requests require JSON content type and an exact
   allowed `Origin`/`Host`; simple cross-site form requests are rejected.
-- The Error Hub application's public exposure is restricted to the ingest
+- SentryBox application's public exposure is restricted to the ingest
   listener and minimal liveness. The separately supervised deployment handler
   has one independently filtered GitHub webhook route described in section 18.
 - Public ingest cannot read whether a project, issue, or event exists.
@@ -747,7 +758,7 @@ next recovery action.
 
 ### 16.3 Secrets
 
-Runtime secrets live in `/home/pbuchman/services/intexura-error-hub/env`, owned
+Runtime secrets live in `/home/pbuchman/services/sentrybox/env`, owned
 by the deployment user and mode `0600`. Cloudflare tunnel credentials use a
 separate credential file and never appear inline in a systemd `ExecStart`,
 repository file, process listing, or diagnostic command output.
@@ -793,7 +804,7 @@ integration tests, browser tests, protocol compatibility tests, image scanning,
 and a multi-stage Docker build. A successful `main` build publishes:
 
 ```text
-ghcr.io/pbuchman/intexura-error-hub:<git-sha>
+ghcr.io/pbuchman/sentrybox:<git-sha>
 ```
 
 Production deployment always references an immutable SHA or digest, never
@@ -802,13 +813,13 @@ Production deployment always references an immutable SHA or digest, never
 ### 18.2 Home Dev layout
 
 ```text
-/home/pbuchman/deploy/intexura-error-hub/             # deployment checkout
-/home/pbuchman/services/intexura-error-hub/env         # secrets/config, mode 0600
-/home/pbuchman/services/intexura-error-hub/data/       # SQLite and WAL
-/home/pbuchman/services/intexura-error-hub-backups/    # bounded backup staging
-/etc/systemd/system/intexura-error-hub.service
-/etc/systemd/system/intexura-error-hub-deploy.service
-/etc/caddy/Caddyfile.d/intexura-error-hub.caddy
+/home/pbuchman/deploy/sentrybox/             # deployment checkout
+/home/pbuchman/services/sentrybox/env         # secrets/config, mode 0600
+/home/pbuchman/services/sentrybox/data/       # SQLite and WAL
+/home/pbuchman/services/sentrybox/backups/    # bounded backup staging
+/etc/systemd/system/sentrybox.service
+/etc/systemd/system/sentrybox-deploy.service
+/etc/caddy/Caddyfile.d/sentrybox.caddy
 ```
 
 The service is supervised by systemd and runs one non-root, read-only Docker
@@ -887,7 +898,7 @@ existing Cloudflare Tunnel and a dedicated Caddy virtual host; every other
 method and path returns 404. The handler verifies the GitHub HMAC over the raw
 body, rejects bodies over 1 MiB, deduplicates the GitHub delivery ID, rejects
 replays older than five minutes, and accepts only a successful `workflow_run`
-caused by `push` to `pbuchman/intexura-error-hub:main` for the named release
+caused by `push` to `pbuchman/sentrybox:main` for the named release
 workflow. It accepts no command from the payload and invokes one fixed, locked
 deploy script for the verified SHA.
 
@@ -915,34 +926,34 @@ pull requests must never execute on Home Dev.
 
 ### Phase 0 — prerequisites
 
-1. Deploy the Hub with every Code Agent destination in `disabled` mode.
+1. Deploy SentryBox with every Code Agent destination in `disabled` mode.
 2. Configure the two logical projects, four environment-bound ingest keys,
    four `(project, environment)` legacy forwarding routes, and
    environment-specific Code Agent targets.
 3. Verify public browser CORS and private Tailscale access.
 4. Run protocol tests using the exact Node and React SDK versions.
 5. Implement and deploy the Code Agent reservation reliability fix.
-6. Add the Hub worker MCP/read configuration while retaining the SaaS Sentry MCP.
-7. Prove a synthetic Hub issue can be fetched by a real worker without creating
+6. Add the SentryBox worker MCP/read configuration while retaining the SaaS Sentry MCP.
+7. Prove a synthetic SentryBox issue can be fetched by a real worker without creating
    a production Code Task.
 
 ### Phase 1 — dev shadow traffic
 
-1. Change only the dev backend and dev web DSN values to Hub DSNs.
-2. The Hub stores each accepted event and asynchronously forwards its original
+1. Change only the dev backend and dev web DSN values to SentryBox DSNs.
+2. SentryBox stores each accepted event and asynchronously forwards its original
    envelope to the old Sentry DSN.
-3. Keep Hub Code Agent destinations disabled; suppressed shadow transitions are
+3. Keep SentryBox Code Agent destinations disabled; suppressed shadow transitions are
    visible for audit but can never be dispatched later. Sentry remains the
    automation source.
 4. Compare event IDs, fields, grouping, filtering, redaction, and log locators for
    at least 48 hours.
 5. Acceptance requires no application errors caused by telemetry and no missing
-   supported error event in the Hub when it exists in Sentry.
+   supported error event in SentryBox when it exists in Sentry.
 
 ### Phase 2 — dev automation cutover
 
 1. Disable the Sentry webhook for the dev projects.
-2. Enable Hub webhooks for the dev projects.
+2. Enable SentryBox webhooks for the dev projects.
 3. Emit one controlled new issue and one controlled regression.
 4. Verify exactly one Linear issue and one Code Task per generation, the selected
    `defaultSentryWorkerType`, worker evidence retrieval, PR completion contract,
@@ -951,20 +962,20 @@ pull requests must never execute on Home Dev.
 
 ### Phase 3 — production shadow and cutover
 
-1. Rebuild the production web bundle with the Hub web DSN and change the
+1. Rebuild the production web bundle with the SentryBox web DSN and change the
    production backend DSN secret.
-2. Keep production Hub destinations in `disabled` mode and forward to Sentry
+2. Keep production SentryBox destinations in `disabled` mode and forward to Sentry
    for 48 hours.
 3. Compare volume, group identity, release/environment/project filters, and
    storage growth against the 5 GiB forecast.
-4. Disable the Sentry production webhook and enable the Hub production webhook.
+4. Disable the Sentry production webhook and enable the SentryBox production webhook.
 5. Run the same controlled issue/regression acceptance test.
 
 ### Phase 4 — remove Sentry dependency
 
 After seven stable days:
 
-1. disable Hub-to-Sentry envelope forwarding;
+1. disable SentryBox-to-Sentry envelope forwarding;
 2. preserve old Sentry issue links only for historical Code Tasks;
 3. keep the SaaS Sentry MCP until all historical Sentry tasks are terminal;
 4. remove old DSN/auth secrets from active deployment paths;
@@ -975,11 +986,11 @@ After seven stable days:
 
 Rollback remains available throughout shadow and cutover:
 
-1. disable Hub webhooks first;
+1. disable SentryBox webhooks first;
 2. re-enable Sentry webhooks;
 3. restore backend DSN secrets and rebuild the web bundle with the old DSN;
 4. leave the dual MCP worker configuration in place;
-5. retain Hub data for diagnosis under the normal retention policy.
+5. retain SentryBox data for diagnosis under the normal retention policy.
 
 No database reversal is required to restore Sentry reporting.
 
@@ -1000,18 +1011,18 @@ No database reversal is required to restore Sentry reporting.
 ### Modified
 
 - `INTEXURAOS_SENTRY_DSN` and `INTEXURAOS_SENTRY_DSN_WEB` values point to the
-  Hub; the application call sites and SDK packages remain unchanged.
-- The Code Worker pins the Sentry MCP version and adds the private Hub host while
+  SentryBox; the application call sites and SDK packages remain unchanged.
+- The Code Worker pins the Sentry MCP version and adds the private SentryBox host while
   retaining SaaS access during migration.
 - Code Agent webhook reservation becomes leased and uses the already parsed
   event ID plus stable issue ID; its public route and payload parser remain
   unchanged.
 - Home Dev Caddy, Tailscale Serve, systemd, and Cloudflare Tunnel configuration
-  add the isolated Hub routes and service.
+  add the isolated SentryBox routes and service.
 
 ### Removed after stable cutover
 
-- Hub-to-Sentry shadow envelope forwarding.
+- SentryBox-to-Sentry shadow envelope forwarding.
 - Active SaaS Sentry webhooks for migrated projects.
 - Active runtime references to old DSNs and, after historical tasks finish, the
   old worker Sentry token/MCP entry.
@@ -1048,14 +1059,14 @@ No database reversal is required to restore Sentry reporting.
 
 ### Code Agent and worker
 
-- Code Agent accepts the Hub signature and payload without changing its route or
+- Code Agent accepts the SentryBox signature and payload without changing its route or
   task contract.
 - One new issue generation creates at most one Code Task.
 - Enabling a destination sends no suppressed shadow backlog; only later issue
   creations or regressions can create Code Tasks.
 - A crashed reservation can be retried after its lease.
 - The worker reads stack, tags, release, environment, frequency, and recent
-  events from the Hub and completes the existing `SENTRY_AGENT_FINAL` contract.
+  events from SentryBox and completes the existing `SENTRY_AGENT_FINAL` contract.
 
 ### UI
 
@@ -1085,7 +1096,7 @@ No database reversal is required to restore Sentry reporting.
 | Sentry-compatible worker API may drift | Pin MCP 0.37.0 and gate upgrades with compatibility tests. |
 | SQLite file may not shrink immediately | Logical high-water mark, WAL checkpoints, incremental vacuum, and physical emergency cutoff. |
 | DSN-only correlation lacks a new shared event ID | Use verified request/trace/time/message locator; do not promise false exactness. |
-| Existing Code Agent reservation can wedge | Fix the isolated reservation boundary before enabling Hub webhooks. |
+| Existing Code Agent reservation can wedge | Fix the isolated reservation boundary before enabling SentryBox webhooks. |
 | Existing Fastify path can double-capture | Group the two events; do not risk heuristic occurrence deletion. |
 
 ## 23. Authoritative protocol references

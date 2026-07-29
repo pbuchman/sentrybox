@@ -1,6 +1,6 @@
 # Network exposure
 
-Error Hub has three deliberately separate network surfaces. Do not collapse
+SentryBox has three deliberately separate network surfaces. Do not collapse
 them onto one listener or attach the application container to a public Docker
 network.
 
@@ -18,8 +18,8 @@ no application login because tailnet ACLs are the access boundary.
 
 The canonical fragments are:
 
-- `deploy/home-dev/caddy-error-hub.caddy`
-- `deploy/home-dev/caddy-error-hub-deploy.caddy`
+- `deploy/home-dev/caddy-sentrybox.caddy`
+- `deploy/home-dev/caddy-sentrybox-deploy.caddy`
 
 The canonical Home Dev Caddyfile in `pbuchman-dev` imports those files from the
 dedicated deployment checkout. Merge those imports into the live Caddyfile; do
@@ -28,8 +28,8 @@ not replace unrelated Home Dev routes.
 Before every reload:
 
 ```bash
-test -f /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/caddy-error-hub.caddy
-test -f /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/caddy-error-hub-deploy.caddy
+test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy
+test -f /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
@@ -54,16 +54,16 @@ Credential rotation is covered by `credential-rotation.md`.
 
 Configure an edge rule for `errors.intexuraos.cloud` that permits only the
 documented methods and anchored envelope/liveness paths. Configure a per-source
-rate rule no looser than the Error Hub source budget and verify its response
+rate rule no looser than the SentryBox source budget and verify its response
 does not expose a project or key. Caddy and the application remain the final
 enforcement points even when an edge rule is absent or misconfigured.
 
 ## Configure private Tailscale access
 
-With Error Hub healthy on `127.0.0.1:8141`, run:
+With SentryBox healthy on `127.0.0.1:8141`, run:
 
 ```bash
-sudo /home/pbuchman/deploy/intexura-error-hub/deploy/home-dev/configure-tailscale.sh
+sudo /home/pbuchman/deploy/sentrybox/deploy/home-dev/configure-tailscale.sh
 ```
 
 This applies only:
@@ -111,7 +111,7 @@ private API, export, readiness, and metrics. From a client outside the tailnet,
 the private MagicDNS/Tailscale address must not be reachable.
 
 Finally start one disposable real Code Worker and request the private MCP
-health/capability endpoint over port `8443`. Do not attach Error Hub to
+health/capability endpoint over port `8443`. Do not attach SentryBox to
 `code-worker-net`. Add a narrow host-gateway route only if that real probe proves
 the normal tailnet route unavailable, then repeat the denial checks before
 keeping it.

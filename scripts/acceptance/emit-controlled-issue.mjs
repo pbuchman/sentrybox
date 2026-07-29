@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 export const CONTROLLED_ENVIRONMENT = "dev";
 export const CONTROLLED_PROJECT_ID = 1;
 export const CONTROLLED_PROJECT_SLUG = "intexuraos-backend";
-export const CONTROLLED_RELEASE = "intexuraos-error-hub-acceptance@1.0.0";
+export const CONTROLLED_RELEASE = "intexuraos-sentrybox-acceptance@1.0.0";
 
 const PUBLIC_INGEST_HOST = "errors.intexuraos.cloud";
 const PHASES = new Set(["initial", "duplicate", "regression"]);
@@ -16,17 +16,17 @@ export function deriveControlledIdentity(runId, phase) {
   if (!PHASES.has(phase)) throw new TypeError("acceptance phase is invalid");
   const transition = phase === "regression" ? "regression" : "initial";
   const digest = createHash("sha256")
-    .update(`intexura-error-hub\0${canonicalRunId}\0${transition}`, "utf8")
+    .update(`sentrybox\0${canonicalRunId}\0${transition}`, "utf8")
     .digest("hex");
   return {
     runId: canonicalRunId,
     phase,
     eventId: digest.slice(0, 32),
     traceId: createHash("sha256")
-      .update(`intexura-error-hub\0${canonicalRunId}\0trace`, "utf8")
+      .update(`sentrybox\0${canonicalRunId}\0trace`, "utf8")
       .digest("hex")
       .slice(0, 32),
-    title: `Controlled Error Hub validation fault [${canonicalRunId}]`,
+    title: `Controlled SentryBox validation fault [${canonicalRunId}]`,
   };
 }
 
@@ -50,7 +50,7 @@ export function validateDevDsn(value) {
     dsn.hash.length > 0
   ) {
     throw new TypeError(
-      "ERROR_HUB_DEV_DSN must be the environment-bound backend-dev Hub DSN",
+      "ERROR_HUB_DEV_DSN must be the environment-bound backend-dev SentryBox DSN",
     );
   }
   return dsn;
@@ -69,7 +69,7 @@ export async function emitControlledIssue(options) {
     dsn: dsn.toString(),
     environment: CONTROLLED_ENVIRONMENT,
     release: CONTROLLED_RELEASE,
-    serverName: "error-hub-acceptance",
+    serverName: "sentrybox-acceptance",
     sendDefaultPii: false,
     sendClientReports: false,
     autoSessionTracking: false,
@@ -106,29 +106,29 @@ export async function emitControlledIssue(options) {
       timestamp: (options.now ?? Date.now)() / 1_000,
       level: "error",
       platform: "node",
-      logger: "error-hub-acceptance",
+      logger: "sentrybox-acceptance",
       message: identity.title,
       tags: {
         acceptance: "controlled",
         acceptance_run: identity.runId,
         project: CONTROLLED_PROJECT_SLUG,
-        service: "error-hub-acceptance",
+        service: "sentrybox-acceptance",
       },
       contexts: {
         trace: {
           trace_id: identity.traceId,
           span_id: identity.traceId.slice(0, 16),
-          op: "error-hub.acceptance",
+          op: "sentrybox.acceptance",
         },
       },
       extra: {
-        requestId: `error-hub-acceptance-${identity.runId}`,
+        requestId: `sentrybox-acceptance-${identity.runId}`,
         acceptancePhase: identity.phase,
       },
       exception: {
         values: [
           {
-            type: "ControlledErrorHubValidationFault",
+            type: "ControlledSentryBoxValidationFault",
             value: identity.title,
             mechanism: { type: "generic", handled: true },
             stacktrace: {
