@@ -6,7 +6,13 @@ settings:
 
 overrides:
   '@hono/node-server': 2.0.12
-  brace-expansion: 5.0.8
+  minimatch@3.1.5>brace-expansion: 5.0.8
+  minimatch@9.0.9>brace-expansion: 5.0.8
+
+patchedDependencies:
+  brace-expansion@5.0.8:
+    hash: 10a32fcd07ed579b8fb4e56740bf36c5f0fcbc8412143019e7e3c8c26223a5bd
+    path: patches/brace-expansion@5.0.8.patch
 
 importers:
 
@@ -2584,7 +2590,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  brace-expansion@5.0.8:
+  brace-expansion@5.0.8(patch_hash=10a32fcd07ed579b8fb4e56740bf36c5f0fcbc8412143019e7e3c8c26223a5bd):
     dependencies:
       balanced-match: 4.0.4
 
@@ -3169,11 +3175,11 @@ snapshots:
 
   minimatch@3.1.5:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=10a32fcd07ed579b8fb4e56740bf36c5f0fcbc8412143019e7e3c8c26223a5bd)
 
   minimatch@9.0.9:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.8(patch_hash=10a32fcd07ed579b8fb4e56740bf36c5f0fcbc8412143019e7e3c8c26223a5bd)
 
   minipass@7.1.3: {}
 
