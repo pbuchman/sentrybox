@@ -81,6 +81,7 @@ docker run --rm \
   scripts/admin/validate-project-config.mjs \
   --config /run/config/projects.json >/dev/null
 
+error_hub_recover_synthetic_public_check "${candidate_image}"
 if [[ -f "${error_hub_database}" ]]; then
   docker run --rm --interactive \
     --read-only \

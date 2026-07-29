@@ -178,6 +178,42 @@ error_hub_synthetic_database_operation() {
     <"${error_hub_database_operations}"
 }
 
+error_hub_recover_synthetic_public_check() (
+  set -euo pipefail
+  local eh_synthetic_image="$1"
+  local eh_candidate eh_candidate_basename
+  local -a eh_contexts=()
+  error_hub_require_immutable_image "${eh_synthetic_image}"
+  shopt -s nullglob
+  for eh_candidate in \
+    "${error_hub_state_directory}"/synthetic-public-check.*.json; do
+    eh_candidate_basename="${eh_candidate##*/}"
+    if [[ "${eh_candidate_basename}" =~ ^synthetic-public-check\.[0-9]+\.json$ ]]; then
+      eh_contexts+=("${eh_candidate}")
+    fi
+  done
+  if (( ${#eh_contexts[@]} > 1 )); then
+    printf 'More than one pending synthetic public check requires manual recovery.\n' >&2
+    exit 1
+  fi
+  if (( ${#eh_contexts[@]} == 0 )); then
+    exit 0
+  fi
+  eh_candidate="${eh_contexts[0]}"
+  if [[ ! -f "${eh_candidate}" || -L "${eh_candidate}" ]]; then
+    printf 'Synthetic public check recovery requires a regular context file.\n' >&2
+    exit 1
+  fi
+  eh_candidate_basename="${eh_candidate##*/}"
+  error_hub_synthetic_database_operation \
+    "${eh_synthetic_image}" synthetic-cleanup "/state/${eh_candidate_basename}" \
+    >/dev/null || exit $?
+  if [[ -e "${eh_candidate}" ]]; then
+    printf 'Synthetic public check cleanup did not remove its context.\n' >&2
+    exit 1
+  fi
+)
+
 error_hub_require_response_header() {
   local eh_header_file="$1"
   local eh_header_name="$2"
@@ -189,13 +225,20 @@ error_hub_require_response_header() {
 error_hub_run_synthetic_public_check() (
   set -euo pipefail
   local eh_synthetic_image="$1"
+  local eh_route="${2:-loopback}"
   local eh_context_basename="synthetic-public-check.${BASHPID}.json"
   local eh_container_context="/state/${eh_context_basename}"
   local eh_host_context="${error_hub_state_directory}/${eh_context_basename}"
   local eh_options_headers="${error_hub_state_directory}/${eh_context_basename}.options.headers"
   local eh_post_headers="${error_hub_state_directory}/${eh_context_basename}.post.headers"
   local eh_post_response="${error_hub_state_directory}/${eh_context_basename}.response.json"
-  local eh_prepared=0
+  case "${eh_route}" in
+    loopback|public) ;;
+    *)
+      printf 'Synthetic public check route is invalid.\n' >&2
+      exit 1
+      ;;
+  esac
 
   # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap below.
   cleanup_synthetic_public_check() {
@@ -203,13 +246,19 @@ error_hub_run_synthetic_public_check() (
     local eh_cleanup_status=0
     trap - EXIT INT TERM
     set +e
-    if (( eh_prepared == 1 )); then
-      error_hub_synthetic_database_operation \
-        "${eh_synthetic_image}" synthetic-cleanup "${eh_container_context}" \
-        >/dev/null || eh_cleanup_status=$?
+    if [[ -e "${eh_host_context}" ]]; then
+      if [[ -f "${eh_host_context}" && ! -L "${eh_host_context}" ]]; then
+        error_hub_synthetic_database_operation \
+          "${eh_synthetic_image}" synthetic-cleanup "${eh_container_context}" \
+          >/dev/null || eh_cleanup_status=$?
+        if (( eh_cleanup_status == 0 )) && [[ -e "${eh_host_context}" ]]; then
+          eh_cleanup_status=1
+        fi
+      else
+        eh_cleanup_status=1
+      fi
     fi
-    rm -f "${eh_host_context}" "${eh_options_headers}" \
-      "${eh_post_headers}" "${eh_post_response}"
+    rm -f "${eh_options_headers}" "${eh_post_headers}" "${eh_post_response}"
     if (( eh_exit_status == 0 && eh_cleanup_status != 0 )); then
       eh_exit_status="${eh_cleanup_status}"
     fi
@@ -225,7 +274,7 @@ error_hub_run_synthetic_public_check() (
     error_hub_synthetic_database_operation \
       "${eh_synthetic_image}" synthetic-prepare "${eh_container_context}"
   )" || exit $?
-  eh_prepared=1
+  [[ -f "${eh_host_context}" && ! -L "${eh_host_context}" ]] || exit 1
   eh_project_id="$(jq --raw-output '.projectId' <<<"${eh_context_json}")" || exit $?
   eh_public_key="$(jq --raw-output '.publicKey' <<<"${eh_context_json}")" || exit $?
   eh_dsn="$(jq --raw-output '.dsn' <<<"${eh_context_json}")" || exit $?
@@ -236,7 +285,11 @@ error_hub_run_synthetic_public_check() (
   [[ "${eh_event_id}" =~ ^[0-9a-f]{32}$ ]] || exit 1
   [[ "${eh_dsn}" == "https://${eh_public_key}@errors.intexuraos.cloud/${eh_project_id}" ]] || exit 1
   local eh_origin='https://deployment-health.invalid'
-  eh_endpoint="http://127.0.0.1:8140/api/${eh_project_id}/envelope/?sentry_version=7&sentry_key=${eh_public_key}&sentry_client=sentry.javascript.node%2F8.55.0"
+  if [[ "${eh_route}" == "public" ]]; then
+    eh_endpoint="https://errors.intexuraos.cloud/api/${eh_project_id}/envelope/?sentry_version=7&sentry_key=${eh_public_key}&sentry_client=sentry.javascript.node%2F8.55.0"
+  else
+    eh_endpoint="http://127.0.0.1:8140/api/${eh_project_id}/envelope/?sentry_version=7&sentry_key=${eh_public_key}&sentry_client=sentry.javascript.node%2F8.55.0"
+  fi
 
   eh_options_status="$(
     curl --fail --silent --show-error --connect-timeout 2 --max-time 10 \
@@ -294,5 +347,5 @@ error_hub_health_checks() {
     http://127.0.0.1:8141/health/ready >/dev/null || return $?
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
     https://errors.intexuraos.cloud/health/live >/dev/null || return $?
-  error_hub_run_synthetic_public_check "${eh_health_image}"
+  error_hub_run_synthetic_public_check "${eh_health_image}" loopback
 }

@@ -266,6 +266,13 @@ if (( normal_route_status != 0 )); then
   printf 'Normal Caddy ingest routing could not be restored; deployment was not committed.\n' >&2
   exit "${normal_route_status}"
 fi
+public_route_status=0
+error_hub_run_synthetic_public_check "${resolved_image}" public \
+  || public_route_status=$?
+if (( public_route_status != 0 )); then
+  printf 'Public HTTPS ingest routing failed its deployment check.\n' >&2
+  exit "${public_route_status}"
+fi
 maintenance_active=0
 
 error_hub_write_state \
