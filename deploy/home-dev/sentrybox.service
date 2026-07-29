@@ -25,6 +25,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=/home/pbuchman/services/sentrybox/data
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

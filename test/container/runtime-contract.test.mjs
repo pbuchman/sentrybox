@@ -100,6 +100,17 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.doesNotMatch(compose, /(?:^|[:@])latest(?:$|\s)/mu);
 });
 
+test("runtime service permits only the preflight data write through its read-only home sandbox", async () => {
+  const unit = await source("deploy/home-dev/sentrybox.service");
+
+  assert.match(unit, /^ProtectSystem=strict$/mu);
+  assert.match(unit, /^ProtectHome=read-only$/mu);
+  assert.deepEqual(
+    Array.from(unit.matchAll(/^ReadWritePaths=(.+)$/gmu), (match) => match[1]),
+    ["/home/pbuchman/services/sentrybox/data"],
+  );
+});
+
 test("operator commands load deployment state explicitly", async () => {
   const runbook = await source("docs/runbooks/project-configuration.md");
   const composeCommands =
