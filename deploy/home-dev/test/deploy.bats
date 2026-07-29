@@ -858,6 +858,15 @@ EOF
   [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/scheduled.sqlite" ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
+  run grep -F -- '--user 1000:1000' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = '1000:1000' ]
+  run grep -E 'src=.*/backups/\.retained-finalize\.[A-Za-z0-9]+,dst=/retained' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F "src=${fixture_root}/home/pbuchman/services/sentrybox/backups,dst=/retained" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
 }
 
 @test "scheduled backup without a retained snapshot still reports external backup degraded" {
