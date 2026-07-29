@@ -27,7 +27,13 @@ export default defineConfig({
       {
         test: {
           name: "@intexura-error-hub/web",
-          include: ["apps/web/test/**/*.test.ts"],
+          include: [
+            "apps/web/src/**/*.test.ts",
+            "apps/web/src/**/*.test.tsx",
+            "apps/web/test/**/*.test.ts",
+            "apps/web/test/**/*.test.tsx",
+          ],
+          environment: "jsdom",
         },
       },
       {
