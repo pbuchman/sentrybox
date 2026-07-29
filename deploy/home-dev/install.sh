@@ -109,7 +109,7 @@ systemctl enable \
   sentrybox-backup.timer \
   sentrybox-restore-test.timer >/dev/null
 
-caddy validate --config "${error_hub_caddy_config}" >/dev/null
+error_hub_validate_caddy >/dev/null
 systemctl reload caddy
 
 printf 'SentryBox Home Dev service assets installed.\n'

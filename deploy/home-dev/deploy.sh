@@ -36,7 +36,7 @@ restore_normal_caddy() {
     "${error_hub_checkout}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${error_hub_caddy_fragment}" || route_status=$?
   if (( route_status == 0 )); then
-    caddy validate --config "${error_hub_caddy_config}" >/dev/null \
+    error_hub_validate_caddy >/dev/null \
       || route_status=$?
   fi
   if (( route_status == 0 )); then
@@ -209,7 +209,7 @@ CADDY
 install -m 0644 "${maintenance_file}" "${error_hub_caddy_fragment}"
 rm -f "${maintenance_file}"
 maintenance_active=1
-caddy validate --config "${error_hub_caddy_config}" >/dev/null
+error_hub_validate_caddy >/dev/null
 systemctl reload caddy
 
 backup_image="${resolved_image}"
