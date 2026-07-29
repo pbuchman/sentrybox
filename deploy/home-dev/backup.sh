@@ -97,11 +97,21 @@ finalize_retained_snapshot() (
 
   require_safe_stale_staging() {
     local artifact artifact_name attributes
+    local -a staging_entries=()
     if [[ ! -d "${temporary_directory}" || -L "${temporary_directory}" ]]; then
       printf 'Refusing unsafe retained-finalize staging path.\n' >&2
       return 1
     fi
     attributes="$(stat -c '%a:%u:%g' "${temporary_directory}")"
+    if [[ "${attributes}" == "700:0:0" ]]; then
+      shopt -s dotglob nullglob
+      staging_entries=("${temporary_directory}"/*)
+      if (( ${#staging_entries[@]} == 0 )); then
+        return 0
+      fi
+      printf 'Refusing unsafe retained-finalize staging: root-owned intermediate is not empty.\n' >&2
+      return 1
+    fi
     if [[ "${attributes}" != "700:${runtime_uid}:${runtime_gid}" ]]; then
       printf 'Refusing unsafe retained-finalize staging permissions.\n' >&2
       return 1

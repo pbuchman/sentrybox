@@ -18,6 +18,9 @@ sudo journalctl -u sentrybox-backup.service --since today --no-pager
 ```
 
 The application remains available when this independent oneshot service fails.
+The operational monitor treats a local scrub result older than 26 hours, or
+future-dated by more than five minutes, as a separate alert in addition to the
+expected external-backup degradation.
 Do not represent disaster recovery as ready until an encrypted external target,
 checksum verification, seven daily generations, and the 23-day backup scrub are
 implemented and restore-tested.

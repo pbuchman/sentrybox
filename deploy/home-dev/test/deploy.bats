@@ -1049,6 +1049,32 @@ EOF
   grep -Fx 'LOCAL_SCRUB_REASON=none' "${backup_state}"
 }
 
+@test "scheduled backup recovers exactly an empty root-owned retained-finalize directory left before ownership transfer" {
+  write_runtime_state
+  printf 'predeploy-good\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+  install -d -o 0 -g 0 -m 0700 "${staging}"
+  printf 'preserve-me\n' >"${staging}/unexpected"
+  chmod 0600 "${staging}/unexpected"
+
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"unsafe retained-finalize staging"* ]]
+  [ "$(cat "${staging}/unexpected")" = preserve-me ]
+
+  rm "${staging}/unexpected"
+  run "${repository_root}/deploy/home-dev/backup.sh" scheduled
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"no external Home Dev backup target"* ]]
+  [ ! -e "${staging}" ]
+  backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
+  grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
+  grep -Fx 'LOCAL_SCRUB_REASON=none' "${backup_state}"
+}
+
 @test "scheduled backup refuses an unsafe retained-finalize staging tree without deleting it" {
   write_runtime_state
   printf 'predeploy-good\n' \

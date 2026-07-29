@@ -39,7 +39,8 @@ endpoints plus root-private operational state under
 - a delta of two or more application-generated `429` or `503` ingest
   responses since the previous five-minute observation; and
 - external backup status `disabled/degraded`, independently from a failed or
-  unavailable local retained-snapshot scrub; and
+  unavailable local retained-snapshot scrub, a scrub result older than 26
+  hours, or a result future-dated by more than five minutes; and
 - a successful restore test older than 35 days or future-dated by more than
   five minutes.
 

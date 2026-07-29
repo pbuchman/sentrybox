@@ -13,6 +13,8 @@ done
 readonly physical_warning_bytes=$((9 * 1024 * 1024 * 1024 / 2))
 readonly ingest_disabled_bytes=$((19 * 1024 * 1024 * 1024 / 4))
 readonly monitor_max_interval_seconds=$((10 * 60))
+readonly backup_scrub_max_age_seconds=$((26 * 60 * 60))
+readonly backup_scrub_future_skew_seconds=$((5 * 60))
 readonly restore_test_max_age_seconds=$((35 * 24 * 60 * 60))
 readonly restore_test_future_skew_seconds=$((5 * 60))
 readonly metrics_max_bytes=$((256 * 1024))
@@ -185,6 +187,7 @@ read_backup_state() {
       failure:scrub_incomplete) ;;
     *) return 1 ;;
   esac
+  BACKUP_CHECKED_AT_EPOCH="${checked_at}"
   BACKUP_LOCAL_SCRUB_STATUS="${local_scrub_status}"
 }
 
@@ -314,6 +317,16 @@ if [[ -e "${error_hub_backup_state_file}" \
     alerts+=(backup_state_invalid)
   elif [[ "${BACKUP_LOCAL_SCRUB_STATUS}" == "failure" ]]; then
     alerts+=(backup_scrub_failed)
+  fi
+  if bounded_metric_integer "${BACKUP_CHECKED_AT_EPOCH:-}"; then
+    backup_observed_at="$(date +%s)"
+    if (( BACKUP_CHECKED_AT_EPOCH - backup_observed_at \
+      > backup_scrub_future_skew_seconds )); then
+      alerts+=(backup_scrub_future)
+    elif (( backup_observed_at - BACKUP_CHECKED_AT_EPOCH \
+      > backup_scrub_max_age_seconds )); then
+      alerts+=(backup_scrub_stale)
+    fi
   fi
 else
   alerts+=(backup_scrub_unavailable)

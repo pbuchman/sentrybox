@@ -93,10 +93,11 @@ write_restore_success() {
 }
 
 write_backup_degraded_state() {
+  local checked_at="${1:-$(date +%s)}"
   local state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
   printf '%s\n' \
     'VERSION=1' \
-    "CHECKED_AT_EPOCH=$(date +%s)" \
+    "CHECKED_AT_EPOCH=${checked_at}" \
     'EXTERNAL_STATUS=disabled_degraded' \
     'EXTERNAL_REASON=no_external_target' \
     'LOCAL_SCRUB_STATUS=success' \
@@ -248,6 +249,30 @@ write_monitor_baseline() {
 
   [ "${status}" -ne 0 ]
   grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_failed,backup_disabled_degraded' \
+    "${ERROR_HUB_MONITOR_LOG}"
+}
+
+@test "monitor reports a local retained scrub older than 26 hours separately from the missing external target" {
+  write_metrics 4831838208 0 1 0 0 0 0
+  write_backup_degraded_state "$(( $(date +%s) - 27 * 60 * 60 ))"
+  write_restore_success
+
+  run "${repository_root}/deploy/home-dev/monitor.sh"
+
+  [ "${status}" -ne 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_stale,backup_disabled_degraded' \
+    "${ERROR_HUB_MONITOR_LOG}"
+}
+
+@test "monitor reports a local retained scrub beyond five minutes of future clock skew" {
+  write_metrics 4831838208 0 1 0 0 0 0
+  write_backup_degraded_state "$(( $(date +%s) + 10 * 60 ))"
+  write_restore_success
+
+  run "${repository_root}/deploy/home-dev/monitor.sh"
+
+  [ "${status}" -ne 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_future,backup_disabled_degraded' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
