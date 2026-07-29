@@ -39,7 +39,7 @@ readonly operator_recovery_grace_seconds=$((
   operator_stop_timeout_seconds + operator_start_timeout_seconds + operator_readiness_margin_seconds
 ))
 
-# shellcheck disable=SC2329 # Invoked by the EXIT trap.
+# shellcheck disable=SC2317,SC2329 # Invoked by the EXIT trap.
 cleanup() {
   local exit_status=$?
   local restore_status=0
@@ -58,7 +58,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# shellcheck disable=SC2329 # Invoked by the HUP, INT, and TERM traps.
+# shellcheck disable=SC2317,SC2329 # Invoked by the HUP, INT, and TERM traps.
 terminate_operator() {
   local requested_signal="$1"
   local requested_status="$2"
