@@ -806,6 +806,12 @@ describe("public Sentry envelope ingest", () => {
       url,
     });
     expectSentryError(rejectedPreflight, 429);
+    expect(
+      fixture.metrics.render({
+        database: fixture.database,
+        storage: fixture.operations.storageSafety,
+      }),
+    ).toContain('sentrybox_ingest_http_responses_total{status="429"} 1');
 
     const oversized = await fixture.app.inject({
       method: "POST",
@@ -813,6 +819,12 @@ describe("public Sentry envelope ingest", () => {
       payload: Buffer.alloc(MAX_DECOMPRESSED_ENVELOPE_BYTES + 100_000),
     });
     expectSentryError(oversized, 429);
+    expect(
+      fixture.metrics.render({
+        database: fixture.database,
+        storage: fixture.operations.storageSafety,
+      }),
+    ).toContain('sentrybox_ingest_http_responses_total{status="429"} 2');
   });
 
   it("applies the global admission budget across distinct proxy sources", async () => {
@@ -936,6 +948,12 @@ describe("public Sentry envelope ingest", () => {
     expect(response.headers["retry-after"]).toBe("60");
     expect(count(fixture.database, "events")).toBe(0);
     expect(fixture.forwarded).toEqual([]);
+    expect(
+      fixture.metrics.render({
+        database: fixture.database,
+        storage: fixture.operations.storageSafety,
+      }),
+    ).toContain('sentrybox_ingest_http_responses_total{status="503"} 1');
   });
 
   it("fails closed with a bounded retryable 503 before storage safety has a successful sample", async () => {

@@ -18,6 +18,9 @@ sudo journalctl -u sentrybox-backup.service --since today --no-pager
 ```
 
 The application remains available when this independent oneshot service fails.
+The operational monitor treats a local scrub result older than 26 hours, or
+future-dated by more than five minutes, as a separate alert in addition to the
+expected external-backup degradation.
 Do not represent disaster recovery as ready until an encrypted external target,
 checksum verification, seven daily generations, and the 23-day backup scrub are
 implemented and restore-tested.
@@ -67,11 +70,17 @@ Success is the journal message `Pre-deployment SentryBox backup passed restore
 validation.` A failure is a recovery-readiness incident; never overwrite the
 live database with an unvalidated snapshot.
 
+On success, the restore test atomically updates the private
+`/var/lib/sentrybox-deploy/restore-test.success` marker. The operational monitor
+uses only this marker's age; never create or modify it manually to suppress a
+recovery alert.
+
 ## Installation verification
 
-`install.sh` refuses to enable the timers unless `backup.sh` and
+`install.sh` refuses to enable the timers unless `backup.sh`, `monitor.sh`, and
 `restore-test.sh` are regular executable files. It runs `systemd-analyze verify`
-over the runtime, deployment, backup, and restore units before reloading systemd.
+over the runtime, deployment, backup, monitor, and restore units before reloading
+systemd.
 
 ```bash
 sudo systemd-analyze verify \
@@ -79,6 +88,8 @@ sudo systemd-analyze verify \
   /etc/systemd/system/sentrybox-deploy.service \
   /etc/systemd/system/sentrybox-backup.service \
   /etc/systemd/system/sentrybox-backup.timer \
+  /etc/systemd/system/sentrybox-monitor.service \
+  /etc/systemd/system/sentrybox-monitor.timer \
   /etc/systemd/system/sentrybox-restore-test.service \
   /etc/systemd/system/sentrybox-restore-test.timer
 ```

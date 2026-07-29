@@ -11,8 +11,10 @@ for executable in caddy curl df docker flock git jq mktemp systemctl; do
   error_hub_require_command "${executable}"
 done
 
-mkdir -p "$(dirname "${error_hub_lock_file}")" "${error_hub_state_directory}"
 umask 077
+mkdir -p "$(dirname "${error_hub_lock_file}")" "${error_hub_state_directory}"
+error_hub_require_root_private_directory \
+  "${error_hub_state_directory}" "SentryBox deployment state directory"
 exec 9>"${error_hub_lock_file}"
 if ! flock -n 9; then
   printf 'A SentryBox deployment is already in progress.\n' >&2
@@ -189,7 +191,8 @@ if [[ -f "${error_hub_current_state}" ]]; then
   mv -f "${error_hub_previous_state}.tmp.$$" "${error_hub_previous_state}"
 else
   readonly private_origin_file="${error_hub_state_directory}/private-origin"
-  if [[ ! -f "${private_origin_file}" || -L "${private_origin_file}" ]]; then
+  if ! error_hub_require_root_private_file \
+    "${private_origin_file}" "SentryBox private origin"; then
     printf 'Initial deployment requires the installed private origin.\n' >&2
     exit 1
   fi

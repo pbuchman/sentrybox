@@ -223,7 +223,10 @@ Grafana line. Then start the service and validate it with
 ## Disable legacy Sentry shadow forwarding
 
 After the required stable observation window, permanently stop forwarding the
-selected environment to Sentry without manual SQL:
+selected environment to Sentry without manual SQL. If the legacy destination is
+unavailable and cannot produce comparison evidence, use the explicit
+[development direct-cutover procedure](dev-direct-cutover.md) instead of
+pretending that a shadow window passed:
 
 ```bash
 sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --no-deps sentrybox node \

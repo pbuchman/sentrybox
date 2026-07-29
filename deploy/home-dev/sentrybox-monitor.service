@@ -1,0 +1,46 @@
+[Unit]
+Description=Check SentryBox operational readiness
+After=network-online.target sentrybox.service
+Wants=network-online.target
+ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/pbuchman/deploy/sentrybox
+ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
+TimeoutStartSec=30s
+StateDirectory=sentrybox-deploy
+StateDirectoryMode=0700
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sentrybox-monitor
+LogRateLimitIntervalSec=5min
+LogRateLimitBurst=10
+MemoryMax=64M
+TasksMax=32
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sentrybox-deploy
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

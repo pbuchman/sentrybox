@@ -1,0 +1,12 @@
+[Unit]
+Description=Check SentryBox operations every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+AccuracySec=30s
+Unit=sentrybox-monitor.service
+
+[Install]
+WantedBy=timers.target

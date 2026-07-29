@@ -104,7 +104,7 @@ Before allowing the controlled task to complete, run the IntexuraOS verifier
 from the actual pinned Code Worker image and network:
 
 ```bash
-pnpm --filter @intexuraos/orchestrator verify:error-hub-mcp -- \
+pnpm --filter @intexuraos/orchestrator verify:error-hub-mcp \
   "<exact private issue URL from the verifier>" \
   "<controlled event ID from the emitter>"
 ```

@@ -28,6 +28,10 @@ readonly error_hub_lock_file="${error_hub_prefix}/run/lock/sentrybox-deploy.lock
 readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
 readonly error_hub_current_state="${error_hub_state_directory}/current.env"
 readonly error_hub_previous_state="${error_hub_state_directory}/previous.env"
+readonly error_hub_backup_state_file="${error_hub_state_directory}/backup.state"
+readonly error_hub_backup_success_file="${error_hub_state_directory}/backup.success"
+readonly error_hub_restore_success_file="${error_hub_state_directory}/restore-test.success"
+readonly error_hub_monitor_baseline_file="${error_hub_state_directory}/monitor-baseline"
 readonly error_hub_compose_file="${error_hub_checkout}/deploy/home-dev/compose.yaml"
 readonly error_hub_project_config="${error_hub_checkout}/deploy/home-dev/config.example.json"
 readonly error_hub_database_operations="${error_hub_checkout}/deploy/home-dev/database-operations.mjs"
@@ -54,6 +58,68 @@ error_hub_require_command() {
     printf 'Required executable is unavailable: %s\n' "${eh_command_name}" >&2
     return 1
   fi
+}
+
+error_hub_require_root_private_directory() {
+  local eh_directory="$1"
+  local eh_description="$2"
+  local eh_attributes
+  if [[ ! -d "${eh_directory}" || -L "${eh_directory}" ]]; then
+    printf '%s must be a regular directory.\n' "${eh_description}" >&2
+    return 1
+  fi
+  eh_attributes="$(stat -c '%a:%u:%g' "${eh_directory}")"
+  if [[ "${eh_attributes}" != "700:0:0" ]]; then
+    printf '%s must be root-owned with mode 0700.\n' "${eh_description}" >&2
+    return 1
+  fi
+}
+
+error_hub_require_root_private_file() {
+  local eh_file="$1"
+  local eh_description="$2"
+  local eh_attributes
+  if [[ ! -f "${eh_file}" || -L "${eh_file}" ]]; then
+    printf '%s must be a regular file.\n' "${eh_description}" >&2
+    return 1
+  fi
+  eh_attributes="$(stat -c '%a:%u:%g:%h' "${eh_file}")"
+  if [[ "${eh_attributes}" != "600:0:0:1" ]]; then
+    printf '%s must be root-owned, mode 0600, and singly linked.\n' \
+      "${eh_description}" >&2
+    return 1
+  fi
+}
+
+error_hub_publish_root_private_file() {
+  local eh_temporary_file="$1"
+  local eh_destination_file="$2"
+  local eh_description="$3"
+  if [[ "${eh_destination_file%/*}" != "${error_hub_state_directory}" ]]; then
+    printf '%s destination must be directly inside deployment state.\n' \
+      "${eh_description}" >&2
+    return 1
+  fi
+  error_hub_require_root_private_directory \
+    "${error_hub_state_directory}" "SentryBox deployment state directory" || return $?
+  if [[ ! -f "${eh_temporary_file}" || -L "${eh_temporary_file}" ]] \
+    || [[ "$(stat -c '%h' "${eh_temporary_file}")" != "1" ]]; then
+    printf '%s temporary file must be regular and singly linked.\n' \
+      "${eh_description}" >&2
+    return 1
+  fi
+  if [[ "$(stat -c '%u:%g' "${eh_temporary_file}")" != "0:0" ]] \
+    && ! chown 0:0 "${eh_temporary_file}"; then
+    rm -f -- "${eh_temporary_file}"
+    return 1
+  fi
+  if ! chmod 0600 "${eh_temporary_file}" \
+    || ! mv -f "${eh_temporary_file}" "${eh_destination_file}"; then
+    rm -f -- "${eh_temporary_file}"
+    return 1
+  fi
+  error_hub_require_root_private_file \
+    "${eh_destination_file}" "${eh_description}"
 }
 
 error_hub_validate_caddy() {
@@ -86,20 +152,12 @@ error_hub_apply_caddy_fragment() {
 }
 
 error_hub_require_runtime_environment() {
-  local eh_mode eh_owner eh_links
   local -a eh_lines=()
-  if [[ ! -f "${error_hub_runtime_environment_file}" \
-    || -L "${error_hub_runtime_environment_file}" ]]; then
-    printf 'SentryBox runtime environment must be a regular file.\n' >&2
-    return 1
-  fi
-  eh_mode="$(stat -c '%a' "${error_hub_runtime_environment_file}")"
-  eh_owner="$(stat -c '%u' "${error_hub_runtime_environment_file}")"
-  eh_links="$(stat -c '%h' "${error_hub_runtime_environment_file}")"
-  if [[ "${eh_mode}" != "600" || "${eh_owner}" != "0" || "${eh_links}" != "1" ]]; then
-    printf 'SentryBox runtime environment must be root-owned, mode 0600, and singly linked.\n' >&2
-    return 1
-  fi
+  error_hub_require_root_private_directory \
+    "${error_hub_state_directory}" "SentryBox deployment state directory" || return $?
+  error_hub_require_root_private_file \
+    "${error_hub_runtime_environment_file}" \
+    "SentryBox runtime environment" || return $?
   mapfile -t eh_lines <"${error_hub_runtime_environment_file}"
   if (( ${#eh_lines[@]} < 1 || ${#eh_lines[@]} > 2 )) \
     || [[ ! "${eh_lines[0]}" =~ ^ERROR_HUB_REQUIRED_SECRET_REFERENCES=[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$ ]]; then
@@ -167,10 +225,10 @@ error_hub_read_state() {
   local eh_requested_state_file="$1"
   local eh_state_line eh_state_key eh_state_value
   local eh_state_image="" eh_state_origin="" eh_state_sha=""
-  [[ -f "${eh_requested_state_file}" && ! -L "${eh_requested_state_file}" ]] || {
-    printf 'Deployment state is unavailable: %s\n' "${eh_requested_state_file}" >&2
-    return 1
-  }
+  error_hub_require_root_private_directory \
+    "${error_hub_state_directory}" "SentryBox deployment state directory" || return $?
+  error_hub_require_root_private_file \
+    "${eh_requested_state_file}" "Deployment state" || return $?
   while IFS= read -r eh_state_line || [[ -n "${eh_state_line}" ]]; do
     [[ "${eh_state_line}" == *=* ]] || {
       printf 'Deployment state contains a malformed line.\n' >&2
@@ -210,22 +268,24 @@ error_hub_write_state() {
   local eh_requested_image="$2"
   local eh_requested_origin="$3"
   local eh_requested_sha="$4"
-  local eh_state_temporary="${eh_requested_state_file}.tmp.$$"
+  local eh_state_temporary
   error_hub_require_immutable_image "${eh_requested_image}"
   error_hub_require_private_origin "${eh_requested_origin}"
   error_hub_require_sha "${eh_requested_sha}"
-  mkdir -p "${error_hub_state_directory}"
+  error_hub_require_root_private_directory \
+    "${error_hub_state_directory}" "SentryBox deployment state directory" || return $?
   umask 077
-  {
+  eh_state_temporary="$(mktemp "${eh_requested_state_file}.tmp.XXXXXX")"
+  if ! {
     printf 'ERROR_HUB_IMAGE=%s\n' "${eh_requested_image}"
     printf 'ERROR_HUB_PRIVATE_ORIGIN=%s\n' "${eh_requested_origin}"
     printf 'ERROR_HUB_DEPLOYED_SHA=%s\n' "${eh_requested_sha}"
-  } >"${eh_state_temporary}"
-  chmod 0600 "${eh_state_temporary}"
-  if ! mv -f "${eh_state_temporary}" "${eh_requested_state_file}"; then
+  } >"${eh_state_temporary}"; then
     rm -f "${eh_state_temporary}"
     return 1
   fi
+  error_hub_publish_root_private_file \
+    "${eh_state_temporary}" "${eh_requested_state_file}" "Deployment state"
 }
 
 error_hub_compose_up() {

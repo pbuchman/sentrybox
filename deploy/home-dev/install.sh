@@ -8,7 +8,7 @@ readonly repository_root
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
 
-for executable_asset in backup.sh restore-test.sh; do
+for executable_asset in backup.sh monitor.sh restore-test.sh; do
   if [[ ! -f "${script_directory}/${executable_asset}" \
     || -L "${script_directory}/${executable_asset}" \
     || ! -x "${script_directory}/${executable_asset}" ]]; then
@@ -73,10 +73,18 @@ chown "${runtime_uid}:${runtime_gid}" \
   "${error_hub_backup_directory}"
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 
-install -d -m 0700 "${error_hub_state_directory}"
+if [[ -L "${error_hub_state_directory}" \
+  || ( -e "${error_hub_state_directory}" \
+    && ! -d "${error_hub_state_directory}" ) ]]; then
+  printf 'SentryBox deployment state directory must be a regular directory.\n' >&2
+  exit 1
+fi
+install -d -o 0 -g 0 -m 0700 "${error_hub_state_directory}"
 if [[ -e "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
-  if [[ ! -f "${error_hub_runtime_environment_file}" || -L "${error_hub_runtime_environment_file}" ]]; then
-    printf 'SentryBox runtime environment must be a regular file.\n' >&2
+  if [[ ! -f "${error_hub_runtime_environment_file}" \
+    || -L "${error_hub_runtime_environment_file}" \
+    || "$(stat -c '%h' "${error_hub_runtime_environment_file}")" != "1" ]]; then
+    printf 'SentryBox runtime environment must be a regular, singly linked file.\n' >&2
     exit 1
   fi
   chown 0:0 "${error_hub_runtime_environment_file}"
@@ -92,9 +100,11 @@ else
 fi
 error_hub_require_runtime_environment
 private_origin_file="${error_hub_state_directory}/private-origin"
-printf '%s\n' "${private_origin}" >"${private_origin_file}.tmp.$$"
-chmod 0600 "${private_origin_file}.tmp.$$"
-mv -f "${private_origin_file}.tmp.$$" "${private_origin_file}"
+private_origin_temporary="$(mktemp "${private_origin_file}.tmp.XXXXXX")"
+printf '%s\n' "${private_origin}" >"${private_origin_temporary}"
+error_hub_publish_root_private_file \
+  "${private_origin_temporary}" "${private_origin_file}" \
+  "SentryBox private origin"
 
 readonly systemd_directory="${error_hub_prefix}/etc/systemd/system"
 install -d -m 0755 "${systemd_directory}"
@@ -142,6 +152,8 @@ for unit in \
   sentrybox-deploy-webhook.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.service \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.service \
   sentrybox-restore-test.timer; do
   install -m 0644 "${script_directory}/${unit}" \
@@ -154,6 +166,8 @@ systemd-analyze verify \
   "${install_staging}/units/sentrybox-deploy-webhook.service" \
   "${install_staging}/units/sentrybox-backup.service" \
   "${install_staging}/units/sentrybox-backup.timer" \
+  "${install_staging}/units/sentrybox-monitor.service" \
+  "${install_staging}/units/sentrybox-monitor.timer" \
   "${install_staging}/units/sentrybox-restore-test.service" \
   "${install_staging}/units/sentrybox-restore-test.timer"
 (
@@ -175,6 +189,8 @@ for unit in \
   sentrybox-deploy-webhook.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.service \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.service \
   sentrybox-restore-test.timer; do
   install -m 0644 "${install_staging}/units/${unit}" \
@@ -182,10 +198,30 @@ for unit in \
 done
 
 systemctl daemon-reload
-systemctl enable \
+systemctl enable --now \
   sentrybox.service \
   sentrybox-backup.timer \
+  sentrybox-monitor.timer \
   sentrybox-restore-test.timer >/dev/null
+for timer in \
+  sentrybox-backup.timer \
+  sentrybox-monitor.timer \
+  sentrybox-restore-test.timer; do
+  if ! systemctl is-active --quiet "${timer}"; then
+    printf 'SentryBox operational timer is not active: %s\n' "${timer}" >&2
+    exit 1
+  fi
+  timer_schedule="$(
+    systemctl list-timers --all --no-legend --no-pager "${timer}"
+  )"
+  if [[ -z "${timer_schedule}" \
+    || ! "${timer_schedule}" =~ [[:space:]]${timer}[[:space:]] \
+    || "${timer_schedule}" =~ ^[[:space:]]*(n/a|-)($|[[:space:]]) ]]; then
+    printf 'SentryBox operational timer has no next activation: %s\n' \
+      "${timer}" >&2
+    exit 1
+  fi
+done
 
 error_hub_validate_caddy >/dev/null
 systemctl reload caddy

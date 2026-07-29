@@ -10,6 +10,7 @@ export type DispatchOutcome =
   | "dead_letter"
   | "stale_lease";
 export type PhysicalMonitorOutcome = "success" | "failure" | "unstable";
+type IngestResponseStatus = 429 | 503;
 
 export class ErrorHubMetrics {
   readonly #ingest = fixedCounter([
@@ -24,6 +25,7 @@ export class ErrorHubMetrics {
     "duplicate",
   ] as const);
   readonly #retention = fixedCounter(["success", "failure"] as const);
+  readonly #retentionLastRun = fixedCounter(["success", "failure"] as const);
   readonly #retentionRemoved = fixedCounter(["age", "budget"] as const);
   readonly #dispatch = fixedCounter([
     "delivered",
@@ -36,11 +38,16 @@ export class ErrorHubMetrics {
     "failure",
     "unstable",
   ] as const);
+  readonly #ingestResponse = fixedCounter(["429", "503"] as const);
   #parseDurationCount = 0;
   #parseDurationSum = 0;
 
   public recordIngest(outcome: IngestOutcome): void {
     increment(this.#ingest, outcome, 1);
+  }
+
+  public recordIngestResponse(status: IngestResponseStatus): void {
+    increment(this.#ingestResponse, String(status) as "429" | "503", 1);
   }
 
   public observeParseDuration(seconds: number): void {
@@ -68,6 +75,8 @@ export class ErrorHubMetrics {
     removed: { readonly age: number; readonly budget: number },
   ): void {
     increment(this.#retention, outcome, 1);
+    this.#retentionLastRun.success = outcome === "success" ? 1 : 0;
+    this.#retentionLastRun.failure = outcome === "failure" ? 1 : 0;
     increment(this.#retentionRemoved, "age", removed.age);
     increment(this.#retentionRemoved, "budget", removed.budget);
   }
@@ -104,6 +113,12 @@ export class ErrorHubMetrics {
       "outcome",
       this.#ingest,
     );
+    appendCounter(
+      lines,
+      "sentrybox_ingest_http_responses_total",
+      "status",
+      this.#ingestResponse,
+    );
     lines.push(
       "# TYPE sentrybox_parse_duration_seconds summary",
       `sentrybox_parse_duration_seconds_count ${String(this.#parseDurationCount)}`,
@@ -123,6 +138,12 @@ export class ErrorHubMetrics {
       "sentrybox_retention_runs_total",
       "outcome",
       this.#retention,
+    );
+    appendGauge(
+      lines,
+      "sentrybox_retention_last_run",
+      "outcome",
+      this.#retentionLastRun,
     );
     appendCounter(
       lines,
