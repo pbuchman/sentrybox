@@ -23,7 +23,7 @@ readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
 readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/sentrybox/backups"
 readonly error_hub_state_directory="${error_hub_prefix}/var/lib/sentrybox-deploy"
 readonly error_hub_runtime_environment_file="${error_hub_state_directory}/runtime.env"
-readonly error_hub_initial_secret_references="LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD"
+readonly error_hub_required_secret_references="CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD"
 readonly error_hub_lock_file="${error_hub_prefix}/run/lock/sentrybox-deploy.lock"
 readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
 readonly error_hub_current_state="${error_hub_state_directory}/current.env"
@@ -160,13 +160,58 @@ error_hub_require_runtime_environment() {
     "SentryBox runtime environment" || return $?
   mapfile -t eh_lines <"${error_hub_runtime_environment_file}"
   if (( ${#eh_lines[@]} < 1 || ${#eh_lines[@]} > 2 )) \
-    || [[ ! "${eh_lines[0]}" =~ ^ERROR_HUB_REQUIRED_SECRET_REFERENCES=[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*$ ]]; then
-    printf 'SentryBox runtime environment must contain one valid reference list and at most one Grafana URL.\n' >&2
+    || [[ "${eh_lines[0]}" != "ERROR_HUB_REQUIRED_SECRET_REFERENCES=${error_hub_required_secret_references}" ]]; then
+    printf 'SentryBox runtime environment must require exactly %s and at most one Grafana URL.\n' \
+      "${error_hub_required_secret_references}" >&2
     return 1
   fi
   if (( ${#eh_lines[@]} == 2 )) \
     && ! error_hub_valid_grafana_environment_line "${eh_lines[1]}"; then
     printf 'SentryBox Grafana Explore URL must be credential-free HTTPS with orgId and datasource.\n' >&2
+    return 1
+  fi
+  error_hub_require_service_credentials
+}
+
+error_hub_require_service_credentials() {
+  local -a eh_lines=()
+  local eh_line eh_name eh_value
+  local eh_dev_count=0 eh_prod_count=0
+  if [[ ! -f "${error_hub_environment_file}" || -L "${error_hub_environment_file}" ]]; then
+    printf 'SentryBox service credential file must be a regular file.\n' >&2
+    return 1
+  fi
+  if [[ "$(stat -c '%a:%h' "${error_hub_environment_file}")" != "600:1" ]]; then
+    printf 'SentryBox service credential file must be mode 0600 and singly linked.\n' >&2
+    return 1
+  fi
+  mapfile -t eh_lines <"${error_hub_environment_file}"
+  if (( ${#eh_lines[@]} != 2 )); then
+    printf 'SentryBox service credential file must contain exactly CODE_AGENT_HMAC_DEV and CODE_AGENT_HMAC_PROD.\n' >&2
+    return 1
+  fi
+  for eh_line in "${eh_lines[@]}"; do
+    if [[ "${eh_line}" != *=* ]]; then
+      printf 'SentryBox service credential file must contain only non-empty KEY=VALUE entries.\n' >&2
+      return 1
+    fi
+    eh_name="${eh_line%%=*}"
+    eh_value="${eh_line#*=}"
+    if [[ -z "${eh_value}" ]]; then
+      printf 'SentryBox service credential file must contain only non-empty KEY=VALUE entries.\n' >&2
+      return 1
+    fi
+    case "${eh_name}" in
+      CODE_AGENT_HMAC_DEV) ((eh_dev_count += 1)) ;;
+      CODE_AGENT_HMAC_PROD) ((eh_prod_count += 1)) ;;
+      *)
+        printf 'SentryBox service credential file must contain exactly CODE_AGENT_HMAC_DEV and CODE_AGENT_HMAC_PROD.\n' >&2
+        return 1
+        ;;
+    esac
+  done
+  if (( eh_dev_count != 1 || eh_prod_count != 1 )); then
+    printf 'SentryBox service credential file must contain exactly CODE_AGENT_HMAC_DEV and CODE_AGENT_HMAC_PROD.\n' >&2
     return 1
   fi
 }

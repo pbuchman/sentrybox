@@ -25,9 +25,9 @@
         "https://dev.intexuraos.cloud"
       ],
       "forwarding": {
-        "mode": "shadow",
+        "mode": "disabled",
         "environment": "dev",
-        "secretRef": "LEGACY_SENTRY_DSN_BACKEND_DEV"
+        "secretRef": null
       },
       "codeAgent": {
         "mode": "disabled",
@@ -43,9 +43,9 @@
       "environment": "prod",
       "allowedOrigins": ["https://intexuraos.cloud"],
       "forwarding": {
-        "mode": "shadow",
+        "mode": "disabled",
         "environment": "prod",
-        "secretRef": "LEGACY_SENTRY_DSN_BACKEND_PROD"
+        "secretRef": null
       },
       "codeAgent": {
         "mode": "disabled",
@@ -64,9 +64,9 @@
         "https://dev.intexuraos.cloud"
       ],
       "forwarding": {
-        "mode": "shadow",
+        "mode": "disabled",
         "environment": "dev",
-        "secretRef": "LEGACY_SENTRY_DSN_WEB_DEV"
+        "secretRef": null
       },
       "codeAgent": {
         "mode": "disabled",
@@ -82,9 +82,9 @@
       "environment": "prod",
       "allowedOrigins": ["https://intexuraos.cloud"],
       "forwarding": {
-        "mode": "shadow",
+        "mode": "disabled",
         "environment": "prod",
-        "secretRef": "LEGACY_SENTRY_DSN_WEB_PROD"
+        "secretRef": null
       },
       "codeAgent": {
         "mode": "disabled",

@@ -38,6 +38,7 @@ for required_path in \
 done
 
 error_hub_require_runtime_environment
+error_hub_require_service_credentials
 
 error_hub_require_free_space "${error_hub_service_root}"
 

@@ -40,14 +40,16 @@ setup() {
   cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/database-operations.mjs"
   printf '{ import Caddyfile.d/*.caddy }\n' >"${fixture_root}/etc/caddy/Caddyfile"
-  printf 'LEGACY_SENTRY_DSN_BACKEND_DEV=redacted\n' \
+  printf '%s\n' \
+    'CODE_AGENT_HMAC_DEV=redacted' \
+    'CODE_AGENT_HMAC_PROD=redacted' \
     >"${fixture_root}/home/pbuchman/services/sentrybox/env"
   chmod 0600 "${fixture_root}/home/pbuchman/services/sentrybox/env"
   printf '%s\n' "${ERROR_HUB_PRIVATE_ORIGIN}" \
     >"${fixture_root}/var/lib/sentrybox-deploy/private-origin"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/private-origin"
   printf '%s\n' \
-    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     >"${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
 
@@ -462,6 +464,30 @@ EOF
   [ "${output}" = 'sentrybox' ]
 }
 
+@test "fresh installation requires exact service credentials before starting SentryBox" {
+  credential_file="${fixture_root}/home/pbuchman/services/sentrybox/env"
+  rm -f "${credential_file}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"must be created before installation"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox.service" ]
+
+  printf '%s\n' \
+    'CODE_AGENT_HMAC_DEV=bootstrap-dev' \
+    'CODE_AGENT_HMAC_PROD=bootstrap-prod' \
+    >"${credential_file}"
+  chmod 0600 "${credential_file}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ -f "${fixture_root}/etc/systemd/system/sentrybox.service" ]
+}
+
 @test "install starts every operational timer and verifies its next activation" {
   run "${repository_root}/deploy/home-dev/install.sh" \
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
@@ -567,12 +593,12 @@ EOF
   [ "$(stat -c '%a' "${runtime_env}")" = 600 ]
   [ "$(stat -c '%u:%g' "${runtime_env}")" = '0:0' ]
   run grep -Fx \
-    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     "${runtime_env}"
   [ "${status}" -eq 0 ]
 
   printf '%s\n' \
-    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     'ERROR_HUB_GRAFANA_EXPLORE_URL=https://logs.example.grafana.net/explore?orgId=1&datasource=grafanacloud-logs' \
     >"${runtime_env}"
   chmod 0644 "${runtime_env}"
@@ -583,7 +609,7 @@ EOF
   [ "${status}" -eq 0 ]
   [ "$(stat -c '%a' "${runtime_env}")" = 600 ]
   run grep -Fx \
-    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     "${runtime_env}"
   [ "${status}" -eq 0 ]
   run grep -Fx \
@@ -595,7 +621,7 @@ EOF
 @test "runtime state rejects an insecure Grafana Explore URL" {
   runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
   printf '%s\n' \
-    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     'ERROR_HUB_GRAFANA_EXPLORE_URL=http://logs.example.test/explore' \
     >"${runtime_env}"
   chmod 0600 "${runtime_env}"
@@ -616,7 +642,7 @@ EOF
     'https://logs.example.test/explore?orgId=1&datasource=logs#fragment' \
     'https://logs.example.test:70000/explore?orgId=1&datasource=logs'; do
     printf '%s\n' \
-      'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD' \
+      'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
       "ERROR_HUB_GRAFANA_EXPLORE_URL=${grafana_url}" \
       >"${runtime_env}"
     chmod 0600 "${runtime_env}"
@@ -626,6 +652,44 @@ EOF
 
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Grafana Explore URL"* ]]
+  done
+}
+
+@test "runtime state rejects legacy forwarding references after the full cutover" {
+  runtime_env="${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  printf '%s\n' \
+    'ERROR_HUB_REQUIRED_SECRET_REFERENCES=LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD' \
+    >"${runtime_env}"
+  chmod 0600 "${runtime_env}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD"* ]]
+}
+
+@test "install and preflight reject invalid steady-state service credentials" {
+  credential_file="${fixture_root}/home/pbuchman/services/sentrybox/env"
+  image="ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  for credentials in \
+    $'LEGACY_SENTRY_DSN_BACKEND_DEV=redacted\nCODE_AGENT_HMAC_DEV=redacted\nCODE_AGENT_HMAC_PROD=redacted' \
+    $'CODE_AGENT_HMAC_DEV=redacted\nCODE_AGENT_HMAC_PROD=redacted\nUNRELATED_SECRET=redacted' \
+    $'CODE_AGENT_HMAC_DEV=redacted' \
+    $'CODE_AGENT_HMAC_DEV=redacted\nCODE_AGENT_HMAC_DEV=again\nCODE_AGENT_HMAC_PROD=redacted' \
+    $'CODE_AGENT_HMAC_DEV=\nCODE_AGENT_HMAC_PROD=redacted'; do
+    printf '%s\n' "${credentials}" >"${credential_file}"
+    chmod 0600 "${credential_file}"
+
+    run "${repository_root}/deploy/home-dev/install.sh" \
+      --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"service credential file"* ]]
+
+    run "${repository_root}/deploy/home-dev/preflight.sh" "${image}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"service credential file"* ]]
   done
 }
 
@@ -881,7 +945,7 @@ EOF
 }
 
 @test "deploy rollback and direct rollback retain live secret references outside image state" {
-  live_refs='LEGACY_SENTRY_DSN_BACKEND_DEV,LEGACY_SENTRY_DSN_BACKEND_PROD,LEGACY_SENTRY_DSN_WEB_DEV,LEGACY_SENTRY_DSN_WEB_PROD,CODE_AGENT_HMAC_DEV'
+  live_refs='CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD'
   printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' "${live_refs}" \
     >"${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"

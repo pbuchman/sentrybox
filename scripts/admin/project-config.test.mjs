@@ -49,6 +49,58 @@ test("the canonical configuration defines two projects and four environment-boun
   );
 });
 
+test("the bundled configuration starts every environment with forwarding permanently disabled", () => {
+  const configuration = validateProjectConfiguration(CONFIG);
+  const database = fixtureDatabase();
+  let keyByte = 70;
+
+  applyProjectConfiguration({
+    database,
+    configuration,
+    createdAt: CREATED_AT,
+    randomBytes: () => Buffer.alloc(16, keyByte++),
+  });
+
+  const forwarding = database
+    .prepare(
+      `SELECT environment, forwarding_mode, forwarding_secret_ref
+       FROM project_ingest_keys
+       ORDER BY project_id, environment`,
+    )
+    .all();
+  assert.deepEqual(forwarding, [
+    {
+      environment: "dev",
+      forwarding_mode: "disabled",
+      forwarding_secret_ref: null,
+    },
+    {
+      environment: "prod",
+      forwarding_mode: "disabled",
+      forwarding_secret_ref: null,
+    },
+    {
+      environment: "dev",
+      forwarding_mode: "disabled",
+      forwarding_secret_ref: null,
+    },
+    {
+      environment: "prod",
+      forwarding_mode: "disabled",
+      forwarding_secret_ref: null,
+    },
+  ]);
+  assert.deepEqual(
+    [
+      ...new Set(
+        configuration.ingestKeys.map(({ codeAgent }) => codeAgent.secretRef),
+      ),
+    ].sort(),
+    ["CODE_AGENT_HMAC_DEV", "CODE_AGENT_HMAC_PROD"],
+  );
+  database.close();
+});
+
 test("duplicate project IDs, slugs, key IDs, and project/environment pairs are rejected", () => {
   for (const mutate of [
     (copy) => {
@@ -476,19 +528,29 @@ test("the CLI requires an explicit environment for Code Agent activation", () =>
   assert.match(invalid.stderr, /--environment must be dev or prod/u);
 });
 
-test("legacy shadow forwarding can be disabled atomically for one environment", () => {
+test("the retained migration-only shadow transition can disable a legacy environment atomically", () => {
   const database = fixtureDatabase();
+  const migrationConfiguration = clone(CONFIG);
+  for (const key of migrationConfiguration.ingestKeys.filter(
+    ({ environment }) => environment === "dev",
+  )) {
+    key.forwarding = {
+      mode: "shadow",
+      environment: "dev",
+      secretRef: "LEGACY_MIGRATION_DSN_DEV",
+    };
+  }
   let keyByte = 30;
   applyProjectConfiguration({
     database,
-    configuration: CONFIG,
+    configuration: migrationConfiguration,
     createdAt: CREATED_AT,
     randomBytes: () => Buffer.alloc(16, keyByte++),
   });
 
   disableLegacyForwarding({
     database,
-    configuration: CONFIG,
+    configuration: migrationConfiguration,
     environment: "dev",
     disabledAt: "2026-08-04T13:00:00.000Z",
   });
@@ -513,14 +575,13 @@ test("legacy shadow forwarding can be disabled atomically for one environment", 
       .filter(({ environment }) => environment === "prod")
       .every(
         ({ forwarding_mode, forwarding_secret_ref }) =>
-          forwarding_mode === "shadow" &&
-          typeof forwarding_secret_ref === "string",
+          forwarding_mode === "disabled" && forwarding_secret_ref === null,
       ),
   );
   assert.doesNotThrow(() =>
     validateStoredProjectConfiguration({
       database,
-      configuration: CONFIG,
+      configuration: migrationConfiguration,
       environment: "dev",
       expectedWebhookMode: "disabled",
       expectedForwardingMode: "disabled",
@@ -530,7 +591,7 @@ test("legacy shadow forwarding can be disabled atomically for one environment", 
     () =>
       disableLegacyForwarding({
         database,
-        configuration: CONFIG,
+        configuration: migrationConfiguration,
         environment: "dev",
         disabledAt: "2026-08-04T14:00:00.000Z",
       }),

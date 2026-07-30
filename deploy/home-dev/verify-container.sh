@@ -33,7 +33,7 @@ fi
 mkdir -p "${verify_temp}/data"
 : >"${verify_temp}/env"
 chmod 0600 "${verify_temp}/env"
-readonly verify_runtime_references="LEGACY_SENTRY_DSN_BACKEND_DEV,CODE_AGENT_HMAC_DEV"
+readonly verify_runtime_references="CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD"
 printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' \
   "${verify_runtime_references}" >"${verify_temp}/runtime.env"
 chmod 0600 "${verify_temp}/runtime.env"
