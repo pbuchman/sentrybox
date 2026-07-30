@@ -1,19 +1,17 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   EventDetail,
   EventSummary,
+  FacetValue,
   IssueDetail as IssueDetailModel,
   OperatorApi,
+  SystemStatus,
   WebhookDelivery,
 } from "../api/client.js";
+import { AppShell } from "../components/app-shell.js";
 import { ConfirmDeleteDialog } from "../components/confirm-delete-dialog.js";
 import { EventDetails } from "../components/event-details.js";
+import { Icon } from "../components/icons.js";
 import { TimeValue } from "../components/time-value.js";
 
 interface IssueDetailProps {
@@ -21,6 +19,7 @@ interface IssueDetailProps {
   readonly issueId: number;
   readonly requestedEventId: string | undefined;
   readonly onNavigate: (path: string) => void;
+  readonly readOnly?: boolean;
 }
 
 interface DetailState {
@@ -29,6 +28,8 @@ interface DetailState {
   readonly event: EventDetail | null;
   readonly nextEventCursor: string | null;
   readonly requestedEventMissing: boolean;
+  readonly projects: readonly FacetValue[];
+  readonly system: SystemStatus | null;
 }
 
 export function IssueDetail({
@@ -36,6 +37,7 @@ export function IssueDetail({
   issueId,
   requestedEventId,
   onNavigate,
+  readOnly = false,
 }: IssueDetailProps) {
   const [state, setState] = useState<DetailState | null>(null);
   const [error, setError] = useState(false);
@@ -54,8 +56,14 @@ export function IssueDetail({
     let active = true;
     selectionRequest.current += 1;
     setError(false);
-    void Promise.all([api.getIssue(issueId), api.listIssueEvents(issueId)])
-      .then(async ([issue, firstPage]) => {
+    setState(null);
+    void Promise.all([
+      api.getIssue(issueId),
+      api.listIssueEvents(issueId),
+      safeRead(() => api.getFacets(new URLSearchParams())),
+      safeRead(() => api.getSystemStatus()),
+    ])
+      .then(async ([issue, firstPage, facets, system]) => {
         const events = [...firstPage.items];
         let nextEventCursor = firstPage.nextCursor;
         let selected =
@@ -77,16 +85,23 @@ export function IssueDetail({
         }
         const event =
           selected === undefined ? null : await api.getEvent(selected.rowId);
-        if (active) {
-          setState({
-            issue,
-            events,
-            event,
-            nextEventCursor,
-            requestedEventMissing:
-              requestedEventId !== undefined && selected === undefined,
-          });
-        }
+        if (!active) return;
+        const fallbackProject: FacetValue = {
+          value: issue.project.slug,
+          queryValue: issue.project.slug,
+          label: issue.project.name,
+          count: issue.occurrenceCount,
+        };
+        setState({
+          issue,
+          events,
+          event,
+          nextEventCursor,
+          requestedEventMissing:
+            requestedEventId !== undefined && selected === undefined,
+          projects: facets?.project.length ? facets.project : [fallbackProject],
+          system,
+        });
       })
       .catch(() => {
         if (active) setError(true);
@@ -99,6 +114,7 @@ export function IssueDetail({
   const mutateStatus = async (
     target: "resolved" | "unresolved",
   ): Promise<void> => {
+    if (readOnly) return;
     setPendingAction(target);
     setActionError(null);
     setFeedback(null);
@@ -111,11 +127,11 @@ export function IssueDetail({
       setFeedback(
         target === "resolved" ? "Issue resolved." : "Issue reopened.",
       );
-    } catch {
+    } catch (cause) {
       setActionError(
-        target === "resolved"
-          ? "Resolve failed. The issue remains unresolved; try again."
-          : "Reopen failed. The issue remains resolved; try again.",
+        cause instanceof Error
+          ? cause.message
+          : "The status could not be changed.",
       );
     } finally {
       setPendingAction(null);
@@ -129,19 +145,20 @@ export function IssueDetail({
     setActionError(null);
     try {
       const event = await api.getEvent(rowId);
-      if (selectionRequest.current === request) {
-        setState((current) =>
-          current === null
-            ? null
-            : { ...current, event, requestedEventMissing: false },
-        );
-      }
+      if (selectionRequest.current !== request) return;
+      setState((current) =>
+        current === null
+          ? null
+          : { ...current, event, requestedEventMissing: false },
+      );
+      window.history.replaceState(
+        {},
+        "",
+        `/?${new URLSearchParams({ issue: String(issueId), event: event.eventId }).toString()}`,
+      );
     } catch {
-      if (selectionRequest.current === request) {
-        setActionError(
-          "Occurrence details could not be loaded. Choose the occurrence and try again.",
-        );
-      }
+      if (selectionRequest.current === request)
+        setActionError("Occurrence details could not be loaded. Try again.");
     } finally {
       if (selectionRequest.current === request) setPendingAction(null);
     }
@@ -171,29 +188,30 @@ export function IssueDetail({
   };
 
   const retryDelivery = async (delivery: WebhookDelivery): Promise<void> => {
+    if (readOnly) return;
     setRetryingDelivery(delivery.id);
     setActionError(null);
-    setFeedback(null);
     try {
       const redrive = await api.retryDelivery(delivery.id);
-      setState((current) => {
-        if (current === null) return null;
-        return {
-          ...current,
-          issue: {
-            ...current.issue,
-            deliveries: current.issue.deliveries.map((item) =>
-              item.id === delivery.id
-                ? { ...item, redrives: [...item.redrives, redrive] }
-                : item,
-            ),
-          },
-        };
-      });
-      setFeedback("Redrive queued.");
-    } catch {
+      setState((current) =>
+        current === null
+          ? null
+          : {
+              ...current,
+              issue: {
+                ...current.issue,
+                deliveries: current.issue.deliveries.map((item) =>
+                  item.id === delivery.id
+                    ? { ...item, redrives: [...item.redrives, redrive] }
+                    : item,
+                ),
+              },
+            },
+      );
+      setFeedback("Delivery retry queued.");
+    } catch (cause) {
       setActionError(
-        "Delivery retry failed. Correct the destination configuration, then try again.",
+        cause instanceof Error ? cause.message : "Delivery retry failed.",
       );
     } finally {
       setRetryingDelivery(null);
@@ -206,16 +224,20 @@ export function IssueDetail({
   }, []);
 
   const deleteIssue = async (): Promise<void> => {
+    if (readOnly || state === null) return;
     setPendingAction("delete");
     setActionError(null);
-    setFeedback(null);
     try {
       await api.deleteIssue(issueId);
-      onNavigate("/");
-    } catch {
+      onNavigate(
+        `/?${new URLSearchParams({ project: state.issue.project.slug, status: "unresolved" }).toString()}`,
+      );
+    } catch (cause) {
       setDeleteOpen(false);
       setActionError(
-        "Delete failed. No data was removed; check the private connection and try again.",
+        cause instanceof Error
+          ? cause.message
+          : "Delete failed. No data was removed.",
       );
       window.setTimeout(() => deleteButton.current?.focus(), 0);
     } finally {
@@ -223,75 +245,70 @@ export function IssueDetail({
     }
   };
 
-  const back = (event: MouseEvent<HTMLAnchorElement>): void => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    onNavigate("/");
-  };
-
-  if (state === null && !error) {
-    return (
-      <main id="main-content" className="page-content">
-        <div className="state-panel" role="status">
-          <span className="loading-mark" aria-hidden="true" />
-          Loading issue evidence…
-        </div>
-      </main>
-    );
-  }
-
+  if (state === null && !error)
+    return <StandaloneState label="Loading issue evidence…" />;
   if (error) {
     return (
-      <main id="main-content" className="page-content">
-        <div className="state-panel state-error" role="alert">
-          <h1>Issue details could not be loaded</h1>
-          <p>
-            Issue details could not be loaded. Check the private connection and
-            try again.
-          </p>
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => {
-              setError(false);
-              setRetry((value) => value + 1);
-            }}
-          >
-            Try again
-          </button>
-        </div>
+      <main id="main-content" className="standalone-state" role="alert">
+        <Icon name="error" size={34} />
+        <h1>Issue details could not be loaded</h1>
+        <p>Check the private deployment connection and try again.</p>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={() => setRetry((value) => value + 1)}
+        >
+          Try again
+        </button>
       </main>
     );
   }
-
   if (state === null) return null;
+
+  const projectQuery = new URLSearchParams({
+    project: state.issue.project.slug,
+    status: "unresolved",
+  });
+  const listPath = `/?${projectQuery.toString()}`;
+  const navigateList = (): void => onNavigate(listPath);
   const selectedRowId = state.event?.id ?? -1;
+
   return (
-    <div className="app-shell">
-      <header className="detail-nav">
-        <a href="/" onClick={back}>
-          <span aria-hidden="true">←</span> All issues
-        </a>
-        <span className="detail-identity">
-          {state.issue.project.slug} / {String(state.issue.id)}
-        </span>
-      </header>
-      <main id="main-content" className="page-content detail-page">
+    <AppShell
+      projects={state.projects}
+      activeProjectSlug={state.issue.project.slug}
+      system={state.system}
+      onSelectProject={(slug) =>
+        onNavigate(
+          `/?${new URLSearchParams({ project: slug, status: "unresolved" }).toString()}`,
+        )
+      }
+    >
+      <main id="main-content" className="detail-page">
+        {readOnly ? (
+          <p className="read-only-note" role="status">
+            Live deployment preview · destructive actions are disabled locally.
+          </p>
+        ) : null}
+        <nav className="detail-breadcrumbs" aria-label="Breadcrumb">
+          <button type="button" onClick={navigateList}>
+            <Icon name="back" size={18} /> Issues
+          </button>
+          <span aria-hidden="true">/</span>
+          <span>{state.issue.project.name}</span>
+          <span aria-hidden="true">/</span>
+          <span>Issue #{String(state.issue.id)}</span>
+        </nav>
         <header className="issue-detail-header">
           <div className="detail-title-block">
             <div className="detail-state-line">
               <span className={`status status-${state.issue.status}`}>
-                {state.issue.status === "resolved" ? "Resolved" : "Unresolved"}
+                {state.issue.status === "resolved" ? "Resolved" : "Open"}
               </span>
               <span className={`severity severity-${state.issue.highestLevel}`}>
-                {state.issue.highestLevel === "warn"
-                  ? "Warning"
-                  : state.issue.highestLevel === "fatal"
-                    ? "Fatal"
-                    : "Error"}
+                {severityLabel(state.issue.highestLevel)}
               </span>
             </div>
-            <p className="eyebrow">{state.issue.project.name}</p>
             <h1>{state.issue.title}</h1>
             <dl className="detail-summary">
               <div>
@@ -301,48 +318,56 @@ export function IssueDetail({
               <div>
                 <dt>First seen</dt>
                 <dd>
-                  <TimeValue value={state.issue.firstSeen} />
+                  <TimeValue value={state.issue.firstSeen} compact />
                 </dd>
               </div>
               <div>
                 <dt>Last seen</dt>
                 <dd>
-                  <TimeValue value={state.issue.lastSeen} />
+                  <TimeValue value={state.issue.lastSeen} compact />
                 </dd>
               </div>
             </dl>
           </div>
           <div className="detail-actions" aria-label="Issue actions">
-            {state.issue.status === "unresolved" ? (
-              <button
-                className="button button-primary"
-                type="button"
-                disabled={pendingAction !== null}
-                onClick={() => void mutateStatus("resolved")}
-              >
-                {pendingAction === "resolved" ? "Resolving…" : "Resolve"}
-              </button>
-            ) : (
-              <button
-                className="button button-primary"
-                type="button"
-                disabled={pendingAction !== null}
-                onClick={() => void mutateStatus("unresolved")}
-              >
-                {pendingAction === "unresolved" ? "Reopening…" : "Reopen"}
-              </button>
-            )}
-            <a className="button" href={api.issueDownloadUrl(issueId)} download>
-              Download
-            </a>
             <button
-              ref={deleteButton}
-              className="button button-danger-quiet"
+              className="button button-primary"
               type="button"
-              onClick={() => setDeleteOpen(true)}
+              disabled={pendingAction !== null || readOnly}
+              onClick={() =>
+                void mutateStatus(
+                  state.issue.status === "unresolved"
+                    ? "resolved"
+                    : "unresolved",
+                )
+              }
             >
-              Delete permanently
+              {pendingAction === "resolved"
+                ? "Resolving…"
+                : pendingAction === "unresolved"
+                  ? "Reopening…"
+                  : state.issue.status === "unresolved"
+                    ? "Resolve"
+                    : "Reopen"}
             </button>
+            <details className="action-menu">
+              <summary className="icon-button" aria-label="More issue actions">
+                <Icon name="more" size={20} />
+              </summary>
+              <div className="action-menu-panel">
+                <a href={api.issueDownloadUrl(issueId)} download>
+                  <Icon name="download" size={17} /> Download issue
+                </a>
+                <button
+                  ref={deleteButton}
+                  type="button"
+                  disabled={readOnly}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Icon name="error" size={17} /> Delete permanently
+                </button>
+              </div>
+            </details>
           </div>
         </header>
         {feedback === null ? null : (
@@ -357,18 +382,18 @@ export function IssueDetail({
         )}
         {state.requestedEventMissing ? (
           <div className="state-panel state-error" role="alert">
-            <h2>Requested occurrence is no longer retained</h2>
+            <h2>Occurrence no longer retained</h2>
             <p>
-              This permalink identifies an occurrence outside the retained
-              window. The issue summary remains available above.
+              The issue is available, but this event is outside the retention
+              window.
             </p>
           </div>
         ) : state.event === null ? (
           <div className="state-panel">
-            <h2>No retained occurrence evidence</h2>
+            <h2>No retained evidence</h2>
             <p>
-              Retention removed every event. Issue metadata remains until the
-              next cleanup removes the empty issue.
+              Issue metadata remains available, but every occurrence has
+              expired.
             </p>
           </div>
         ) : (
@@ -385,6 +410,7 @@ export function IssueDetail({
             onLoadMoreEvents={() => void loadMoreEvents()}
             onRetryDelivery={retryDelivery}
             retryingDelivery={retryingDelivery}
+            readOnly={readOnly}
           />
         )}
       </main>
@@ -396,6 +422,29 @@ export function IssueDetail({
           onConfirm={() => void deleteIssue()}
         />
       ) : null}
-    </div>
+    </AppShell>
   );
+}
+
+function StandaloneState({ label }: { readonly label: string }) {
+  return (
+    <main id="main-content" className="standalone-state" role="status">
+      <Icon name="box" size={38} />
+      <p>{label}</p>
+    </main>
+  );
+}
+
+function severityLabel(level: IssueDetailModel["highestLevel"]): string {
+  if (level === "warn") return "Warning";
+  if (level === "fatal") return "Fatal";
+  return "Error";
+}
+
+async function safeRead<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
 }

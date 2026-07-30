@@ -229,6 +229,21 @@ export interface OperatorApi {
   issueDownloadUrl(id: number): string;
 }
 
+export function createReadOnlyApi(api: OperatorApi): OperatorApi {
+  const disabled = async (): Promise<never> => {
+    throw new Error(
+      "Mutations are disabled in local development. Verify actions with fixture data or deploy the reviewed change.",
+    );
+  };
+  return {
+    ...api,
+    resolveIssue: disabled,
+    reopenIssue: disabled,
+    deleteIssue: disabled,
+    retryDelivery: disabled,
+  };
+}
+
 type Fetcher = (
   input: RequestInfo | URL,
   init?: RequestInit,

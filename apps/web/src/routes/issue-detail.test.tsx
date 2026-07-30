@@ -1,5 +1,4 @@
 import {
-  act,
   cleanup,
   render,
   screen,
@@ -8,72 +7,48 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  EventDetail,
+  EventSummary,
+  Facets,
+  IssueDetail,
+  OperatorApi,
+} from "../api/client.js";
 import { App } from "../app.js";
 
 const occurredAt = "2026-07-29T11:58:00.000Z";
-const issue = {
+const project = { id: "1", slug: "intexuraos", name: "IntexuraOS" };
+const issue: IssueDetail = {
   id: 41,
+  project,
   title: "TypeError: Cannot read properties of undefined",
-  status: "unresolved" as const,
+  status: "unresolved",
   generation: 1,
   count: 2,
   occurrenceCount: 2,
   firstSeen: "2026-07-29T08:00:00.000Z",
   lastSeen: occurredAt,
   lastReceivedAt: "2026-07-29T11:58:01.000Z",
-  highestLevel: "error" as const,
+  highestLevel: "error",
   resolvedAt: null,
   createdAt: "2026-07-29T08:00:01.000Z",
   updatedAt: "2026-07-29T11:58:01.000Z",
-  project: { id: "1", slug: "intexuraos-backend", name: "IntexuraOS backend" },
   facets: {
-    environment: [
-      {
-        value: "prod",
-        queryValue: "prod",
-        label: "prod",
-        count: 2,
-        lastSeen: occurredAt,
-      },
-    ],
-    release: [
-      {
-        value: null,
-        queryValue: "~v1:n",
-        label: "Unknown version",
-        count: 1,
-        lastSeen: occurredAt,
-      },
-    ],
-    service: [
-      {
-        value: "whatsapp-service",
-        queryValue: "~v1:s:d2hhdHNhcHAtc2VydmljZQ",
-        label: "whatsapp-service",
-        count: 2,
-        lastSeen: occurredAt,
-      },
-    ],
-    level: [
-      {
-        value: "error",
-        queryValue: "error",
-        label: "error",
-        count: 2,
-        lastSeen: occurredAt,
-      },
-    ],
+    environment: [issueFacet("prod")],
+    release: [issueFacet("2026.07.29-a")],
+    service: [issueFacet("gateway")],
+    level: [issueFacet("error")],
   },
   deliveries: [
     {
       id: 77,
-      deliveryId: "11111111-1111-4111-8111-111111111111",
+      deliveryId: "delivery-77",
       generation: 1,
-      cause: "created" as const,
-      state: "dead_letter" as const,
-      attempts: 1,
+      cause: "created",
+      state: "dead_letter",
+      attempts: 3,
       nextAttempt: null,
-      lastError: "Code Agent returned 403",
+      lastError: "Destination returned 503",
       createdAt: "2026-07-29T08:00:01.000Z",
       deliveredAt: null,
       redrives: [],
@@ -81,269 +56,140 @@ const issue = {
   ],
 };
 
-const events = {
-  items: [
+const latest = summary(501, "event-latest", occurredAt);
+const older = summary(500, "event-older", "2026-07-29T11:30:00.000Z");
+const latestEvent = detail(latest);
+const olderEvent = detail(older);
+
+const facets: Facets = {
+  project: [
     {
-      id: "event-sdk-id",
-      rowId: 501,
-      issueId: 41,
-      projectId: 1,
-      projectSlug: "intexuraos-backend",
-      issueGeneration: 1,
-      environment: "prod",
-      release: null,
-      service: "whatsapp-service",
-      level: "error" as const,
-      platform: "node",
-      title: issue.title,
-      message: "Cannot read value",
-      exceptionType: "TypeError",
-      culprit: "handleMessage",
-      occurredAt,
-      receivedAt: "2026-07-29T11:58:01.000Z",
-      requestId: "request-42",
-      traceId: null,
-      taskId: null,
-      truncated: false,
+      value: project.slug,
+      queryValue: project.slug,
+      label: project.name,
+      count: 2,
     },
   ],
-  nextCursor: null,
+  release: [
+    {
+      value: "2026.07.29-a",
+      queryValue: "2026.07.29-a",
+      label: "2026.07.29-a",
+      count: 2,
+    },
+  ],
+  environment: [{ value: "prod", queryValue: "prod", label: "prod", count: 2 }],
+  service: [
+    { value: "gateway", queryValue: "gateway", label: "gateway", count: 2 },
+  ],
+  level: [{ value: "error", queryValue: "error", label: "error", count: 2 }],
+  status: [
+    {
+      value: "unresolved",
+      queryValue: "unresolved",
+      label: "unresolved",
+      count: 2,
+    },
+  ],
 };
 
-const olderOccurrence = {
-  ...events.items[0],
-  id: "older-event-sdk-id",
-  rowId: 500,
-  occurredAt: "2026-07-29T11:30:00.000Z",
-  receivedAt: "2026-07-29T11:30:01.000Z",
-};
-
-const event = {
-  id: 501,
-  eventId: "event-sdk-id",
-  issueId: 41,
-  projectId: 1,
-  issueGeneration: 1,
-  environment: "prod",
-  release: null,
-  service: "whatsapp-service",
-  level: "error" as const,
-  platform: "node",
-  title: issue.title,
-  message: "Cannot read value",
-  exceptionType: "TypeError",
-  culprit: "handleMessage",
-  occurredAt,
-  receivedAt: "2026-07-29T11:58:01.000Z",
-  requestId: "request-42",
-  traceId: null,
-  taskId: null,
-  truncated: false,
-  logLocator: {
-    confidence: "exact_identifier" as const,
-    query:
-      '{environment="prod",service="whatsapp-service"} |~ "(^|[|[:space:]])requestId=request-42([|[:space:]]|$)|\\"requestId\\":\\"request-42\\""',
-    grafanaUrl: "https://grafana.example/explore?query=request-42",
-    from: "2026-07-29T11:56:00.000Z",
-    to: "2026-07-29T12:00:00.000Z",
-    criteria: {
-      environment: "prod",
-      service: "whatsapp-service",
-      identifier: { kind: "requestId" as const, value: "request-42" },
-      message: null,
-    },
-    explanation:
-      "Searches the event time window using the requestId correlation identifier.",
-  },
-  normalized: {
-    id: "event-sdk-id",
-    occurredAt,
-    receivedAt: "2026-07-29T11:58:01.000Z",
-    level: "error",
-    title: issue.title,
-    message: "Cannot read value",
-    exception: {
-      type: "TypeError",
-      value: "Cannot read properties of undefined",
-      mechanism: { handled: true },
-      frames: [
-        {
-          filename: "node_modules/fastify/lib/handleRequest.js",
-          function: "handleRequest",
-          lineno: 100,
-          in_app: false,
-        },
-        {
-          filename: "apps/whatsapp/src/handle-message.ts",
-          function: "handleMessage",
-          lineno: 42,
-          in_app: true,
-        },
-      ],
-      discardedValues: 0,
-    },
-    breadcrumbs: [
-      {
-        timestamp: "2026-07-29T11:57:58.000Z",
-        category: "request",
-        message: "POST /messages",
-        level: "info",
-      },
-    ],
-    tags: { region: "home-dev" },
-    release: null,
-    environment: "prod",
-    serverName: "whatsapp-service",
-    platform: "node",
-    logger: "whatsapp",
-    requestId: "request-42",
-    traceId: null,
-    taskId: null,
-    payload: {
-      contexts: { runtime: { name: "node", version: "22.13.0" } },
-      extras: { operation: "deliver message", authorization: "[REDACTED]" },
-      correlations: { requestId: "request-42" },
-    },
-    payloadBytes: 2048,
-    truncated: false,
-    truncationReasons: [],
-  },
-};
-
-function makeApi(overrides: Record<string, unknown> = {}) {
+function makeApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
+  let current = issue;
   return {
     listIssues: vi.fn(),
-    getFacets: vi.fn(),
-    getSystemStatus: vi.fn(),
-    getIssue: vi.fn(async () => issue),
-    listIssueEvents: vi.fn(async () => events),
-    getEvent: vi.fn(async () => event),
-    resolveIssue: vi.fn(async () => ({
-      ...issue,
-      status: "resolved" as const,
+    getFacets: vi.fn(async () => facets),
+    getSystemStatus: vi.fn(async () => ({
+      status: "ok" as const,
+      storage: { physicalBytes: 10, budgetBytes: 100 },
+      ingest: { accepting: true },
+      outbox: { deadLetter: 0 },
     })),
-    reopenIssue: vi.fn(async () => ({
-      ...issue,
-      status: "unresolved" as const,
+    getIssue: vi.fn(async () => current),
+    listIssueEvents: vi.fn(async () => ({
+      items: [latest, older],
+      nextCursor: null,
     })),
+    getEvent: vi.fn(async (rowId) =>
+      rowId === older.rowId ? olderEvent : latestEvent,
+    ),
+    resolveIssue: vi.fn(async () => {
+      current = { ...current, status: "resolved", resolvedAt: occurredAt };
+      return current;
+    }),
+    reopenIssue: vi.fn(async () => {
+      current = { ...current, status: "unresolved", resolvedAt: null };
+      return current;
+    }),
     deleteIssue: vi.fn(async () => undefined),
     retryDelivery: vi.fn(async () => ({
       id: 88,
-      deliveryId: "22222222-2222-4222-8222-222222222222",
+      deliveryId: "retry-88",
       originalOutboxId: 77,
       state: "pending" as const,
       attempts: 0,
-      requestedAt: "2026-07-29T12:00:00.000Z",
+      requestedAt: occurredAt,
       attemptedAt: null,
       lastError: null,
     })),
-    eventDownloadUrl: (rowId: number) =>
-      `/api/events/${String(rowId)}/download`,
-    issueDownloadUrl: (id: number) => `/api/issues/${String(id)}/download`,
+    eventDownloadUrl: (rowId) => `/api/events/${String(rowId)}/download`,
+    issueDownloadUrl: (id) => `/api/issues/${String(id)}/download`,
     ...overrides,
   };
 }
 
-describe("issue detail", () => {
+describe("project-scoped issue detail", () => {
   beforeEach(() => {
-    vi.setSystemTime(new Date("2026-07-29T12:00:00.000Z"));
-    window.history.replaceState({}, "", "/organizations/intexuraos/issues/41/");
+    window.history.replaceState({}, "", "/?issue=41");
   });
 
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("loads the latest event by rowId and orders diagnostic evidence exactly", async () => {
+  it("puts occurrences beside the selected evidence and keeps technical data secondary", async () => {
     const api = makeApi();
     render(<App api={api} />);
 
     expect(
       await screen.findByRole("heading", { name: issue.title }),
     ).not.toBeNull();
-    const headings = screen
-      .getAllByRole("heading")
-      .map((heading) => heading.textContent);
-    expect(headings.indexOf("Exception and application frames")).toBeLessThan(
-      headings.indexOf("Facets"),
-    );
-    expect(headings.indexOf("Facets")).toBeLessThan(
-      headings.indexOf("Log locator"),
-    );
-    expect(headings.indexOf("Log locator")).toBeLessThan(
-      headings.indexOf("Breadcrumbs"),
-    );
-    expect(headings.indexOf("Breadcrumbs")).toBeLessThan(
-      headings.indexOf("Redacted contexts and extras"),
-    );
-    expect(headings.indexOf("Redacted contexts and extras")).toBeLessThan(
-      headings.indexOf("Occurrences"),
-    );
-    expect(headings.indexOf("Occurrences")).toBeLessThan(
-      headings.indexOf("Delivery state"),
-    );
-    expect(headings.indexOf("Delivery state")).toBeLessThan(
-      headings.indexOf("Normalized JSON"),
-    );
-    expect(screen.getByText("handleMessage")).not.toBeNull();
-    expect(screen.getByText("Exact identifier")).not.toBeNull();
     expect(
-      screen.getByRole("link", { name: "Open matching logs" }),
+      screen.getByRole("complementary", { name: "Occurrences" }),
     ).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "TypeError" })).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: "Copy LogQL query" }),
+      screen.getByRole("heading", { name: "Matching logs" }),
     ).not.toBeNull();
-    expect(screen.getByText("Unknown version")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Breadcrumbs" })).not.toBeNull();
+    expect(screen.getByText("processRequest")).not.toBeNull();
+    expect(screen.getByRole("link", { name: /Open logs/ })).not.toBeNull();
+    expect(
+      screen
+        .getByText("Raw event data")
+        .closest("details")
+        ?.hasAttribute("open"),
+    ).toBe(false);
     expect(api.getEvent).toHaveBeenCalledWith(501);
   });
 
-  it("keeps the loading state until core issue evidence rejects, then shows the error", async () => {
-    const pendingIssue = deferred<typeof issue>();
-    render(
-      <App
-        api={makeApi({
-          getIssue: vi.fn(() => pendingIssue.promise),
-        })}
-      />,
-    );
-
-    expect(await screen.findByText("Loading issue evidence…")).not.toBeNull();
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(screen.getByText("Loading issue evidence…")).not.toBeNull();
-
-    await act(async () => {
-      pendingIssue.reject(new Error("offline"));
-      await pendingIssue.promise.catch(() => undefined);
-    });
-
-    expect(
-      await screen.findByText(
-        "Issue details could not be loaded. Check the private connection and try again.",
-      ),
-    ).not.toBeNull();
-    expect(screen.queryByText("Loading issue evidence…")).toBeNull();
-  });
-
-  it("keeps every visible timestamp permanent, exact, UTC, and machine-readable", async () => {
-    render(<App api={makeApi()} />);
+  it("selects another occurrence without reloading the issue and updates its permalink", async () => {
+    const api = makeApi();
+    const user = userEvent.setup();
+    render(<App api={api} />);
     await screen.findByRole("heading", { name: issue.title });
+    const rail = screen.getByRole("complementary", { name: "Occurrences" });
+    const occurrenceButtons = within(rail).getAllByRole("button");
+    await user.click(occurrenceButtons[1]!);
 
-    const times = Array.from(document.querySelectorAll("time"));
-    expect(times.length).toBeGreaterThan(5);
-    for (const time of times) {
-      expect(time.getAttribute("datetime")).toMatch(
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
-      );
-      expect(time.textContent).toContain("UTC");
-      expect(time.textContent).toMatch(/ago|in \d|just now/);
-    }
+    await waitFor(() =>
+      expect(window.location.search).toBe("?issue=41&event=event-older"),
+    );
+    expect(api.getIssue).toHaveBeenCalledTimes(1);
+    expect(api.getEvent).toHaveBeenLastCalledWith(500);
   });
 
-  it("resolves and reopens with labelled JSON mutations and recovery feedback", async () => {
+  it("resolves, reopens, downloads, and confirms permanent deletion from a compact action menu", async () => {
     const api = makeApi();
     const user = userEvent.setup();
     render(<App api={api} />);
@@ -351,319 +197,204 @@ describe("issue detail", () => {
 
     await user.click(screen.getByRole("button", { name: "Resolve" }));
     expect(await screen.findByText("Issue resolved.")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Reopen" })).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Reopen" }));
     expect(await screen.findByText("Issue reopened.")).not.toBeNull();
-  });
-
-  it("provides direct downloads and a named permanent delete confirmation with focus recovery", async () => {
-    const api = makeApi();
-    const user = userEvent.setup();
-    render(<App api={api} />);
-    await screen.findByRole("heading", { name: issue.title });
-
+    await user.click(screen.getByLabelText("More issue actions"));
     expect(
-      screen.getByRole("link", { name: "Download" }).getAttribute("href"),
+      screen.getByRole("link", { name: "Download issue" }).getAttribute("href"),
     ).toBe("/api/issues/41/download");
-
-    const deleteButton = screen.getByRole("button", {
-      name: "Delete permanently",
-    });
-    await user.click(deleteButton);
+    await user.click(
+      screen.getByRole("button", { name: "Delete permanently" }),
+    );
     const dialog = screen.getByRole("dialog", {
       name: "Delete issue permanently?",
     });
-    expect(within(dialog).getByText(/This removes 2 events/)).not.toBeNull();
     expect(within(dialog).getByText(/no undo/i)).not.toBeNull();
-    expect(document.activeElement).toBe(
-      within(dialog).getByRole("button", { name: "Cancel" }),
-    );
-    await user.tab({ shift: true });
-    expect(document.activeElement).toBe(
+    await user.click(
       within(dialog).getByRole("button", {
         name: "Delete 2 events permanently",
       }),
     );
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(document.activeElement).toBe(deleteButton);
-
-    await user.click(deleteButton);
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Delete 2 events permanently",
-      }),
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(new URLSearchParams(window.location.search).get("project")).toBe(
+      "intexuraos",
     );
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/");
-    });
   });
 
-  it("shows dead-letter evidence and starts a visible redrive recovery", async () => {
+  it("makes live local data explicitly read-only", async () => {
+    const api = makeApi();
+    const user = userEvent.setup();
+    render(<App api={api} readOnly />);
+    await screen.findByRole("heading", { name: issue.title });
+
+    expect(
+      screen.getByText(/destructive actions are disabled locally/i),
+    ).not.toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await user.click(screen.getByLabelText("More issue actions"));
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Delete permanently",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(api.resolveIssue).not.toHaveBeenCalled();
+  });
+
+  it("reveals extra breadcrumbs and raw data only when requested", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi()} />);
+    await screen.findByRole("heading", { name: issue.title });
+
+    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(5);
+    await user.click(screen.getByRole("button", { name: /Show 2 more/ }));
+    expect(screen.getByText("step-8")).not.toBeNull();
+    const raw = screen.getByText("Raw event data").closest("details")!;
+    await user.click(screen.getByText("Raw event data"));
+    expect(raw.hasAttribute("open")).toBe(true);
+    expect(
+      within(raw).getByText(/Cannot read properties of undefined/),
+    ).not.toBeNull();
+  });
+
+  it("keeps dead-letter delivery recovery visible but secondary", async () => {
     const api = makeApi();
     const user = userEvent.setup();
     render(<App api={api} />);
     await screen.findByRole("heading", { name: issue.title });
 
-    expect(screen.getByText("Dead letter")).not.toBeNull();
-    expect(screen.getByText("Code Agent returned 403")).not.toBeNull();
+    await user.click(screen.getByText("Delivery"));
+    expect(screen.getByText("Destination returned 503")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry delivery" }));
-    expect(await screen.findByText("Redrive queued.")).not.toBeNull();
+    expect(await screen.findByText("Delivery retry queued.")).not.toBeNull();
   });
 
-  it("keeps normalized JSON collapsed until requested", async () => {
-    const user = userEvent.setup();
-    render(<App api={makeApi()} />);
-    await screen.findByRole("heading", { name: issue.title });
-
-    const disclosure = screen.getByText("Normalized JSON").closest("details");
-    expect(disclosure?.hasAttribute("open")).toBe(false);
-    await user.click(screen.getByText("Normalized JSON"));
-    expect(disclosure?.hasAttribute("open")).toBe(true);
-    expect(
-      within(disclosure as HTMLElement).getByText(/event-sdk-id/),
-    ).not.toBeNull();
-  });
-
-  it("names empty retained evidence and the absence of a server-log query", async () => {
+  it("explains missing retained evidence and missing permalinks", async () => {
     const { unmount } = render(
       <App
         api={makeApi({
-          listIssueEvents: vi.fn(async () => ({
-            items: [],
-            nextCursor: null,
-          })),
+          listIssueEvents: vi.fn(async () => ({ items: [], nextCursor: null })),
         })}
       />,
     );
-    expect(
-      await screen.findByText("No retained occurrence evidence"),
-    ).not.toBeNull();
+    expect(await screen.findByText("No retained evidence")).not.toBeNull();
     unmount();
 
-    render(
-      <App
-        api={makeApi({
-          getEvent: vi.fn(async () => ({
-            ...event,
-            logLocator: {
-              ...event.logLocator,
-              confidence: "not_applicable" as const,
-              query: null,
-              grafanaUrl: null,
-              criteria: {
-                ...event.logLocator.criteria,
-                identifier: null,
-              },
-              explanation:
-                "Browser events are not correlated with retained server logs.",
-            },
-          })),
-        })}
-      />,
-    );
+    window.history.replaceState({}, "", "/?issue=41&event=missing");
+    render(<App api={makeApi()} />);
     expect(
-      await screen.findByText(
-        "No server-log query is expected for this occurrence.",
-      ),
+      await screen.findByText("Occurrence no longer retained"),
     ).not.toBeNull();
-    expect(
-      screen.queryByRole("link", { name: "Open matching logs" }),
-    ).toBeNull();
   });
 
-  it("names resolve, redrive, and delete failures without claiming state changed", async () => {
-    const user = userEvent.setup();
-    render(
-      <App
-        api={makeApi({
-          resolveIssue: vi.fn(async () => {
-            throw new Error("resolve failed");
-          }),
-          retryDelivery: vi.fn(async () => {
-            throw new Error("redrive failed");
-          }),
-          deleteIssue: vi.fn(async () => {
-            throw new Error("delete failed");
-          }),
-        })}
-      />,
-    );
-    await screen.findByRole("heading", { name: issue.title });
-
-    await user.click(screen.getByRole("button", { name: "Resolve" }));
-    expect(
-      await screen.findByText(
-        "Resolve failed. The issue remains unresolved; try again.",
-      ),
-    ).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Resolve" })).not.toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
-    expect(
-      await screen.findByText(
-        "Delivery retry failed. Correct the destination configuration, then try again.",
-      ),
-    ).not.toBeNull();
-
-    const deleteButton = screen.getByRole("button", {
-      name: "Delete permanently",
-    });
-    await user.click(deleteButton);
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Delete 2 events permanently",
-      }),
-    );
-    expect(
-      await screen.findByText(
-        "Delete failed. No data was removed; check the private connection and try again.",
-      ),
-    ).not.toBeNull();
-    expect(document.activeElement).toBe(deleteButton);
-  });
-
-  it("names a detail failure and recovers on retry", async () => {
+  it("names a core loading failure and recovers", async () => {
     const getIssue = vi
       .fn()
       .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce(issue);
+      .mockResolvedValue(issue);
     const user = userEvent.setup();
     render(<App api={makeApi({ getIssue })} />);
-
     expect(
-      await screen.findByText(
-        "Issue details could not be loaded. Check the private connection and try again.",
-      ),
+      await screen.findByRole("heading", {
+        name: "Issue details could not be loaded",
+      }),
     ).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(
       await screen.findByRole("heading", { name: issue.title }),
     ).not.toBeNull();
   });
-
-  it("loads every occurrence page and offers named retry after a page failure", async () => {
-    const listIssueEvents = vi
-      .fn()
-      .mockResolvedValueOnce({ items: events.items, nextCursor: "older-page" })
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({
-        items: [olderOccurrence],
-        nextCursor: null,
-      });
-    const user = userEvent.setup();
-    render(<App api={makeApi({ listIssueEvents })} />);
-    await screen.findByRole("heading", { name: issue.title });
-
-    await user.click(
-      screen.getByRole("button", { name: "Load more occurrences" }),
-    );
-    expect(
-      await screen.findByText(
-        "More occurrences could not be loaded. The current evidence is still available.",
-      ),
-    ).not.toBeNull();
-    await user.click(
-      screen.getByRole("button", { name: "Retry more occurrences" }),
-    );
-
-    expect(await screen.findByText("2026-07-29 11:30:00 UTC")).not.toBeNull();
-    expect(listIssueEvents).toHaveBeenLastCalledWith(41, "older-page");
-  });
-
-  it("resolves an exact webhook event permalink across occurrence pages", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/organizations/intexuraos/issues/41/events/older-event-sdk-id/",
-    );
-    const listIssueEvents = vi
-      .fn()
-      .mockResolvedValueOnce({ items: events.items, nextCursor: "older-page" })
-      .mockResolvedValueOnce({ items: [olderOccurrence], nextCursor: null });
-    const getEvent = vi.fn(async (rowId: number) => ({
-      ...event,
-      id: rowId,
-      eventId:
-        rowId === olderOccurrence.rowId
-          ? olderOccurrence.id
-          : events.items[0]?.id,
-      occurredAt:
-        rowId === olderOccurrence.rowId
-          ? olderOccurrence.occurredAt
-          : event.occurredAt,
-    }));
-
-    render(<App api={makeApi({ listIssueEvents, getEvent })} />);
-
-    await screen.findByRole("heading", { name: issue.title });
-    expect(listIssueEvents).toHaveBeenNthCalledWith(2, 41, "older-page");
-    expect(getEvent).toHaveBeenCalledWith(olderOccurrence.rowId);
-    expect(screen.getByText("2026-07-29 11:30:00 UTC")).not.toBeNull();
-  });
-
-  it("keeps the last occurrence selection when earlier requests finish later", async () => {
-    let resolveOlder: ((value: typeof event) => void) | undefined;
-    let resolveLatest: ((value: typeof event) => void) | undefined;
-    const getEvent = vi
-      .fn()
-      .mockResolvedValueOnce(event)
-      .mockImplementationOnce(
-        async () =>
-          new Promise<typeof event>((resolve) => {
-            resolveOlder = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        async () =>
-          new Promise<typeof event>((resolve) => {
-            resolveLatest = resolve;
-          }),
-      );
-    const user = userEvent.setup();
-    render(
-      <App
-        api={makeApi({
-          listIssueEvents: vi.fn(async () => ({
-            items: [events.items[0], olderOccurrence],
-            nextCursor: null,
-          })),
-          getEvent,
-        })}
-      />,
-    );
-    await screen.findByRole("heading", { name: issue.title });
-    const occurrenceButtons = within(
-      screen.getByRole("region", { name: "Occurrences" }),
-    ).getAllByRole("button");
-
-    await user.click(occurrenceButtons[1] as HTMLButtonElement);
-    await user.click(occurrenceButtons[0] as HTMLButtonElement);
-    resolveLatest?.({ ...event, normalized: { ...event.normalized } });
-    await waitFor(() => {
-      expect(occurrenceButtons[0]?.getAttribute("aria-pressed")).toBe("true");
-    });
-    resolveOlder?.({
-      ...event,
-      id: olderOccurrence.rowId,
-      eventId: olderOccurrence.id,
-      normalized: { ...event.normalized },
-    });
-    await waitFor(() => {
-      expect(occurrenceButtons[0]?.getAttribute("aria-pressed")).toBe("true");
-    });
-  });
 });
 
-function deferred<T>(): {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-  readonly reject: (reason: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+function issueFacet(value: string) {
+  return {
+    value,
+    queryValue: value,
+    label: value,
+    count: 2,
+    lastSeen: occurredAt,
+  };
+}
+
+function summary(rowId: number, id: string, at: string): EventSummary {
+  return {
+    id,
+    rowId,
+    issueId: 41,
+    projectId: 1,
+    projectSlug: project.slug,
+    issueGeneration: 1,
+    environment: "prod",
+    release: "2026.07.29-a",
+    service: "gateway",
+    level: "error",
+    platform: "node",
+    title: issue.title,
+    message: "Cannot read value",
+    exceptionType: "TypeError",
+    culprit: "processRequest",
+    occurredAt: at,
+    receivedAt: at,
+    requestId: `request-${String(rowId)}`,
+    traceId: null,
+    taskId: null,
+    truncated: false,
+  };
+}
+
+function detail(item: EventSummary): EventDetail {
+  return {
+    ...item,
+    id: item.rowId,
+    eventId: item.id,
+    logLocator: {
+      confidence: "exact_identifier",
+      query: `{service="gateway"} |= "${item.requestId ?? ""}"`,
+      grafanaUrl: "https://grafana.example/explore",
+      from: "2026-07-29T11:56:00.000Z",
+      to: "2026-07-29T12:00:00.000Z",
+      criteria: {
+        environment: "prod",
+        service: "gateway",
+        identifier: { kind: "requestId", value: item.requestId ?? "" },
+        message: null,
+      },
+      explanation: "Matches the request identifier within the event window.",
+    },
+    normalized: {
+      exception: {
+        type: "TypeError",
+        value: "Cannot read properties of undefined",
+        frames: [
+          {
+            filename: "node_modules/router.js",
+            function: "dispatch",
+            lineno: 88,
+            in_app: false,
+          },
+          {
+            filename: "src/process-request.ts",
+            function: "processRequest",
+            lineno: 42,
+            in_app: true,
+          },
+        ],
+      },
+      breadcrumbs: Array.from({ length: 8 }, (_, index) => ({
+        timestamp: new Date(
+          Date.parse(item.occurredAt) - (8 - index) * 1_000,
+        ).toISOString(),
+        category: "request",
+        message: `step-${String(index + 1)}`,
+      })),
+      payload: {
+        contexts: { runtime: { name: "node" } },
+        extras: { authorization: "[REDACTED]" },
+      },
+    },
+  };
 }

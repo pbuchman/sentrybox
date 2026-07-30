@@ -3,10 +3,11 @@ import {
   useId,
   useRef,
   useState,
-  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { Facets, FacetValue } from "../api/client.js";
+import { ISSUE_SORT_OPTIONS, issueSort } from "../issue-sort.js";
+import { Icon } from "./icons.js";
 import { useMedia } from "./use-media.js";
 
 interface FilterBarProps {
@@ -16,18 +17,14 @@ interface FilterBarProps {
   readonly onClear: () => void;
 }
 
-type MultiFilter = "project" | "release" | "environment" | "service" | "level";
+type MultiFilter = "release" | "environment" | "service" | "level";
 
-const MULTI_FILTERS: readonly {
+const FILTER_GROUPS: readonly {
   readonly key: MultiFilter;
   readonly label: string;
-  readonly facet: keyof Pick<
-    Facets,
-    "project" | "release" | "environment" | "service" | "level"
-  >;
+  readonly facet: MultiFilter;
 }[] = [
-  { key: "project", label: "Project", facet: "project" },
-  { key: "release", label: "Version", facet: "release" },
+  { key: "release", label: "Release", facet: "release" },
   { key: "environment", label: "Environment", facet: "environment" },
   { key: "service", label: "Service", facet: "service" },
   { key: "level", label: "Level", facet: "level" },
@@ -39,290 +36,277 @@ export function FilterBar({
   onApply,
   onClear,
 }: FilterBarProps) {
-  const mobile = useMedia("(max-width: 700px)");
+  const mobile = useMedia("(max-width: 760px)");
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(() => filterDraft(filters));
+  const [draftFilters, setDraftFilters] = useState(
+    () => new URLSearchParams(filters),
+  );
+  const [query, setQuery] = useState(filters.get("query") ?? "");
   const openButton = useRef<HTMLButtonElement>(null);
-  const firstFilter = useRef<HTMLSelectElement>(null);
-  const sheetId = useId();
+  const panel = useRef<HTMLElement>(null);
+  const panelId = useId();
+
+  const appliedQuery = filters.get("query") ?? "";
 
   useEffect(() => {
-    setDraft(filterDraft(filters));
-  }, [filters]);
+    setQuery(appliedQuery);
+  }, [appliedQuery]);
+
+  useEffect(() => {
+    const current = filters.get("query") ?? "";
+    if (query.trim() === current) return;
+    const timeout = window.setTimeout(() => {
+      const next = cleanCursor(new URLSearchParams(filters));
+      const value = query.trim();
+      if (value.length === 0) next.delete("query");
+      else next.set("query", value);
+      onApply(next);
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [filters, onApply, query]);
 
   useEffect(() => {
     if (!open) return;
-    firstFilter.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent): void => {
+    const close = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         setOpen(false);
         window.setTimeout(() => openButton.current?.focus(), 0);
       }
     };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("keydown", closeOnEscape);
-    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
   }, [open]);
 
-  const submit = (event: FormEvent): void => {
-    event.preventDefault();
-    const next = new URLSearchParams();
-    for (const { key } of MULTI_FILTERS) {
-      for (const value of draft[key]) next.append(key, value);
-    }
-    if (draft.status.length > 0) next.append("status", draft.status);
-    const search = draft.query.trim();
-    if (search.length > 0) next.set("query", search);
-    const from = utcInputToIso(draft.from);
-    const to = utcInputToIso(draft.to);
-    if (from !== null) next.set("from", from);
-    if (to !== null) next.set("to", to);
+  useEffect(() => {
+    if (!open) return;
+    panel.current?.querySelector<HTMLElement>("[data-filter-close]")?.focus();
+    if (!mobile) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobile, open]);
+
+  const update = (change: (next: URLSearchParams) => void): void => {
+    const next = cleanCursor(new URLSearchParams(filters));
+    change(next);
     onApply(next);
-    setOpen(false);
-    if (mobile) window.setTimeout(() => openButton.current?.focus(), 0);
   };
 
-  const form = (
-    <form className="filter-form" role="search" onSubmit={submit}>
-      <p className="sr-only" id={`${sheetId}-multi-help`}>
-        Hold Control or Command to select more than one value in a filter.
-      </p>
-      <div className="filter-fields">
-        {MULTI_FILTERS.map(({ key, label, facet }, index) => (
-          <FacetSelect
-            key={key}
-            label={label}
-            values={facets[facet]}
-            selected={draft[key]}
-            {...(index === 0 ? { inputRef: firstFilter } : {})}
-            helpId={`${sheetId}-multi-help`}
-            onChange={(values) => {
-              setDraft((current) => ({ ...current, [key]: values }));
-            }}
-          />
-        ))}
-        <label className="filter-field">
-          <span>Status</span>
-          <select
-            aria-label="Status"
-            value={draft.status}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                status: event.target.value,
-              }));
-            }}
-          >
-            <option value="">All statuses</option>
-            <option value="unresolved">Unresolved</option>
-            <option value="resolved">Resolved</option>
-          </select>
-        </label>
-        <label className="filter-field filter-search">
-          <span>Search</span>
-          <input
-            aria-label="Search"
-            type="search"
-            value={draft.query}
-            placeholder="Title, message, exception"
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                query: event.target.value,
-              }));
-            }}
-          />
-        </label>
-        <label className="filter-field">
-          <span>From (UTC)</span>
-          <input
-            aria-label="From (UTC)"
-            type="datetime-local"
-            step="0.001"
-            value={draft.from}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                from: event.target.value,
-              }));
-            }}
-          />
-        </label>
-        <label className="filter-field">
-          <span>To (UTC)</span>
-          <input
-            aria-label="To (UTC)"
-            type="datetime-local"
-            step="0.001"
-            value={draft.to}
-            onChange={(event) => {
-              setDraft((current) => ({
-                ...current,
-                to: event.target.value,
-              }));
-            }}
-          />
-        </label>
-      </div>
-      <div className="filter-actions">
-        <button className="button button-primary" type="submit">
-          Apply filters
-        </button>
-        <button className="button button-quiet" type="button" onClick={onClear}>
-          Reset filters
-        </button>
-        {mobile ? (
-          <button
-            className="button button-quiet"
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              window.setTimeout(() => openButton.current?.focus(), 0);
-            }}
-          >
-            Cancel
-          </button>
-        ) : null}
-      </div>
-    </form>
-  );
+  const updateDraft = (change: (next: URLSearchParams) => void): void => {
+    setDraftFilters((current) => {
+      const next = cleanCursor(new URLSearchParams(current));
+      change(next);
+      return next;
+    });
+  };
 
-  if (!mobile) return <div className="filter-bar">{form}</div>;
+  const closeFilters = (): void => {
+    setOpen(false);
+    window.setTimeout(() => openButton.current?.focus(), 0);
+  };
+
+  const status = filters.get("status") ?? "unresolved";
+  const sort = issueSort(filters.get("sort"));
+  const activeFilters = activeFilterChips(filters, facets);
+
   return (
-    <>
-      <button
-        ref={openButton}
-        className="button filter-open"
-        type="button"
-        aria-expanded={open}
-        aria-controls={sheetId}
-        onClick={() => setOpen(true)}
-      >
-        Open filters
-      </button>
+    <div className="issue-controls">
+      <label className="issue-search">
+        <Icon name="search" size={22} />
+        <span className="sr-only">Search issues</span>
+        <input
+          aria-label="Search issues"
+          type="search"
+          placeholder="Search issues"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      <div className="control-toolbar">
+        <div className="status-tabs" aria-label="Issue status">
+          {[
+            ["unresolved", "Open"],
+            ["resolved", "Resolved"],
+            ["all", "All"],
+          ].map(([value, label]) => (
+            <button
+              key={label}
+              className={status === value ? "is-active" : undefined}
+              type="button"
+              aria-pressed={status === value}
+              onClick={() =>
+                update((next) => {
+                  next.set("status", value ?? "unresolved");
+                })
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="toolbar-actions">
+          <button
+            ref={openButton}
+            className="button filter-trigger"
+            type="button"
+            aria-expanded={open}
+            aria-controls={panelId}
+            onClick={() => {
+              if (open) closeFilters();
+              else {
+                setDraftFilters(new URLSearchParams(filters));
+                setOpen(true);
+              }
+            }}
+          >
+            <Icon name="filter" size={20} />
+            Filters
+            {activeFilters.length === 0 ? null : (
+              <span className="filter-count">
+                {String(activeFilters.length)}
+              </span>
+            )}
+          </button>
+          <label className="sort-control">
+            <span className="sr-only">Sort issues</span>
+            <select
+              aria-label="Sort issues"
+              value={sort}
+              onChange={(event) =>
+                update((next) => {
+                  if (event.target.value === "last-desc") next.delete("sort");
+                  else next.set("sort", event.target.value);
+                })
+              }
+            >
+              {ISSUE_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+      {activeFilters.length === 0 ? null : (
+        <div className="active-filter-row" aria-label="Active filters">
+          <div className="active-filter-chips">
+            {activeFilters.map((filter) => (
+              <button
+                key={`${filter.key}-${filter.value}`}
+                type="button"
+                onClick={() =>
+                  update((next) =>
+                    removeQueryValue(next, filter.key, filter.value),
+                  )
+                }
+              >
+                {filter.label}
+                <Icon name="close" size={16} />
+              </button>
+            ))}
+          </div>
+          <button className="clear-filter-link" type="button" onClick={onClear}>
+            Clear all
+          </button>
+        </div>
+      )}
       {open ? (
-        <div className="sheet-backdrop">
+        <div
+          className={mobile ? "filter-backdrop" : "filter-popover-anchor"}
+          onMouseDown={(event) => {
+            if (mobile && event.target === event.currentTarget) closeFilters();
+          }}
+        >
           <section
-            className="filter-sheet"
-            id={sheetId}
+            ref={panel}
+            className={mobile ? "filter-panel filter-sheet" : "filter-panel"}
+            id={panelId}
             role="dialog"
-            aria-modal="true"
-            aria-labelledby={`${sheetId}-title`}
+            aria-modal={mobile ? "true" : undefined}
+            aria-labelledby={`${panelId}-title`}
             onKeyDown={trapFocus}
           >
-            <header className="sheet-header">
-              <div>
-                <p className="eyebrow">Issue scope</p>
-                <h2 id={`${sheetId}-title`}>Filter issues</h2>
-              </div>
+            <header className="filter-panel-header">
+              <h2 id={`${panelId}-title`}>Filters</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close filters"
+                data-filter-close
+                onClick={() => {
+                  closeFilters();
+                }}
+              >
+                <Icon name="close" size={22} />
+              </button>
+            </header>
+            <div className="filter-groups">
+              {FILTER_GROUPS.map((group) => (
+                <FilterGroup
+                  key={group.key}
+                  label={group.label}
+                  name={group.key}
+                  options={facets[group.facet]}
+                  selected={draftFilters.getAll(group.key)}
+                  onToggle={(value) =>
+                    updateDraft((next) =>
+                      toggleQueryValue(next, group.key, value),
+                    )
+                  }
+                />
+              ))}
+              <TimeRange
+                filters={draftFilters}
+                onChange={(from, to) =>
+                  updateDraft((next) => {
+                    if (from === null) next.delete("from");
+                    else next.set("from", from);
+                    if (to === null) next.delete("to");
+                    else next.set("to", to);
+                  })
+                }
+              />
+            </div>
+            <footer className="filter-panel-footer">
               <button
                 className="button button-quiet"
                 type="button"
+                onClick={() =>
+                  updateDraft((next) => {
+                    for (const group of FILTER_GROUPS) next.delete(group.key);
+                    next.delete("from");
+                    next.delete("to");
+                  })
+                }
+              >
+                Clear
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
                 onClick={() => {
-                  setOpen(false);
-                  window.setTimeout(() => openButton.current?.focus(), 0);
+                  onApply(cleanCursor(new URLSearchParams(draftFilters)));
+                  closeFilters();
                 }}
               >
-                Close filters
+                Show issues
               </button>
-            </header>
-            {form}
+            </footer>
           </section>
         </div>
       ) : null}
-    </>
+    </div>
   );
-}
-
-interface FacetSelectProps {
-  readonly label: string;
-  readonly values: readonly FacetValue[];
-  readonly selected: readonly string[];
-  readonly helpId: string;
-  readonly inputRef?: React.RefObject<HTMLSelectElement | null>;
-  readonly onChange: (values: readonly string[]) => void;
-}
-
-function FacetSelect({
-  label,
-  values,
-  selected,
-  helpId,
-  inputRef,
-  onChange,
-}: FacetSelectProps) {
-  return (
-    <label className="filter-field">
-      <span>{label}</span>
-      <select
-        ref={inputRef}
-        aria-label={label}
-        aria-describedby={helpId}
-        multiple
-        value={[...selected]}
-        onChange={(event) => {
-          onChange(
-            Array.from(event.target.selectedOptions, (option) => option.value),
-          );
-        }}
-      >
-        {values.map((value) => (
-          <option key={value.queryValue} value={value.queryValue}>
-            {facetLabel(value)} ({String(value.count)})
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function facetLabel(value: FacetValue): string {
-  return value.label ?? value.value ?? "Unknown";
-}
-
-interface FilterDraft {
-  readonly project: readonly string[];
-  readonly release: readonly string[];
-  readonly environment: readonly string[];
-  readonly service: readonly string[];
-  readonly level: readonly string[];
-  readonly status: string;
-  readonly query: string;
-  readonly from: string;
-  readonly to: string;
-}
-
-function filterDraft(filters: URLSearchParams): FilterDraft {
-  return {
-    project: filters.getAll("project"),
-    release: filters.getAll("release"),
-    environment: filters.getAll("environment"),
-    service: filters.getAll("service"),
-    level: filters.getAll("level"),
-    status: filters.get("status") ?? "unresolved",
-    query: filters.get("query") ?? "",
-    from: isoToUtcInput(filters.get("from")),
-    to: isoToUtcInput(filters.get("to")),
-  };
-}
-
-function isoToUtcInput(value: string | null): string {
-  if (value === null || !Number.isFinite(Date.parse(value))) return "";
-  return new Date(value).toISOString().slice(0, -1);
-}
-
-function utcInputToIso(value: string): string | null {
-  if (value.length === 0) return null;
-  const parsed = new Date(`${value}Z`);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
 
 function trapFocus(event: ReactKeyboardEvent<HTMLElement>): void {
   if (event.key !== "Tab") return;
   const controls = Array.from(
     event.currentTarget.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
     ),
   );
   const first = controls[0];
@@ -335,4 +319,201 @@ function trapFocus(event: ReactKeyboardEvent<HTMLElement>): void {
     event.preventDefault();
     first.focus();
   }
+}
+
+function FilterGroup({
+  label,
+  name,
+  options,
+  selected,
+  onToggle,
+}: {
+  readonly label: string;
+  readonly name: MultiFilter;
+  readonly options: readonly FacetValue[];
+  readonly selected: readonly string[];
+  readonly onToggle: (value: string) => void;
+}) {
+  return (
+    <fieldset className="filter-group">
+      <legend>{label}</legend>
+      {options.length === 0 ? (
+        <p>No values in this project</p>
+      ) : (
+        <div className="filter-options">
+          {options.map((option) => (
+            <label key={option.queryValue}>
+              <input
+                type="checkbox"
+                name={name}
+                value={option.queryValue}
+                checked={selected.includes(option.queryValue)}
+                onChange={() => onToggle(option.queryValue)}
+              />
+              <span>{facetLabel(option)}</span>
+              <span className="option-count">{String(option.count)}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+function TimeRange({
+  filters,
+  onChange,
+}: {
+  readonly filters: URLSearchParams;
+  readonly onChange: (from: string | null, to: string | null) => void;
+}) {
+  const range = rangeValue(filters.get("from"), filters.get("to"));
+  return (
+    <fieldset className="filter-group time-range-group">
+      <legend>Time range</legend>
+      <label className="filter-select-row">
+        <span className="sr-only">Time range</span>
+        <select
+          aria-label="Time range"
+          value={range}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "any") onChange(null, null);
+            else if (value !== "custom") {
+              const days = value === "24h" ? 1 : value === "7d" ? 7 : 30;
+              onChange(
+                new Date(Date.now() - days * 86_400_000).toISOString(),
+                null,
+              );
+            }
+          }}
+        >
+          <option value="any">All retained</option>
+          <option value="24h">Past 24 hours</option>
+          <option value="7d">Past 7 days</option>
+          <option value="30d">Past 30 days</option>
+          {range === "custom" ? (
+            <option value="custom">Custom range</option>
+          ) : null}
+        </select>
+      </label>
+      {range === "custom" ? (
+        <div className="custom-time-range">
+          <label>
+            From (UTC)
+            <input
+              type="datetime-local"
+              value={isoToUtcInput(filters.get("from"))}
+              onChange={(event) =>
+                onChange(utcInputToIso(event.target.value), filters.get("to"))
+              }
+            />
+          </label>
+          <label>
+            To (UTC)
+            <input
+              type="datetime-local"
+              value={isoToUtcInput(filters.get("to"))}
+              onChange={(event) =>
+                onChange(filters.get("from"), utcInputToIso(event.target.value))
+              }
+            />
+          </label>
+        </div>
+      ) : null}
+    </fieldset>
+  );
+}
+
+function activeFilterChips(filters: URLSearchParams, facets: Facets) {
+  const chips: { key: MultiFilter; value: string; label: string }[] = [];
+  for (const group of FILTER_GROUPS) {
+    for (const value of filters.getAll(group.key)) {
+      const option = facets[group.facet].find(
+        (item) => item.queryValue === value,
+      );
+      chips.push({
+        key: group.key,
+        value,
+        label: option === undefined ? value : facetLabel(option),
+      });
+    }
+  }
+  if (filters.has("from") || filters.has("to")) {
+    chips.push({
+      key: "release",
+      value: "__time__",
+      label: timeRangeLabel(filters),
+    });
+  }
+  return chips;
+}
+
+function timeRangeLabel(filters: URLSearchParams): string {
+  const value = rangeValue(filters.get("from"), filters.get("to"));
+  if (value === "24h") return "Past 24 hours";
+  if (value === "7d") return "Past 7 days";
+  if (value === "30d") return "Past 30 days";
+  return "Custom time range";
+}
+
+function rangeValue(from: string | null, to: string | null): string {
+  if (from === null && to === null) return "any";
+  if (from === null || to !== null) return "custom";
+  const difference = Date.now() - Date.parse(from);
+  const day = 86_400_000;
+  if (Math.abs(difference - day) < 60_000) return "24h";
+  if (Math.abs(difference - 7 * day) < 60_000) return "7d";
+  if (Math.abs(difference - 30 * day) < 60_000) return "30d";
+  return "custom";
+}
+
+function facetLabel(value: FacetValue): string {
+  const label = value.label ?? value.value ?? "Unknown";
+  return /^[0-9a-f]{16,}$/iu.test(label) ? label.slice(0, 8) : label;
+}
+
+function toggleQueryValue(
+  next: URLSearchParams,
+  key: string,
+  value: string,
+): void {
+  const values = next.getAll(key);
+  next.delete(key);
+  for (const current of values) {
+    if (current !== value) next.append(key, current);
+  }
+  if (!values.includes(value)) next.append(key, value);
+}
+
+function removeQueryValue(
+  next: URLSearchParams,
+  key: string,
+  value: string,
+): void {
+  if (value === "__time__") {
+    next.delete("from");
+    next.delete("to");
+    return;
+  }
+  const values = next.getAll(key);
+  next.delete(key);
+  for (const current of values)
+    if (current !== value) next.append(key, current);
+}
+
+function cleanCursor(next: URLSearchParams): URLSearchParams {
+  next.delete("cursor");
+  return next;
+}
+
+function isoToUtcInput(value: string | null): string {
+  if (value === null || !Number.isFinite(Date.parse(value))) return "";
+  return new Date(value).toISOString().slice(0, 16);
+}
+
+function utcInputToIso(value: string): string | null {
+  if (value.length === 0) return null;
+  const parsed = new Date(`${value}Z`);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }

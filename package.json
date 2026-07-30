@@ -8,6 +8,8 @@
     "node": ">=22.22.2 <23"
   },
   "scripts": {
+    "dev:web": "pnpm --filter @sentrybox/web dev",
+    "dev:web:fixtures": "VITE_SENTRYBOX_FIXTURES=1 pnpm --filter @sentrybox/web dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "pnpm -r run typecheck",

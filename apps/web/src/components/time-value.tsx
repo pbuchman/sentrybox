@@ -3,9 +3,14 @@ import { useEffect, useState } from "react";
 export interface TimeValueProps {
   readonly value: string;
   readonly className?: string;
+  readonly compact?: boolean;
 }
 
-export function TimeValue({ value, className }: TimeValueProps) {
+export function TimeValue({
+  value,
+  className,
+  compact = false,
+}: TimeValueProps) {
   const [now, setNow] = useState(() => Date.now());
   const canonical = canonicalTime(value);
 
@@ -25,7 +30,9 @@ export function TimeValue({ value, className }: TimeValueProps) {
       title={canonical}
     >
       <span className="time-relative">{relativeTime(canonical, now)}</span>
-      <span className="time-exact">{formatUtc(canonical)}</span>
+      <span className={compact ? "time-exact sr-only" : "time-exact"}>
+        {formatUtc(canonical)}
+      </span>
     </time>
   );
 }

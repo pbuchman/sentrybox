@@ -92,6 +92,34 @@ the current runbooks.
 
 Development requires Node.js `>=22.22.2 <23` and pnpm `10.29.3`.
 
+The fastest frontend loop is fully local and does not require the server or a
+Home Dev deployment:
+
+```bash
+pnpm dev:web:fixtures
+```
+
+Open `http://127.0.0.1:4173`. Fixture mode provides several projects, issues,
+occurrences, delivery failures, and working UI mutations so that project
+selection, filters, sorting, evidence, and destructive confirmations can be
+verified immediately.
+
+To inspect real retained data without rebuilding or deploying the server, use
+the read-only Home Dev proxy:
+
+```bash
+pnpm dev:web
+```
+
+The proxy targets the current reference deployment at
+`https://home-dev.taild6ad57.ts.net:8443` by default. Override it without
+changing source files with `SENTRYBOX_DEV_API_TARGET=https://example:8443`.
+Local proxy mode disables resolve, reopen, delete, and delivery retry actions;
+use fixture mode to exercise them safely.
+
+The repository includes `.node-version` for the pinned local runtime. Run the
+complete verification before publishing a change:
+
 ```bash
 corepack enable
 pnpm install --frozen-lockfile

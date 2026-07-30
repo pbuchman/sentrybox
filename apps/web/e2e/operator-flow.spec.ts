@@ -364,7 +364,7 @@ async function expectReadableContrast(
   expect(ratio).toBeGreaterThanOrEqual(4.5);
 }
 
-test("desktop operator combines filters, inspects evidence, and recovers actions", async ({
+test("desktop operator scopes by project, filters, sorts, and inspects evidence", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -372,47 +372,44 @@ test("desktop operator combines filters, inspects evidence, and recovers actions
   await page.goto("/");
 
   await expect(page.getByRole("table", { name: "Issues" })).toBeVisible();
-  await expect(page.getByText("Shown 1 · Unresolved shown 1")).toBeVisible();
-  await expect(page.getByText("Storage 1.8 / 5 GiB")).toBeVisible();
+  await expect(page.getByText("1 issue")).toBeVisible();
+  await expect(page.getByText("1 failed deliveries")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "IntexuraOS backend" }),
+  ).toHaveAttribute("aria-current", "page");
   await expectReadableContrast(page, ".issue-title");
-  await expectReadableContrast(page, ".issue-facets");
-  expect(
-    await page
-      .locator("time")
-      .evaluateAll((times) =>
-        times.every(
-          (time) =>
-            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(
-              time.getAttribute("datetime") ?? "",
-            ) &&
-            time.textContent?.includes("UTC") === true &&
-            /ago|just now|in \d/u.test(time.textContent),
-        ),
-      ),
-  ).toBe(true);
-  await page.getByLabel("Project").selectOption("intexuraos-backend");
-  await page.getByLabel("Version").selectOption(["~v1:n"]);
-  await page.getByLabel("Environment").selectOption(["prod"]);
+  await page.getByRole("button", { name: "Filters" }).click();
+  const filters = page.getByRole("dialog", { name: "Filters" });
+  await filters.getByRole("checkbox", { name: /Unknown version/ }).check();
+  await filters.getByRole("checkbox", { name: /prod/ }).check();
+  await filters.getByRole("checkbox", { name: /whatsapp-service/ }).check();
+  await filters.getByRole("checkbox", { name: /error/ }).check();
+  await filters.getByRole("button", { name: "Show issues" }).click();
   await page
-    .getByLabel("Service")
-    .selectOption(["~v1:s:d2hhdHNhcHAtc2VydmljZQ"]);
-  await page.getByLabel("Level").selectOption(["error"]);
-  await page.getByLabel("Search").fill("undefined");
-  await page.getByLabel("From (UTC)").fill("2026-07-28T08:30");
-  await page.getByLabel("To (UTC)").fill("2026-07-29T12:00");
-  await page.getByRole("button", { name: "Apply filters" }).click();
-  await expect(page).toHaveURL(
-    /project=intexuraos-backend.*release=%7Ev1%3An.*environment=prod.*service=%7Ev1%3As%3Ad2hhdHNhcHAtc2VydmljZQ.*level=error.*query=undefined.*from=2026-07-28T08%3A30%3A00.000Z.*to=2026-07-29T12%3A00%3A00.000Z/,
-  );
+    .getByRole("searchbox", { name: "Search issues" })
+    .fill("undefined");
+  await page
+    .getByRole("combobox", { name: "Sort issues" })
+    .selectOption("events-desc");
+  await expect(page).toHaveURL(/project=intexuraos-backend/);
+  await expect(page).toHaveURL(/query=undefined/);
+  await expect(page).toHaveURL(/sort=events-desc/);
 
   await page.getByRole("link", { name: listIssue.title }).click();
+  await expect(page).toHaveURL("http://127.0.0.1:4173/?issue=41");
   await expect(
-    page.getByRole("heading", { name: "Exception and application frames" }),
+    page.getByRole("complementary", { name: "Occurrences" }),
   ).toBeVisible();
-  await expect(page.getByText("Exact identifier")).toBeVisible();
-  await expect(page.getByText("Dead letter")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "TypeError", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Matching logs" }),
+  ).toBeVisible();
+  await page.getByText("Delivery", { exact: true }).click();
+  await expect(page.getByText("Code Agent returned 403")).toBeVisible();
   await page.getByRole("button", { name: "Retry delivery" }).click();
-  await expect(page.getByText("Redrive queued.")).toBeVisible();
+  await expect(page.getByText("Delivery retry queued.")).toBeVisible();
   await page.getByRole("button", { name: "Resolve" }).click();
   await expect(page.getByText("Issue resolved.")).toBeVisible();
   await page.getByRole("button", { name: "Reopen" }).click();
@@ -427,20 +424,23 @@ test("webhook event permalink opens the exact retained occurrence", async ({
   await page.goto("/organizations/intexuraos/issues/41/events/event-sdk-id/");
 
   await expect(
-    page.getByRole("heading", { name: "Exception and application frames" }),
+    page.getByRole("heading", { name: "TypeError", exact: true }),
   ).toBeVisible();
   await expect(
     page
-      .getByRole("region", { name: "Occurrences" })
+      .getByRole("complementary", { name: "Occurrences" })
       .getByRole("button")
       .first(),
   ).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("More issue actions").click();
   await page.getByRole("button", { name: "Delete permanently" }).click();
   await page
     .getByRole("dialog", { name: "Delete issue permanently?" })
     .getByRole("button", { name: "Delete 2 events permanently" })
     .click();
-  await expect(page).toHaveURL("http://127.0.0.1:4173/?status=unresolved");
+  await expect(page).toHaveURL(
+    "http://127.0.0.1:4173/?project=intexuraos-backend&status=unresolved",
+  );
 });
 
 test("390px mobile uses an accessible filter sheet and article cards without page overflow", async ({
@@ -455,32 +455,22 @@ test("390px mobile uses an accessible filter sheet and article cards without pag
   await expect(
     page.getByRole("article", { name: listIssue.title }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Open filters" }).click();
-  const sheet = page.getByRole("dialog", { name: "Filter issues" });
-  await expect(sheet).toBeVisible();
-  await expect(sheet.getByLabel("Project")).toBeVisible();
-  await expect(sheet.getByLabel("Project")).toBeFocused();
-  await sheet.getByLabel("Project").press("Shift+Tab");
   await expect(
-    sheet.getByRole("button", { name: "Close filters" }),
-  ).toBeFocused();
-  await sheet.getByRole("button", { name: "Close filters" }).press("Shift+Tab");
-  await expect(sheet.getByRole("button", { name: "Cancel" })).toBeFocused();
-  expect(
-    await sheet
-      .getByRole("button", { name: "Apply filters" })
-      .evaluate((button) =>
-        Number.parseFloat(getComputedStyle(button).transitionDuration),
-      ),
-  ).toBeLessThanOrEqual(0.001);
-  await sheet.getByLabel("Environment").selectOption(["prod"]);
-  await sheet.getByRole("button", { name: "Apply filters" }).click();
+    page.getByRole("combobox", { name: "Active project" }),
+  ).toHaveValue("intexuraos-backend");
+  await page.getByRole("button", { name: "Filters" }).click();
+  const sheet = page.getByRole("dialog", { name: "Filters" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("checkbox", { name: /prod/ })).toBeVisible();
+  await sheet.getByRole("checkbox", { name: /prod/ }).check();
+  await sheet.getByRole("button", { name: "Show issues" }).click();
   await expect(sheet).toBeHidden();
   await expect(page).toHaveURL(/environment=prod/);
   await expectNoDocumentOverflow(page);
 
   await page.getByRole("link", { name: listIssue.title }).click();
   await expect(page.getByRole("button", { name: "Resolve" })).toBeVisible();
+  await page.getByLabel("More issue actions").click();
   await page.getByRole("button", { name: "Delete permanently" }).click();
   const dialog = page.getByRole("dialog", {
     name: "Delete issue permanently?",

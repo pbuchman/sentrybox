@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   EventDetail,
   EventSummary,
@@ -7,6 +7,7 @@ import type {
   OperatorApi,
   WebhookDelivery,
 } from "../api/client.js";
+import { Icon } from "./icons.js";
 import { TimeValue } from "./time-value.js";
 
 interface EventDetailsProps {
@@ -22,7 +23,10 @@ interface EventDetailsProps {
   readonly onLoadMoreEvents: () => void;
   readonly onRetryDelivery: (delivery: WebhookDelivery) => Promise<void>;
   readonly retryingDelivery: number | null;
+  readonly readOnly?: boolean;
 }
+
+const BREADCRUMB_PREVIEW = 6;
 
 export function EventDetails({
   api,
@@ -37,265 +41,45 @@ export function EventDetails({
   onLoadMoreEvents,
   onRetryDelivery,
   retryingDelivery,
+  readOnly = false,
 }: EventDetailsProps) {
   const exception = event.normalized.exception;
   const frames = exception?.frames ?? [];
   const applicationFrames = frames.filter((frame) => frame.in_app === true);
   const libraryFrames = frames.filter((frame) => frame.in_app !== true);
   const breadcrumbs = event.normalized.breadcrumbs ?? [];
-  const contexts = event.normalized.payload?.contexts ?? {};
-  const extras = event.normalized.payload?.extras ?? {};
+  const [showAllBreadcrumbs, setShowAllBreadcrumbs] = useState(false);
   const [copyState, setCopyState] = useState<string | null>(null);
+
+  useEffect(() => {
+    setShowAllBreadcrumbs(false);
+    setCopyState(null);
+  }, [event.id]);
 
   const copyQuery = async (): Promise<void> => {
     if (event.logLocator.query === null) return;
     try {
       await navigator.clipboard.writeText(event.logLocator.query);
-      setCopyState("LogQL copied.");
+      setCopyState("Log query copied.");
     } catch {
-      setCopyState("LogQL could not be copied. Select the query and copy it.");
+      setCopyState(
+        "Could not copy automatically. Select the query and copy it.",
+      );
     }
   };
 
   return (
-    <div className="detail-sections">
-      <section className="evidence-section" aria-labelledby="exception-heading">
-        <SectionHeading
-          id="exception-heading"
-          eyebrow="Selected occurrence"
-          title="Exception and application frames"
-        />
-        {exception === null || exception === undefined ? (
-          <p className="empty-inline">
-            This event has no exception interface. The retained message is shown
-            instead.
-          </p>
-        ) : (
-          <div className="exception-summary">
-            <p className="exception-type">
-              {asText(exception.type, "Exception")}
-            </p>
-            <p>{asText(exception.value, event.message ?? event.title)}</p>
+    <div className="evidence-workspace">
+      <aside className="occurrence-rail" aria-labelledby="occurrences-heading">
+        <div className="occurrence-rail-heading">
+          <div>
+            <p className="eyebrow">Evidence</p>
+            <h2 id="occurrences-heading">Occurrences</h2>
           </div>
-        )}
-        {applicationFrames.length > 0 ? (
-          <FrameList
-            frames={applicationFrames}
-            label="Application stack frames"
-          />
-        ) : (
-          <p className="empty-inline">
-            No application frame was marked by the SDK. Library evidence remains
-            available below.
-          </p>
-        )}
-        {libraryFrames.length > 0 ? (
-          <details className="secondary-disclosure">
-            <summary>
-              Additional library frames ({String(libraryFrames.length)})
-            </summary>
-            <FrameList frames={libraryFrames} label="Library stack frames" />
-          </details>
-        ) : null}
-        {event.truncated ? (
-          <p className="notice notice-warn">
-            This normalized event reached a configured limit. Truncation
-            reasons:{" "}
-            {Array.isArray(event.normalized.truncationReasons)
-              ? event.normalized.truncationReasons.join(", ")
-              : "recorded in normalized JSON"}
-            .
-          </p>
-        ) : null}
-      </section>
-
-      <section className="evidence-section" aria-labelledby="facets-heading">
-        <SectionHeading
-          id="facets-heading"
-          eyebrow="Retained scope"
-          title="Facets"
-        />
-        <div className="facet-groups">
-          <FacetGroup
-            name="Project"
-            values={[
-              {
-                label: issue.project.name,
-                queryValue: issue.project.slug,
-                count: issue.occurrenceCount,
-              },
-            ]}
-            parameter="project"
-          />
-          <FacetGroup
-            name="Version"
-            values={issue.facets.release}
-            parameter="release"
-          />
-          <FacetGroup
-            name="Environment"
-            values={issue.facets.environment}
-            parameter="environment"
-          />
-          <FacetGroup
-            name="Service"
-            values={issue.facets.service}
-            parameter="service"
-          />
-          <FacetGroup
-            name="Level"
-            values={issue.facets.level}
-            parameter="level"
-          />
+          <span>{String(events.length)}</span>
         </div>
-      </section>
-
-      <section className="evidence-section" aria-labelledby="logs-heading">
-        <SectionHeading
-          id="logs-heading"
-          eyebrow={confidenceLabel(event.logLocator.confidence)}
-          title="Log locator"
-        />
-        <p>{event.logLocator.explanation}</p>
-        <dl className="evidence-list">
-          <div>
-            <dt>Time range from</dt>
-            <dd>
-              <TimeValue value={event.logLocator.from} />
-            </dd>
-          </div>
-          <div>
-            <dt>Time range to</dt>
-            <dd>
-              <TimeValue value={event.logLocator.to} />
-            </dd>
-          </div>
-          <div>
-            <dt>Environment</dt>
-            <dd>{event.logLocator.criteria.environment}</dd>
-          </div>
-          <div>
-            <dt>Service</dt>
-            <dd>{event.logLocator.criteria.service ?? "Not supplied"}</dd>
-          </div>
-          {event.logLocator.criteria.identifier !== null ? (
-            <div>
-              <dt>{event.logLocator.criteria.identifier.kind}</dt>
-              <dd className="mono">
-                {event.logLocator.criteria.identifier.value}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-        {event.logLocator.query === null ? (
-          <p className="empty-inline">
-            No server-log query is expected for this occurrence.
-          </p>
-        ) : (
-          <>
-            <pre className="code-panel">
-              <code>{event.logLocator.query}</code>
-            </pre>
-            <div className="inline-actions">
-              {event.logLocator.grafanaUrl !== null ? (
-                <a
-                  className="button button-primary"
-                  href={event.logLocator.grafanaUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open matching logs
-                </a>
-              ) : null}
-              <button
-                className="button"
-                type="button"
-                onClick={() => void copyQuery()}
-              >
-                Copy LogQL query
-              </button>
-            </div>
-            {copyState === null ? null : (
-              <p className="action-feedback" role="status">
-                {copyState}
-              </p>
-            )}
-          </>
-        )}
-      </section>
-
-      <section
-        className="evidence-section"
-        aria-labelledby="breadcrumbs-heading"
-      >
-        <SectionHeading
-          id="breadcrumbs-heading"
-          eyebrow="Chronological evidence"
-          title="Breadcrumbs"
-        />
-        {breadcrumbs.length === 0 ? (
-          <p className="empty-inline">The SDK retained no breadcrumbs.</p>
-        ) : (
-          <ol className="breadcrumb-list">
-            {breadcrumbs.map((breadcrumb, index) => {
-              const timestamp = breadcrumbTimestamp(breadcrumb.timestamp);
-              return (
-                <li key={`${timestamp ?? "untimed"}-${String(index)}`}>
-                  <div>
-                    <span className="breadcrumb-category">
-                      {asText(breadcrumb.category, "event")}
-                    </span>
-                    <span>{asText(breadcrumb.message, "Breadcrumb")}</span>
-                  </div>
-                  {timestamp === null ? (
-                    <span className="time-missing">
-                      Timestamp unavailable in retained SDK data
-                    </span>
-                  ) : (
-                    <TimeValue value={timestamp} />
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
-
-      <section className="evidence-section" aria-labelledby="context-heading">
-        <SectionHeading
-          id="context-heading"
-          eyebrow="Stored after server redaction"
-          title="Redacted contexts and extras"
-        />
-        <div className="code-grid">
-          <div>
-            <h3>Contexts</h3>
-            <pre className="code-panel">
-              <code>{pretty(contexts)}</code>
-            </pre>
-          </div>
-          <div>
-            <h3>Extras</h3>
-            <pre className="code-panel">
-              <code>{pretty(extras)}</code>
-            </pre>
-          </div>
-        </div>
-      </section>
-
-      <section
-        className="evidence-section"
-        aria-labelledby="occurrences-heading"
-      >
-        <SectionHeading
-          id="occurrences-heading"
-          eyebrow={`${String(events.length)} retained on this page`}
-          title="Occurrences"
-        />
         {events.length === 0 ? (
-          <p className="empty-inline">
-            Retention removed every occurrence from this issue.
-          </p>
+          <p className="empty-inline">No occurrence is retained.</p>
         ) : (
           <ol className="occurrence-list">
             {events.map((occurrence) => (
@@ -310,23 +94,28 @@ export function EventDetails({
                   aria-pressed={occurrence.rowId === selectedRowId}
                   onClick={() => onSelectEvent(occurrence.rowId)}
                 >
-                  <span>
+                  <span
+                    className={`occurrence-level severity-${occurrence.level}`}
+                    aria-hidden="true"
+                  />
+                  <span className="occurrence-copy">
                     <strong>
-                      {occurrence.exceptionType ?? occurrence.title}
+                      <TimeValue value={occurrence.occurredAt} compact />
                     </strong>
-                    <span className="occurrence-facets">
-                      {occurrence.release ?? "Unknown version"} ·{" "}
-                      {occurrence.environment} ·{" "}
-                      {occurrence.service ?? "No service"}
+                    <span>
+                      {shortRelease(occurrence.release)} ·{" "}
+                      {occurrence.environment}
                     </span>
                   </span>
-                  <TimeValue value={occurrence.occurredAt} />
+                  <Icon name="chevron" size={17} />
                 </button>
                 <a
-                  className="text-link"
+                  className="occurrence-download"
                   href={api.eventDownloadUrl(occurrence.rowId)}
+                  download
+                  aria-label={`Download occurrence from ${occurrence.occurredAt}`}
                 >
-                  Download event
+                  <Icon name="download" size={15} />
                 </a>
               </li>
             ))}
@@ -334,138 +123,238 @@ export function EventDetails({
         )}
         {occurrenceError ? (
           <div className="pagination-error" role="alert">
-            <p>
-              More occurrences could not be loaded. The current evidence is
-              still available.
-            </p>
+            <p>More occurrences could not be loaded.</p>
             <button className="button" type="button" onClick={onLoadMoreEvents}>
-              Retry more occurrences
+              Try again
             </button>
           </div>
         ) : nextEventCursor === null ? null : (
-          <div className="pagination">
-            <button
-              className="button"
-              type="button"
-              disabled={loadingMoreEvents}
-              onClick={onLoadMoreEvents}
-            >
-              {loadingMoreEvents
-                ? "Loading more occurrences…"
-                : "Load more occurrences"}
-            </button>
+          <button
+            className="button load-occurrences"
+            type="button"
+            disabled={loadingMoreEvents}
+            onClick={onLoadMoreEvents}
+          >
+            {loadingMoreEvents ? "Loading…" : "Load more"}
+          </button>
+        )}
+      </aside>
+
+      <div className="evidence-main">
+        <section
+          className="evidence-card evidence-primary"
+          aria-labelledby="exception-heading"
+        >
+          <div
+            className="event-meta-strip"
+            aria-label="Selected occurrence metadata"
+          >
+            <span>
+              <strong>Occurred</strong>
+              <TimeValue value={event.occurredAt} compact />
+            </span>
+            <span>
+              <strong>Release</strong>
+              {shortRelease(event.release)}
+            </span>
+            <span>
+              <strong>Environment</strong>
+              {event.environment}
+            </span>
+            <span>
+              <strong>Service</strong>
+              {event.service ?? "Not supplied"}
+            </span>
           </div>
-        )}
-      </section>
+          <header className="evidence-heading">
+            <p className="eyebrow">Stack evidence</p>
+            <h2 id="exception-heading">
+              {asText(exception?.type, event.exceptionType ?? "Exception")}
+            </h2>
+            <p>{asText(exception?.value, event.message ?? event.title)}</p>
+          </header>
+          {applicationFrames.length === 0 ? (
+            <p className="empty-inline">
+              The SDK did not mark an application frame.
+            </p>
+          ) : (
+            <FrameList
+              frames={applicationFrames}
+              label="Application stack frames"
+            />
+          )}
+          {libraryFrames.length === 0 ? null : (
+            <details className="compact-disclosure">
+              <summary>
+                Library frames <span>{String(libraryFrames.length)}</span>
+              </summary>
+              <FrameList frames={libraryFrames} label="Library stack frames" />
+            </details>
+          )}
+          {event.truncated ? (
+            <p className="notice notice-warn">
+              This event reached a retention limit. The raw record contains
+              truncation details.
+            </p>
+          ) : null}
+        </section>
 
-      <section className="evidence-section" aria-labelledby="delivery-heading">
-        <SectionHeading
-          id="delivery-heading"
-          eyebrow="Code Agent transition audit"
-          title="Delivery state"
-        />
-        {issue.deliveries.length === 0 ? (
-          <p className="empty-inline">
-            No created or regressed delivery exists in the retained window.
-          </p>
-        ) : (
-          <ol className="delivery-list">
-            {issue.deliveries.map((delivery) => (
-              <li key={delivery.id}>
-                <div className="delivery-heading">
-                  <div>
-                    <strong>
-                      Generation {String(delivery.generation)} ·{" "}
-                      {delivery.cause === "created" ? "Created" : "Regressed"}
-                    </strong>
-                    <span className={`delivery-state state-${delivery.state}`}>
-                      {deliveryStateLabel(delivery.state)}
-                    </span>
-                  </div>
-                  <TimeValue value={delivery.createdAt} />
-                </div>
-                <p>
-                  {String(delivery.attempts)} delivery{" "}
-                  {delivery.attempts === 1 ? "attempt" : "attempts"}
-                </p>
-                {delivery.lastError === null ? null : (
-                  <p className="notice notice-error">{delivery.lastError}</p>
-                )}
-                {delivery.nextAttempt === null ? null : (
-                  <p>
-                    Next attempt: <TimeValue value={delivery.nextAttempt} />
-                  </p>
-                )}
-                {delivery.deliveredAt === null ? null : (
-                  <p>
-                    Delivered: <TimeValue value={delivery.deliveredAt} />
-                  </p>
-                )}
-                {delivery.state === "dead_letter" &&
-                !delivery.redrives.some(
-                  (redrive) => redrive.state === "pending",
-                ) ? (
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={retryingDelivery === delivery.id}
-                    onClick={() => void onRetryDelivery(delivery)}
-                  >
-                    {retryingDelivery === delivery.id
-                      ? "Queueing redrive…"
-                      : "Retry delivery"}
-                  </button>
-                ) : null}
-                {delivery.redrives.length === 0 ? null : (
-                  <ul className="redrive-list">
-                    {delivery.redrives.map((redrive) => (
-                      <li key={redrive.id}>
-                        Redrive {deliveryStateLabel(redrive.state)} · requested{" "}
-                        <TimeValue value={redrive.requestedAt} />
-                        {redrive.attemptedAt === null ? null : (
-                          <>
-                            {" "}
-                            · attempted{" "}
-                            <TimeValue value={redrive.attemptedAt} />
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+        <section
+          className="evidence-card log-evidence"
+          aria-labelledby="logs-heading"
+        >
+          <header className="evidence-heading evidence-heading-inline">
+            <div>
+              <p className="eyebrow">
+                {confidenceLabel(event.logLocator.confidence)}
+              </p>
+              <h2 id="logs-heading">Matching logs</h2>
+            </div>
+            <div className="inline-actions">
+              {event.logLocator.grafanaUrl === null ? null : (
+                <a
+                  className="button button-primary"
+                  href={event.logLocator.grafanaUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open logs <Icon name="external" size={16} />
+                </a>
+              )}
+              {event.logLocator.query === null ? null : (
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => void copyQuery()}
+                >
+                  <Icon name="copy" size={16} /> Copy query
+                </button>
+              )}
+            </div>
+          </header>
+          <p>{event.logLocator.explanation}</p>
+          {event.logLocator.query === null ? (
+            <p className="empty-inline">
+              No server-log query is expected for this occurrence.
+            </p>
+          ) : (
+            <details className="query-disclosure">
+              <summary>View LogQL query</summary>
+              <pre className="code-panel">
+                <code>{event.logLocator.query}</code>
+              </pre>
+            </details>
+          )}
+          {copyState === null ? null : (
+            <p className="action-feedback" role="status">
+              {copyState}
+            </p>
+          )}
+        </section>
 
-      <details className="evidence-section normalized-json">
-        <summary>
-          <span className="eyebrow">Redacted stored record</span>
-          <h2>Normalized JSON</h2>
-        </summary>
-        <pre className="code-panel">
-          <code>{pretty(event.normalized)}</code>
-        </pre>
-      </details>
+        <section
+          className="evidence-card"
+          aria-labelledby="breadcrumbs-heading"
+        >
+          <header className="evidence-heading evidence-heading-inline">
+            <div>
+              <p className="eyebrow">Timeline</p>
+              <h2 id="breadcrumbs-heading">Breadcrumbs</h2>
+            </div>
+            <span className="section-count">{String(breadcrumbs.length)}</span>
+          </header>
+          {breadcrumbs.length === 0 ? (
+            <p className="empty-inline">The SDK retained no breadcrumbs.</p>
+          ) : (
+            <ol className="breadcrumb-list">
+              {breadcrumbs
+                .slice(0, showAllBreadcrumbs ? undefined : BREADCRUMB_PREVIEW)
+                .map((breadcrumb, index) => {
+                  const timestamp = breadcrumbTimestamp(breadcrumb.timestamp);
+                  return (
+                    <li key={`${timestamp ?? "untimed"}-${String(index)}`}>
+                      <span className="breadcrumb-marker" aria-hidden="true" />
+                      <div>
+                        <strong>{asText(breadcrumb.category, "event")}</strong>
+                        <span>{asText(breadcrumb.message, "Breadcrumb")}</span>
+                      </div>
+                      {timestamp === null ? (
+                        <span className="time-missing">No timestamp</span>
+                      ) : (
+                        <TimeValue value={timestamp} compact />
+                      )}
+                    </li>
+                  );
+                })}
+            </ol>
+          )}
+          {breadcrumbs.length <= BREADCRUMB_PREVIEW ? null : (
+            <button
+              className="button button-quiet show-more"
+              type="button"
+              onClick={() => setShowAllBreadcrumbs((value) => !value)}
+            >
+              {showAllBreadcrumbs
+                ? "Show less"
+                : `Show ${String(breadcrumbs.length - BREADCRUMB_PREVIEW)} more`}
+            </button>
+          )}
+        </section>
+
+        <details className="evidence-card evidence-disclosure">
+          <summary>
+            <span>
+              <Icon name="chevron" size={18} />
+              <strong>Context & extras</strong>
+            </span>
+            <span>Redacted</span>
+          </summary>
+          <div className="code-grid">
+            <div>
+              <h3>Contexts</h3>
+              <pre className="code-panel">
+                <code>{pretty(event.normalized.payload?.contexts ?? {})}</code>
+              </pre>
+            </div>
+            <div>
+              <h3>Extras</h3>
+              <pre className="code-panel">
+                <code>{pretty(event.normalized.payload?.extras ?? {})}</code>
+              </pre>
+            </div>
+          </div>
+        </details>
+
+        <details className="evidence-card evidence-disclosure">
+          <summary>
+            <span>
+              <Icon name="chevron" size={18} />
+              <strong>Delivery</strong>
+            </span>
+            <span>{deliverySummary(issue.deliveries)}</span>
+          </summary>
+          <DeliveryList
+            deliveries={issue.deliveries}
+            retryingDelivery={retryingDelivery}
+            onRetryDelivery={onRetryDelivery}
+            readOnly={readOnly}
+          />
+        </details>
+
+        <details className="evidence-card evidence-disclosure raw-event">
+          <summary>
+            <span>
+              <Icon name="chevron" size={18} />
+              <strong>Raw event data</strong>
+            </span>
+            <span>Normalized JSON</span>
+          </summary>
+          <pre className="code-panel">
+            <code>{pretty(event.normalized)}</code>
+          </pre>
+        </details>
+      </div>
     </div>
-  );
-}
-
-function SectionHeading({
-  id,
-  eyebrow,
-  title,
-}: {
-  readonly id: string;
-  readonly eyebrow: string;
-  readonly title: string;
-}) {
-  return (
-    <header className="section-heading">
-      <p className="eyebrow">{eyebrow}</p>
-      <h2 id={id}>{title}</h2>
-    </header>
   );
 }
 
@@ -483,6 +372,9 @@ function FrameList({
         .reverse()
         .map((frame, index) => (
           <li key={`${asText(frame.filename, "unknown")}-${String(index)}`}>
+            <span className="frame-index">
+              {String(index + 1).padStart(2, "0")}
+            </span>
             <span className="frame-function">
               {asText(frame.function, asText(frame.module, "anonymous"))}
             </span>
@@ -499,45 +391,90 @@ function FrameList({
   );
 }
 
-function FacetGroup({
-  name,
-  values,
-  parameter,
+function DeliveryList({
+  deliveries,
+  retryingDelivery,
+  onRetryDelivery,
+  readOnly,
 }: {
-  readonly name: string;
-  readonly values: readonly {
-    readonly label: string | null;
-    readonly queryValue: string;
-    readonly count: number;
-  }[];
-  readonly parameter: string;
+  readonly deliveries: IssueDetail["deliveries"];
+  readonly retryingDelivery: number | null;
+  readonly onRetryDelivery: (delivery: WebhookDelivery) => Promise<void>;
+  readonly readOnly: boolean;
 }) {
+  if (deliveries.length === 0)
+    return (
+      <p className="empty-inline">No delivery exists in the retained window.</p>
+    );
   return (
-    <div>
-      <h3>{name}</h3>
-      <ul className="facet-chip-list">
-        {values.map((value) => (
-          <li key={value.queryValue}>
-            <a
-              href={`/?status=unresolved&${parameter}=${encodeURIComponent(value.queryValue)}`}
+    <ol className="delivery-list">
+      {deliveries.map((delivery) => (
+        <li key={delivery.id}>
+          <div className="delivery-heading">
+            <strong>
+              Generation {String(delivery.generation)} ·{" "}
+              {delivery.cause === "created" ? "Created" : "Regressed"}
+            </strong>
+            <span className={`delivery-state state-${delivery.state}`}>
+              {deliveryStateLabel(delivery.state)}
+            </span>
+          </div>
+          <p>
+            {String(delivery.attempts)}{" "}
+            {delivery.attempts === 1 ? "attempt" : "attempts"} ·{" "}
+            <TimeValue value={delivery.createdAt} compact />
+          </p>
+          {delivery.lastError === null ? null : (
+            <p className="notice notice-error">{delivery.lastError}</p>
+          )}
+          {delivery.state === "dead_letter" &&
+          !delivery.redrives.some((redrive) => redrive.state === "pending") ? (
+            <button
+              className="button"
+              type="button"
+              disabled={readOnly || retryingDelivery === delivery.id}
+              onClick={() => void onRetryDelivery(delivery)}
             >
-              {value.label ?? "Unknown"} <span>{String(value.count)}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
+              {retryingDelivery === delivery.id
+                ? "Queueing…"
+                : "Retry delivery"}
+            </button>
+          ) : null}
+          {delivery.redrives.length === 0 ? null : (
+            <p>
+              {String(delivery.redrives.length)} redrive request
+              {delivery.redrives.length === 1 ? "" : "s"}
+            </p>
+          )}
+        </li>
+      ))}
+    </ol>
   );
+}
+
+function shortRelease(release: string | null): string {
+  if (release === null || release.length === 0) return "Unknown";
+  return release.length > 18
+    ? `${release.slice(0, 8)}…${release.slice(-7)}`
+    : release;
 }
 
 function confidenceLabel(
   confidence: EventDetail["logLocator"]["confidence"],
 ): string {
-  if (confidence === "exact_identifier") return "Exact identifier";
-  if (confidence === "time_message_fallback") {
-    return "Time and message fallback";
-  }
-  return "Not applicable to server logs";
+  if (confidence === "exact_identifier") return "Exact correlation";
+  if (confidence === "time_message_fallback") return "Time and message match";
+  return "No log correlation";
+}
+
+function deliverySummary(deliveries: IssueDetail["deliveries"]): string {
+  if (deliveries.length === 0) return "No deliveries";
+  const failures = deliveries.filter(
+    (delivery) => delivery.state === "dead_letter",
+  ).length;
+  return failures === 0
+    ? `${String(deliveries.length)} retained`
+    : `${String(failures)} failed`;
 }
 
 function deliveryStateLabel(state: string): string {

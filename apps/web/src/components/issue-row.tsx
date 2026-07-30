@@ -1,25 +1,16 @@
 import type { MouseEvent } from "react";
-import type { FacetValue, IssueListItem } from "../api/client.js";
+import type { IssueListItem } from "../api/client.js";
+import { Icon } from "./icons.js";
 import { TimeValue } from "./time-value.js";
 
 interface IssueRowProps {
   readonly issue: IssueListItem;
-  readonly facets: {
-    readonly environment: readonly FacetValue[];
-    readonly release: readonly FacetValue[];
-    readonly service: readonly FacetValue[];
-  } | null;
   readonly variant: "table" | "card";
   readonly onNavigate: (path: string) => void;
 }
 
-export function IssueRow({
-  issue,
-  facets,
-  variant,
-  onNavigate,
-}: IssueRowProps) {
-  const path = `/organizations/intexuraos/issues/${String(issue.id)}/`;
+export function IssueRow({ issue, variant, onNavigate }: IssueRowProps) {
+  const path = `/?${new URLSearchParams({ issue: String(issue.id) }).toString()}`;
   const navigate = (event: MouseEvent<HTMLAnchorElement>): void => {
     if (
       event.button !== 0 ||
@@ -33,127 +24,96 @@ export function IssueRow({
     event.preventDefault();
     onNavigate(path);
   };
-  const body = (
-    <>
-      <div className="issue-title-line">
-        <a className="issue-title" href={path} onClick={navigate}>
-          {issue.title}
-        </a>
-        <span className={`severity severity-${issue.highestLevel}`}>
-          {severityLabel(issue.highestLevel)}
-        </span>
-      </div>
-      <p className="issue-project">{issue.project.name}</p>
-      {facets === null ? (
-        <p className="issue-facets">Facet evidence unavailable</p>
-      ) : (
-        <p className="issue-facets" aria-label="Issue-wide facet evidence">
-          <span className="facet-scope">Issue-wide: </span>
-          <FacetSummary values={facets.environment} fallback="No environment" />
-          <span aria-hidden="true"> · </span>
-          <FacetSummary values={facets.release} fallback="Unknown version" />
-          <span aria-hidden="true"> · </span>
-          <FacetSummary values={facets.service} fallback="No service" />
-        </p>
-      )}
-    </>
-  );
-  const count = (
-    <span className="issue-count">
-      {issue.matchingCount === issue.occurrenceCount
-        ? `${String(issue.occurrenceCount)} events`
-        : `${String(issue.matchingCount)} matching / ${String(issue.occurrenceCount)} total`}
-    </span>
-  );
-  const spine = (
-    <SignalSpine level={issue.highestLevel} count={issue.matchingCount} />
-  );
+  const severity = severityLabel(issue.highestLevel);
 
   if (variant === "card") {
     return (
       <article className="issue-card" aria-label={issue.title}>
-        {spine}
-        <div className="issue-card-body">
-          {body}
-          {count}
-          <dl className="issue-card-times">
-            <div>
-              <dt>First seen</dt>
-              <dd>
-                <TimeValue value={issue.firstSeen} />
-              </dd>
-            </div>
-            <div>
-              <dt>Last seen</dt>
-              <dd>
-                <TimeValue value={issue.lastSeen} />
-              </dd>
-            </div>
-          </dl>
-        </div>
+        <a href={path} aria-label={issue.title} onClick={navigate}>
+          <span className="issue-card-main">
+            <Severity issue={issue} label={severity} />
+            <span className="issue-copy">
+              <Title issue={issue} />
+              <span className="issue-secondary">
+                {matchLabel(issue, severity)}
+              </span>
+            </span>
+          </span>
+          <span className="issue-card-meta">
+            <span>{eventCount(issue)}</span>
+            <TimeValue value={issue.lastSeen} compact />
+          </span>
+          <span className="issue-card-chevron" aria-hidden="true">
+            <Icon name="chevron" size={18} />
+          </span>
+        </a>
       </article>
     );
   }
 
   return (
     <tr>
-      <td className="signal-cell">{spine}</td>
-      <td className="issue-main-cell">{body}</td>
-      <td className="count-cell">{count}</td>
-      <td className="time-cell">
-        <TimeValue value={issue.firstSeen} />
+      <td className="severity-cell">
+        <Severity issue={issue} label={severity} />
       </td>
+      <td>
+        <a
+          className="issue-table-link"
+          href={path}
+          aria-label={issue.title}
+          onClick={navigate}
+        >
+          <Title issue={issue} />
+          <span className="issue-secondary">{matchLabel(issue, severity)}</span>
+        </a>
+      </td>
+      <td className="count-cell">{eventCount(issue)}</td>
       <td className="time-cell">
-        <TimeValue value={issue.lastSeen} />
+        <TimeValue value={issue.lastSeen} compact />
+      </td>
+      <td className="row-action-cell" aria-hidden="true">
+        <Icon name="chevron" size={18} />
       </td>
     </tr>
   );
 }
 
-function FacetSummary({
-  values,
-  fallback,
+function Severity({
+  issue,
+  label,
 }: {
-  readonly values: readonly FacetValue[];
-  readonly fallback: string;
+  readonly issue: IssueListItem;
+  readonly label: string;
 }) {
-  if (values.length === 0) return <span>{fallback}</span>;
   return (
-    <>
-      {values.slice(0, 3).map((value, index) => (
-        <span key={value.queryValue}>
-          {index === 0 ? null : <span aria-hidden="true">, </span>}
-          <span>{value.label ?? value.value ?? fallback}</span>
-        </span>
-      ))}
-    </>
+    <span
+      className={`severity-icon severity-${issue.highestLevel}`}
+      title={label}
+    >
+      <Icon name={issue.highestLevel === "warn" ? "warning" : "error"} />
+    </span>
   );
 }
 
-function SignalSpine({
-  level,
-  count,
-}: {
-  readonly level: IssueListItem["highestLevel"];
-  readonly count: number;
-}) {
-  const density = Math.min(4, Math.max(1, Math.ceil(Math.log10(count + 1))));
+function Title({ issue }: { readonly issue: IssueListItem }) {
   return (
-    <span
-      className={`signal-spine signal-${level}`}
-      aria-label={`${severityLabel(level)} severity, recurrence density ${String(density)} of 4`}
-    >
-      {[1, 2, 3, 4].map((segment) => (
-        <span
-          key={segment}
-          className={
-            segment <= density ? "signal-segment active" : "signal-segment"
-          }
-          aria-hidden="true"
-        />
-      ))}
+    <span className="issue-title-line">
+      <span className="issue-title">{issue.title}</span>
+      {issue.status === "resolved" ? (
+        <span className="status status-resolved">Resolved</span>
+      ) : null}
     </span>
   );
+}
+
+function eventCount(issue: IssueListItem): string {
+  const count = issue.matchingCount;
+  return `${String(count)} ${count === 1 ? "event" : "events"}`;
+}
+
+function matchLabel(issue: IssueListItem, severity: string): string {
+  if (issue.matchingCount === issue.occurrenceCount) return severity;
+  return `${severity} · ${String(issue.matchingCount)} of ${String(issue.occurrenceCount)} events match`;
 }
 
 function severityLabel(level: IssueListItem["highestLevel"]): string {
