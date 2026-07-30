@@ -319,6 +319,7 @@ export function createApiClient(
           Accept: "application/json",
           "Content-Type": "application/json",
         },
+        body: "{}",
       });
     },
     async retryDelivery(id) {
