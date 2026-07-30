@@ -311,6 +311,7 @@ function send(response, status, message) {
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
+    "x-sentrybox-deploy-handler": "workflow-run-v1",
     connection: "close",
   });
   response.end(body);
