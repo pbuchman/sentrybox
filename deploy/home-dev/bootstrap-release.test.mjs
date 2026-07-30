@@ -71,6 +71,7 @@ test("bootstrap selects the exact current canonical release and submits the cano
 test("bootstrap uses a bounded HTTPS client that keeps credentials out of the URL", async () => {
   const calls = [];
   const token = "test-token-held-only-in-memory";
+  const deadlineHandle = Symbol("deadline");
   const requestImpl = (url, options, onResponse) => {
     calls.push({ url: String(url), options });
     const request = new EventEmitter();
@@ -99,6 +100,13 @@ test("bootstrap uses a bounded HTTPS client that keeps credentials out of the UR
       },
     },
     requestImpl,
+    {
+      setTimeoutImpl: (callback, milliseconds) => {
+        calls.push({ deadline: milliseconds, callback: typeof callback });
+        return deadlineHandle;
+      },
+      clearTimeoutImpl: (handle) => calls.push({ cleared: handle }),
+    },
   );
 
   assert.equal(response.ok, true);
@@ -111,6 +119,8 @@ test("bootstrap uses a bounded HTTPS client that keeps credentials out of the UR
   assert.equal(calls[0].options.method, "GET");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${token}`);
   assert.deepEqual(calls[1], { timeout: 10_000, onTimeout: "function" });
+  assert.deepEqual(calls[2], { deadline: 10_000, callback: "function" });
+  assert.deepEqual(calls[3], { cleared: deadlineHandle });
 });
 
 test("bootstrap HTTPS client rejects timeouts, oversized bodies, and invalid JSON", async () => {
@@ -159,6 +169,54 @@ test("bootstrap HTTPS client rejects timeouts, oversized bodies, and invalid JSO
     responseRequest("{"),
   );
   await assert.rejects(malformed.json(), SyntaxError);
+});
+
+test("bootstrap HTTPS client enforces a deadline for the complete request", async () => {
+  const headers = { "User-Agent": "SentryBox-test" };
+  let deadlineCallback;
+  let destroyedWith;
+  let clearedDeadline;
+  const deadlineHandle = Symbol("deadline");
+  const requestImpl = (_url, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.setTimeout = () => {};
+    request.destroy = (error) => {
+      destroyedWith = error;
+      request.emit("error", error);
+    };
+    request.end = () => {
+      queueMicrotask(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        onResponse(response);
+        response.write("{");
+      });
+    };
+    return request;
+  };
+
+  const pendingResponse = githubFetch(
+    WORKFLOW_RUNS_URL,
+    { headers },
+    requestImpl,
+    {
+      setTimeoutImpl: (callback, milliseconds) => {
+        assert.equal(milliseconds, 10_000);
+        deadlineCallback = callback;
+        return deadlineHandle;
+      },
+      clearTimeoutImpl: (handle) => {
+        clearedDeadline = handle;
+      },
+    },
+  );
+  await Promise.resolve();
+  assert.equal(typeof deadlineCallback, "function");
+  deadlineCallback();
+
+  await assert.rejects(pendingResponse, /timed out/u);
+  assert.match(destroyedWith.message, /timed out/u);
+  assert.equal(clearedDeadline, deadlineHandle);
 });
 
 test("bootstrap production networking avoids the global Fetch API under jitless", async () => {

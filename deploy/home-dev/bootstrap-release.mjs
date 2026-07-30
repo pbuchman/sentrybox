@@ -15,6 +15,10 @@ import {
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import process from "node:process";
+import {
+  clearTimeout as clearTimer,
+  setTimeout as setTimer,
+} from "node:timers";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -96,7 +100,12 @@ export async function bootstrapFirstRelease({
   return selected;
 }
 
-export function githubFetch(url, options = {}, requestImpl = httpsRequest) {
+export function githubFetch(
+  url,
+  options = {},
+  requestImpl = httpsRequest,
+  { setTimeoutImpl = setTimer, clearTimeoutImpl = clearTimer } = {},
+) {
   if (url !== WORKFLOW_RUNS_URL) {
     return Promise.reject(
       new Error("GitHub release lookup URL is not canonical"),
@@ -113,10 +122,23 @@ export function githubFetch(url, options = {}, requestImpl = httpsRequest) {
   return new Promise((resolveRequest, rejectRequest) => {
     let settled = false;
     let request;
+    let deadline;
+    const clearDeadline = () => {
+      if (deadline === undefined) return;
+      clearTimeoutImpl(deadline);
+      deadline = undefined;
+    };
     const rejectOnce = (error) => {
       if (settled) return;
       settled = true;
+      clearDeadline();
       rejectRequest(error);
+    };
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      clearDeadline();
+      resolveRequest(value);
     };
     try {
       request = requestImpl(
@@ -148,9 +170,8 @@ export function githubFetch(url, options = {}, requestImpl = httpsRequest) {
           });
           response.on("end", () => {
             if (settled) return;
-            settled = true;
             const body = Buffer.concat(chunks, bytes).toString("utf8");
-            resolveRequest({
+            resolveOnce({
               ok: status >= 200 && status < 300,
               status,
               json: async () => JSON.parse(body),
@@ -162,6 +183,11 @@ export function githubFetch(url, options = {}, requestImpl = httpsRequest) {
       request.setTimeout(GITHUB_REQUEST_TIMEOUT_MS, () => {
         request.destroy(new Error("GitHub release lookup timed out"));
       });
+      deadline = setTimeoutImpl(() => {
+        const error = new Error("GitHub release lookup timed out");
+        request.destroy(error);
+        rejectOnce(error);
+      }, GITHUB_REQUEST_TIMEOUT_MS);
       request.end();
     } catch (error) {
       rejectOnce(error);
