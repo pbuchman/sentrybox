@@ -7,7 +7,7 @@ readonly script_directory
 source "${script_directory}/common.sh"
 readonly database_operations="${script_directory}/database-operations.mjs"
 
-for executable in caddy curl df docker flock git jq mktemp systemctl; do
+for executable in caddy chmod curl df docker find flock git jq mktemp systemctl; do
   error_hub_require_command "${executable}"
 done
 
@@ -34,6 +34,7 @@ runtime_changed=0
 had_previous=0
 previous_image=""
 private_origin=""
+rollback_reconciled=0
 
 restore_normal_caddy() {
   error_hub_apply_caddy_fragment "${error_hub_caddy_normal_source}"
@@ -41,6 +42,9 @@ restore_normal_caddy() {
 
 cleanup() {
   local exit_status=$?
+  local candidate_stop_status=0
+  local runtime_restore_status=0
+  local state_restore_status=0
   trap - EXIT INT TERM
   set +e
   rm -f "${claimed_request}"
@@ -55,8 +59,50 @@ cleanup() {
       fi
     fi
   fi
-  if (( state_write_started == 1 && deployment_committed == 0 )); then
-    state_restore_status=0
+  if (( runtime_changed == 1 && deployment_committed == 0 )); then
+    if (( had_previous == 1 )); then
+      for _ in 1 2; do
+        if "${script_directory}/rollback.sh" --automatic; then
+          rollback_reconciled=1
+          runtime_restore_status=0
+          break
+        else
+          runtime_restore_status=$?
+        fi
+      done
+      # rollback.sh owns checkout, runtime, health, and state reconciliation.
+      # Never follow a failed transaction with checkout-only restoration.
+      checkout_changed=0
+      if (( rollback_reconciled == 0 )); then
+        ERROR_HUB_IMAGE="${resolved_image:-}" \
+          ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
+          docker compose --file "${error_hub_compose_file}" \
+            stop --timeout 30 sentrybox >/dev/null || candidate_stop_status=$?
+        # The prior committed state remains untouched. Keep maintenance routing
+        # active because checkout/runtime health could not be reconciled.
+        maintenance_active=0
+        if (( candidate_stop_status != 0 )); then
+          printf 'Automatic rollback reconciliation failed and candidate shutdown could not be verified; maintenance routing was retained and immediate operator intervention is required.\n' \
+            >&2
+          runtime_restore_status="${candidate_stop_status}"
+        else
+          printf '%s\n' \
+            'Automatic rollback reconciliation failed; the failed candidate was stopped and maintenance routing was retained.' \
+            >&2
+        fi
+      fi
+    else
+      ERROR_HUB_IMAGE="${resolved_image:-}" \
+        ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
+        docker compose --file "${error_hub_compose_file}" \
+          stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
+    fi
+    if (( exit_status == 0 && runtime_restore_status != 0 )); then
+      exit_status="${runtime_restore_status}"
+    fi
+  fi
+  if (( state_write_started == 1 && deployment_committed == 0 \
+    && runtime_changed == 0 )); then
     if (( had_previous == 1 )); then
       install -m 0600 "${error_hub_previous_state}" \
         "${error_hub_current_state}.restore.$$" || state_restore_status=$?
@@ -73,20 +119,6 @@ cleanup() {
       if (( exit_status == 0 )); then
         exit_status="${state_restore_status}"
       fi
-    fi
-  fi
-  if (( runtime_changed == 1 && deployment_committed == 0 )); then
-    runtime_restore_status=0
-    if (( had_previous == 1 )); then
-      "${script_directory}/rollback.sh" || runtime_restore_status=$?
-    else
-      ERROR_HUB_IMAGE="${resolved_image:-}" \
-        ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
-        docker compose --file "${error_hub_compose_file}" \
-          stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
-    fi
-    if (( exit_status == 0 && runtime_restore_status != 0 )); then
-      exit_status="${runtime_restore_status}"
     fi
   fi
   if (( checkout_changed == 1 && deployment_committed == 0 )) \
@@ -163,7 +195,14 @@ fi
 original_checkout_sha="$(error_hub_git rev-parse HEAD)"
 error_hub_require_sha "${original_checkout_sha}"
 readonly original_checkout_sha
-error_hub_git fetch --quiet origin main
+if [[ -e "${error_hub_current_state}" || -L "${error_hub_current_state}" ]]; then
+  error_hub_read_state "${error_hub_current_state}"
+  if [[ "${ERROR_HUB_STATE_SHA}" != "${original_checkout_sha}" ]]; then
+    printf 'Canonical SentryBox checkout does not match deployment state.\n' >&2
+    exit 1
+  fi
+fi
+error_hub_fetch_origin_main
 remote_main="$(error_hub_git rev-parse origin/main)"
 readonly remote_main
 if [[ "${remote_main}" != "${request_sha}" ]]; then
@@ -182,7 +221,7 @@ resolved_image="$(
 readonly resolved_image
 error_hub_require_immutable_image "${resolved_image}"
 
-if [[ -f "${error_hub_current_state}" ]]; then
+if [[ -e "${error_hub_current_state}" || -L "${error_hub_current_state}" ]]; then
   error_hub_read_state "${error_hub_current_state}"
   had_previous=1
   previous_image="${ERROR_HUB_STATE_IMAGE}"
@@ -290,15 +329,15 @@ if (( public_route_status != 0 )); then
   printf 'Public HTTPS ingest routing failed its deployment check.\n' >&2
   exit "${public_route_status}"
 fi
+if [[ -f "${predeploy_backup}" ]]; then
+  "${script_directory}/backup.sh" retained-finalize "${resolved_image}" >/dev/null
+fi
 state_write_started=1
 error_hub_write_state \
   "${error_hub_current_state}" \
   "${resolved_image}" \
   "${private_origin}" \
   "${request_sha}"
-if [[ -f "${predeploy_backup}" ]]; then
-  "${script_directory}/backup.sh" retained-finalize "${resolved_image}" >/dev/null
-fi
 maintenance_active=0
 deployment_committed=1
 

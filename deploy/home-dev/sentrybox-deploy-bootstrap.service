@@ -1,27 +1,23 @@
 [Unit]
-Description=SentryBox verified GitHub deployment webhook
+Description=Bootstrap the first verified SentryBox deployment
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy-webhook.mjs
+ConditionPathExists=/home/pbuchman/deploy/sentrybox/deploy/home-dev/bootstrap-release.mjs
+ConditionPathExists=/var/lib/sentrybox-deploy/bootstrap-github-token
 
 [Service]
-Type=simple
+Type=oneshot
 User=root
 Group=root
 WorkingDirectory=/home/pbuchman/deploy/sentrybox
-ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs
-LoadCredential=github-webhook-secret:/home/pbuchman/services/sentrybox/deploy/github-webhook-secret
+ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs
 StateDirectory=sentrybox-deploy
 StateDirectoryMode=0700
+TimeoutStartSec=22min
 UMask=0077
-Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=15s
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=sentrybox-deploy-webhook
-LogRateLimitIntervalSec=30s
-LogRateLimitBurst=50
+SyslogIdentifier=sentrybox-deploy-bootstrap
 MemoryMax=128M
 TasksMax=32
 NoNewPrivileges=true
@@ -39,7 +35,6 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/sentrybox-deploy
-InaccessiblePaths=
 InaccessiblePaths=/var/run/docker.sock
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -49,6 +44,3 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service pkey_alloc pkey_free pkey_mprotect
-
-[Install]
-WantedBy=multi-user.target

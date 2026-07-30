@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -48,99 +48,19 @@ test("reports a missing local Markdown link with its source file", async () => {
   );
 });
 
-test("reports undefined reference links while ignoring code and comments", async () => {
-  await withRepository(
-    {
-      "docs/guide.md": [
-        "See [missing][undefined-reference].",
-        "",
-        "`[inline][undefined-inline]`",
-        "",
-        "```md",
-        "[fenced][undefined-fenced]",
-        "```",
-        "",
-        "<!-- [commented][undefined-comment] -->",
-      ].join("\n"),
-    },
-    async (root) => {
+for (const [description, content, label] of [
+  ["full", "See [setup][missing-full].\n", "missing-full"],
+  ["collapsed", "See [missing collapsed][].\n", "missing collapsed"],
+  ["shortcut", "See [missing shortcut].\n", "missing shortcut"],
+]) {
+  test(`reports an undefined ${description} reference-style Markdown link`, async () => {
+    await withRepository({ "docs/guide.md": content }, async (root) => {
       assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
-        "docs/guide.md: undefined Markdown reference: undefined-reference",
+        `docs/guide.md: undefined Markdown reference: ${label}`,
       ]);
-    },
-  );
-});
-
-test("ignores task-list markers and content inside a fence with a longer closer", async () => {
-  await withRepository(
-    {
-      "docs/guide.md": [
-        "- [ ] pending",
-        "- [x] complete",
-        "",
-        "```md",
-        "[missing][inside-fence]",
-        "fully Sentry-compatible",
-        "````",
-      ].join("\n"),
-    },
-    async (root) => {
-      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
-    },
-  );
-});
-
-test("validates same-file and cross-file heading fragments", async () => {
-  await withRepository(
-    {
-      "docs/guide.md": [
-        "# Guide",
-        "",
-        "[local](#exact-heading)",
-        "[other](./setup.md#install--verify)",
-        "",
-        "## Exact heading",
-      ].join("\n"),
-      "docs/setup.md": "# Install & verify\n",
-    },
-    async (root) => {
-      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
-    },
-  );
-});
-
-test("retains inline-code text when deriving a Markdown heading fragment", async () => {
-  await withRepository(
-    {
-      "docs/guide.md": ["# Install `Node.js`", "", "[jump](#install-nodejs)"].join(
-        "\n",
-      ),
-    },
-    async (root) => {
-      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
-    },
-  );
-});
-
-test("reports missing local heading fragments", async () => {
-  await withRepository(
-    {
-      "docs/guide.md": [
-        "# Guide",
-        "",
-        "[local](#missing-local)",
-        "[other](./setup.md#missing-other)",
-      ].join("\n"),
-      "docs/setup.md": "# Existing heading\n",
-    },
-    async (root) => {
-      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
-        "docs/guide.md: missing local link fragment: #missing-local",
-        "docs/guide.md: missing local link fragment: ./setup.md#missing-other",
-      ]);
-    },
-  );
-});
+    });
+  });
+}
 
 test("reports missing inline and reference-style local Markdown images", async () => {
   await withRepository(
@@ -272,37 +192,123 @@ test("reports an unclosed shell fence whose body has valid bash syntax", async (
   );
 });
 
-test("ignores external links and validates fragment-only links", async () => {
+test("ignores external links and accepts an existing same-file fragment", async () => {
   await withRepository(
     {
       "docs/links.md": [
+        "# Existing section",
+        "",
         "[website](https://example.com/missing)",
-        "[section](#missing-section)",
+        "[section](#existing-section)",
       ].join("\n"),
     },
     async (root) => {
-      assert.deepEqual(await validateDocumentation(root, ["docs/links.md"]), [
-        "docs/links.md: missing local link fragment: #missing-section",
+      assert.deepEqual(await validateDocumentation(root, ["docs/links.md"]), []);
+    },
+  );
+});
+
+test("reports missing same-file and cross-file fragments", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "# Guide",
+        "",
+        "[local](#missing-section)",
+        "[setup](./setup.md#missing-step)",
+      ].join("\n"),
+      "docs/setup.md": "# Existing step\n",
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
+        "docs/guide.md: missing local link fragment: #missing-section",
+        "docs/guide.md: missing local link fragment: ./setup.md#missing-step",
       ]);
     },
   );
 });
 
-test("scans README and docs while excluding docs/archive", async () => {
+test("accepts cross-file fragments with common GitHub heading slugs", async () => {
+  await withRepository(
+    {
+      "docs/guide.md":
+        "See [SDK support](./reference.md#sdk--dsn-whats-supported).\n",
+      "docs/reference.md": "## SDK & DSN: What's supported?\n",
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("accepts duplicate GitHub-style heading slug suffixes", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "# Repeated heading",
+        "",
+        "## Repeated heading",
+        "",
+        "[first](#repeated-heading)",
+        "[second](#repeated-heading-1)",
+      ].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("ignores Markdown link syntax in code and HTML comments", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "`[inline](./missing-inline.md)`",
+        "",
+        "```text",
+        "[fenced](./missing-fenced.md)",
+        "```",
+        "",
+        "<!-- [commented](./missing-comment.md) -->",
+        "<!--",
+        "[multiline comment](./missing-multiline-comment.md)",
+        "-->",
+      ].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("scans README and all docs, including outbound links from archive", async () => {
   await withRepository(
     {
       "README.md": "# SentryBox\n",
       "docs/current.md": "# Current\n",
-      "docs/archive/obsolete.md": "[broken](./missing.md)\n",
+      "docs/archive/obsolete.md": [
+        "[broken](./missing.md)",
+        "[broken anchor](../current.md#missing-section)",
+        "",
+        "a full Sentry replacement",
+        "",
+        "```bash",
+        "if true; then",
+        "```",
+      ].join("\n"),
     },
     async (root) => {
       assert.deepEqual(await findDocumentationFiles(root), [
         "README.md",
+        "docs/archive/obsolete.md",
         "docs/current.md",
       ]);
       assert.deepEqual(
         await validateDocumentation(root, await findDocumentationFiles(root)),
-        [],
+        [
+          "docs/archive/obsolete.md: missing local link target: ./missing.md",
+          "docs/archive/obsolete.md: missing local link fragment: ../current.md#missing-section",
+        ],
       );
     },
   );
@@ -414,25 +420,7 @@ test("rejects a claim after an unrelated earlier negation", async () => {
   );
 });
 
-for (const correctiveLanguage of [
-  "SentryBox offers no full Sentry replacement.",
-  "SentryBox will never be a full Sentry replacement.",
-  "SentryBox is not a full Sentry\nreplacement.",
-]) {
-  test(`permits direct replacement correction: ${correctiveLanguage}`, async () => {
-    await withRepository(
-      { "docs/claims.md": `${correctiveLanguage}\n` },
-      async (root) => {
-        assert.deepEqual(
-          await validateDocumentation(root, ["docs/claims.md"]),
-          [],
-        );
-      },
-    );
-  });
-}
-
-test("rejects grammatical negation that affirms full compatibility", async () => {
+test("rejects a claim after a broad disputed-status negation", async () => {
   await withRepository(
     {
       "docs/claims.md":
@@ -445,4 +433,145 @@ test("rejects grammatical negation that affirms full compatibility", async () =>
       );
     },
   );
+});
+
+test("permits a clause-scoped maintainer-intent replacement disclaimer", async () => {
+  await withRepository(
+    {
+      "docs/claims.md":
+        "SentryBox is not intended by its maintainers to be a full Sentry replacement.\n",
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/claims.md"]),
+        [],
+      );
+    },
+  );
+});
+
+const repositoryRoot = resolve(import.meta.dirname, "../..");
+
+test("states the distinct Node runtime and React fixture evidence", async () => {
+  const readme = await readFile(resolve(repositoryRoot, "README.md"), "utf8");
+  const compatibility = await readFile(
+    resolve(repositoryRoot, "docs/reference/sentry-compatibility.md"),
+    "utf8",
+  );
+  const archivedDesign = await readFile(
+    resolve(
+      repositoryRoot,
+      "docs/archive/design/2026-07-30-documentation-redesign.md",
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    readme,
+    /@sentry\/node@8\.55\.0[^.]*controlled custom transport/isu,
+  );
+  assert.match(
+    readme,
+    /default transport[^.]*not (?:been )?verified|does not prove[^.]*changing only its DSN/isu,
+  );
+  assert.match(
+    readme,
+    /captured\s+`@sentry\/react@8\.55\.0` Envelope coverage/iu,
+  );
+  assert.match(
+    readme,
+    /\[GitHub issue #27\]\(https:\/\/github\.com\/pbuchman\/sentrybox\/issues\/27\)/u,
+  );
+
+  const supportedSdkRow = compatibility
+    .split("\n")
+    .find(
+      (line) =>
+        line.startsWith("| SDK and DSN") && line.includes("**Supported**"),
+  );
+  assert.ok(supportedSdkRow);
+  assert.match(supportedSdkRow, /@sentry\/node@8\.55\.0/u);
+  assert.match(supportedSdkRow, /custom (?:acceptance )?transport/iu);
+  assert.match(
+    supportedSdkRow,
+    /does not prove the SDK's default transport/iu,
+  );
+  assert.doesNotMatch(supportedSdkRow, /@sentry\/react/u);
+  assert.match(
+    compatibility,
+    /Default Node\/React transport behavior and DSN-only application migration are therefore unverified/iu,
+  );
+  assert.match(
+    compatibility,
+    /captured Envelope labelled as `@sentry\/react@8\.55\.0` is parsed and exercised through ingest/iu,
+  );
+  assert.match(
+    compatibility,
+    /does not install or execute that React SDK/iu,
+  );
+  assert.match(
+    archivedDesign,
+    /captured `@sentry\/react@8\.55\.0` Envelope fixture/iu,
+  );
+  assert.doesNotMatch(
+    archivedDesign,
+    /DSN-only migration for the verified Node and React SDK event flow/iu,
+  );
+});
+
+test("defines the exception grouping fallback for unusable exception identity", async () => {
+  const specification = await readFile(
+    resolve(repositoryRoot, "docs/specification.md"),
+    "utf8",
+  );
+
+  assert.match(
+    specification,
+    /exception strategy applies only\s+when the selected exception has a usable string `type` or `value`/iu,
+  );
+  assert.match(
+    specification,
+    /stacktrace-only[^.]*generic[^.]*logger[^.]*service[^.]*title[^.]*message/isu,
+  );
+  assert.match(
+    specification,
+    /unanchored absolute root remains part of the fingerprint[^.]*different roots remain distinct/isu,
+  );
+});
+
+test("documents the unindexed optional text query", async () => {
+  const specification = await readFile(
+    resolve(repositoryRoot, "docs/specification.md"),
+    "utf8",
+  );
+
+  assert.match(
+    specification,
+    /optional text query uses `LIKE` matching[^.]*not described as an indexed lookup/isu,
+  );
+});
+
+test("documents the hardened one-time bootstrap token source", async () => {
+  const runbook = await readFile(
+    resolve(
+      repositoryRoot,
+      "docs/examples/intexuraos-home-dev/runbooks/network-exposure.md",
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    runbook,
+    /`\/var\/lib\/sentrybox-deploy\/bootstrap-github-token`/u,
+  );
+  assert.doesNotMatch(
+    runbook,
+    /\/home\/pbuchman\/services\/sentrybox\/deploy\/github-bootstrap-token/u,
+  );
+  assert.match(runbook, /atomically[^.]*root-owned[^.]*mode-`0600`/isu);
+  assert.match(runbook, /parent directory chain[^.]*root-owned/isu);
+  assert.match(runbook, /removed only after[^.]*successful deployment/isu);
+  assert.match(runbook, /Revoke[^.]*immediately/isu);
+  assert.match(runbook, /not a scheduled rotation credential/isu);
+  assert.doesNotMatch(runbook, /systemd credential/iu);
 });

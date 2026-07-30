@@ -14,6 +14,7 @@ const FORBIDDEN_CLAIMS = [
       /\b(?:offers?|provides?)\s+no\s+(?:a\s+)?$/iu,
       /\bwill\s+never\s+be\s+(?:a\s+)?$/iu,
       /\b(?:does|do)\s+not\s+(?:offer|provide|constitute)\s+(?:a\s+)?$/iu,
+      /\b(?:is|are|was|were)\s+not\s+intended\s+by\s+(?:its|their|the)\s+maintainers\s+to\s+be\s+(?:a|an)\s+$/iu,
     ],
   },
   {
@@ -41,7 +42,7 @@ const FORBIDDEN_CLAIMS = [
     category: "guaranteed 30-day history",
     expression: /\bguaranteed\s+30-day\s+history\b/giu,
     correctivePrefixes: [
-      /\b(?:does|do)\s+not\s+(?:offer|provide|promise)\s+$/iu,
+      /\b(?:does|do)\s+not\s+(?:guarantee|offer|provide|promise)\s+$/iu,
       /\b(?:is|are)\s+not\s+$/iu,
     ],
   },
@@ -68,14 +69,29 @@ export async function findDocumentationFiles(repositoryRoot) {
 export async function validateDocumentation(repositoryRoot, markdownFiles) {
   const root = resolve(repositoryRoot);
   const diagnostics = [];
+  const documents = new Map();
+
+  async function documentation(path) {
+    let document = documents.get(path);
+    if (document === undefined) {
+      const source = await readFile(path, "utf8");
+      const structuralContent = maskFencedCodeAndHtmlComments(source);
+      document = {
+        source,
+        linkContent: maskInlineCode(structuralContent),
+        headingAnchors: markdownHeadingAnchors(structuralContent),
+      };
+      documents.set(path, document);
+    }
+    return document;
+  }
 
   for (const file of markdownFiles) {
     const path = resolve(root, file);
     const displayPath = relative(root, path);
-    const content = await readFile(path, "utf8");
+    const { source, linkContent } = await documentation(path);
 
-    const prose = maskNonProse(content);
-    for (const link of markdownLinks(prose)) {
+    for (const link of markdownLinks(linkContent)) {
       if (link.undefinedReference !== undefined) {
         diagnostics.push(
           `${displayPath}: undefined Markdown reference: ${link.undefinedReference}`,
@@ -83,21 +99,25 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
         continue;
       }
       const target = link.target;
-      if (isExternalLink(target)) continue;
-      const { targetPath, fragment } = splitLocalTarget(target);
-      const resolvedTarget =
-        targetPath.length === 0
+      if (isIgnoredLink(target)) continue;
+      const localTarget = parseLocalLinkTarget(target);
+      const targetPath =
+        localTarget.path.length === 0
           ? path
-          : resolveLocalTarget(root, dirname(path), targetPath);
-      if (resolvedTarget === null || !(await fileExists(resolvedTarget))) {
+          : resolve(dirname(path), localTarget.path);
+      if (!(await fileExists(targetPath))) {
         diagnostics.push(
           `${displayPath}: missing local link target: ${target}`,
         );
         continue;
       }
       if (
-        fragment !== null &&
-        !(await markdownFileContainsFragment(resolvedTarget, fragment))
+        localTarget.fragment !== null &&
+        localTarget.fragment.length > 0 &&
+        (localTarget.path.length === 0 || /\.md$/iu.test(targetPath)) &&
+        !(await documentation(targetPath)).headingAnchors.has(
+          localTarget.fragment,
+        )
       ) {
         diagnostics.push(
           `${displayPath}: missing local link fragment: ${target}`,
@@ -105,14 +125,16 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
       }
     }
 
-    const bashDiagnostic = bashFenceDiagnostic(content);
-    if (bashDiagnostic !== null) {
-      diagnostics.push(`${displayPath}: ${bashDiagnostic}`);
-    }
+    if (!isArchivedDocumentation(displayPath)) {
+      const bashDiagnostic = bashFenceDiagnostic(source);
+      if (bashDiagnostic !== null) {
+        diagnostics.push(`${displayPath}: ${bashDiagnostic}`);
+      }
 
-    for (const claim of FORBIDDEN_CLAIMS) {
-      if (hasForbiddenClaim(prose, claim)) {
-        diagnostics.push(`${displayPath}: forbidden claim: ${claim.category}`);
+      for (const claim of FORBIDDEN_CLAIMS) {
+        if (hasUnqualifiedClaim(linkContent, claim)) {
+          diagnostics.push(`${displayPath}: forbidden claim: ${claim.category}`);
+        }
       }
     }
   }
@@ -132,7 +154,6 @@ async function walkMarkdownFiles(directory, root, files) {
   for (const entry of entries) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) {
-      if (path === resolve(root, "docs/archive")) continue;
       await walkMarkdownFiles(path, root, files);
     } else if (entry.isFile() && entry.name.endsWith(".md")) {
       files.push(relative(root, path));
@@ -202,62 +223,25 @@ function isEscaped(content, index) {
   return backslashes % 2 === 1;
 }
 
-function isExternalLink(target) {
+function isIgnoredLink(target) {
   return /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(target);
 }
 
-function splitLocalTarget(target) {
-  const hash = target.indexOf("#");
-  const beforeFragment = hash === -1 ? target : target.slice(0, hash);
-  const fragmentValue = hash === -1 ? null : target.slice(hash + 1);
-  const query = beforeFragment.indexOf("?");
+function parseLocalLinkTarget(target) {
+  const hashIndex = target.indexOf("#");
+  const queryIndex = target.indexOf("?");
+  const pathEnd = Math.min(
+    hashIndex === -1 ? target.length : hashIndex,
+    queryIndex === -1 ? target.length : queryIndex,
+  );
   return {
-    targetPath:
-      query === -1 ? beforeFragment : beforeFragment.slice(0, query),
+    path: decodeLinkPart(target.slice(0, pathEnd)),
     fragment:
-      fragmentValue === null || fragmentValue.length === 0
-        ? null
-        : decodeURIComponentSafe(fragmentValue),
+      hashIndex === -1 ? null : decodeLinkPart(target.slice(hashIndex + 1)),
   };
 }
 
-function resolveLocalTarget(root, sourceDirectory, targetPath) {
-  const decoded = decodeURIComponentSafe(targetPath);
-  const target = decoded.startsWith("/")
-    ? resolve(root, `.${decoded}`)
-    : resolve(sourceDirectory, decoded);
-  return target === root || target.startsWith(`${root}/`) ? target : null;
-}
-
-async function markdownFileContainsFragment(path, fragment) {
-  if (!path.toLowerCase().endsWith(".md")) return false;
-  const content = await readFile(path, "utf8");
-  return markdownHeadingFragments(maskBlockContent(content)).has(fragment);
-}
-
-function markdownHeadingFragments(content) {
-  const fragments = new Set();
-  const occurrences = new Map();
-  for (const match of content.matchAll(/^ {0,3}#{1,6}[ \t]+(.+?)\s*#*\s*$/gmu)) {
-    const base = githubHeadingSlug(match[1]);
-    if (base.length === 0) continue;
-    const count = occurrences.get(base) ?? 0;
-    occurrences.set(base, count + 1);
-    fragments.add(count === 0 ? base : `${base}-${String(count)}`);
-  }
-  return fragments;
-}
-
-function githubHeadingSlug(value) {
-  return value
-    .toLowerCase()
-    .replace(/<[^>]*>/gu, "")
-    .replace(/[`*_~]/gu, "")
-    .replace(/[^\p{L}\p{N}\p{M} _-]/gu, "")
-    .replace(/\s/gu, "-");
-}
-
-function decodeURIComponentSafe(value) {
+function decodeLinkPart(value) {
   try {
     return decodeURIComponent(value);
   } catch {
@@ -265,63 +249,157 @@ function decodeURIComponentSafe(value) {
   }
 }
 
-function maskNonProse(content) {
-  const characters = maskBlockContent(content).split("");
-  const mask = (start, end) => {
-    for (let index = start; index < end; index += 1) {
-      if (characters[index] !== "\n" && characters[index] !== "\r") {
-        characters[index] = " ";
+function isArchivedDocumentation(path) {
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.startsWith("docs/archive/");
+}
+
+function maskFencedCodeAndHtmlComments(content) {
+  const characters = content.split("");
+  let fence;
+  let offset = 0;
+
+  while (offset < content.length) {
+    const newline = content.indexOf("\n", offset);
+    const end = newline === -1 ? content.length : newline + 1;
+    const line = content
+      .slice(offset, newline === -1 ? content.length : newline)
+      .replace(/\r$/u, "");
+
+    if (fence === undefined) {
+      const opening = /^(?: {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
+      if (opening !== null) {
+        fence = { character: opening[1][0], length: opening[1].length };
+        maskRange(characters, offset, end);
+      }
+    } else {
+      maskRange(characters, offset, end);
+      const closing = /^(?: {0,3})(`{3,}|~{3,})[ \t]*$/u.exec(line);
+      if (
+        closing !== null &&
+        closing[1][0] === fence.character &&
+        closing[1].length >= fence.length
+      ) {
+        fence = undefined;
       }
     }
-  };
-  const withoutBlocks = characters.join("");
-  for (const match of withoutBlocks.matchAll(/(`+)(?!`)([^\r\n]*?)\1/gu)) {
-    mask(match.index, match.index + match[0].length);
+
+    offset = end;
+  }
+
+  let masked = characters.join("");
+  for (const match of masked.matchAll(/<!--[\s\S]*?(?:-->|$)/gu)) {
+    maskRange(characters, match.index, match.index + match[0].length);
+  }
+  masked = characters.join("");
+  return masked;
+}
+
+function maskInlineCode(content) {
+  const characters = content.split("");
+  let cursor = 0;
+  while (cursor < content.length) {
+    if (content[cursor] !== "`" || isEscaped(content, cursor)) {
+      cursor += 1;
+      continue;
+    }
+
+    const openingLength = backtickRunLength(content, cursor);
+    let closing = cursor + openingLength;
+    while (closing < content.length) {
+      if (content[closing] !== "`") {
+        closing += 1;
+        continue;
+      }
+      const closingLength = backtickRunLength(content, closing);
+      if (closingLength === openingLength) break;
+      closing += closingLength;
+    }
+    if (closing >= content.length) {
+      cursor += openingLength;
+      continue;
+    }
+
+    maskRange(characters, cursor, closing + openingLength);
+    cursor = closing + openingLength;
   }
   return characters.join("");
 }
 
-function maskBlockContent(content) {
-  const characters = content.split("");
-  const mask = (start, end) => {
-    for (let index = start; index < end; index += 1) {
-      if (characters[index] !== "\n" && characters[index] !== "\r") {
-        characters[index] = " ";
-      }
+function backtickRunLength(content, start) {
+  let end = start;
+  while (content[end] === "`") end += 1;
+  return end - start;
+}
+
+function maskRange(characters, start, end) {
+  for (let index = start; index < end; index += 1) {
+    if (characters[index] !== "\n" && characters[index] !== "\r") {
+      characters[index] = " ";
     }
-  };
-  for (const match of content.matchAll(/<!--[\s\S]*?-->/gu)) {
-    mask(match.index, match.index + match[0].length);
+  }
+}
+
+function markdownHeadingAnchors(content) {
+  const headings = [];
+  const lines = content.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const atx = /^ {0,3}#{1,6}(?:[ \t]+|$)(.*)$/u.exec(line);
+    if (atx !== null) {
+      headings.push(atx[1].replace(/[ \t]+#+[ \t]*$/u, ""));
+      continue;
+    }
+    if (
+      line.trim().length > 0 &&
+      index + 1 < lines.length &&
+      /^ {0,3}(?:=+|-+)[ \t]*$/u.test(lines[index + 1])
+    ) {
+      headings.push(line.trim());
+      index += 1;
+    }
   }
 
-  let block;
-  let offset = 0;
-  for (const rawLine of content.split(/(?<=\n)/u)) {
-    const line = rawLine.replace(/\r?\n$/u, "");
-    if (block === undefined) {
-      const opening = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
-      if (opening !== null) {
-        block = {
-          start: offset,
-          character: opening[2][0],
-          length: opening[2].length,
-        };
-      }
-    } else {
-      const closing = /^( {0,3})(`{3,}|~{3,})[ \t]*$/u.exec(line);
-      if (
-        closing !== null &&
-        closing[2][0] === block.character &&
-        closing[2].length >= block.length
-      ) {
-        mask(block.start, offset + rawLine.length);
-        block = undefined;
-      }
+  const anchors = new Set();
+  for (const heading of headings) {
+    const base = githubHeadingSlug(heading);
+    let slug = base;
+    let suffix = 0;
+    while (anchors.has(slug)) {
+      suffix += 1;
+      slug = `${base}-${String(suffix)}`;
     }
-    offset += rawLine.length;
+    anchors.add(slug);
   }
-  if (block !== undefined) mask(block.start, content.length);
-  return characters.join("");
+  return anchors;
+}
+
+function githubHeadingSlug(heading) {
+  const text = markdownInlineText(heading).toLowerCase().trim();
+  return text
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\s-]/gu, "")
+    .replace(/\s/gu, "-");
+}
+
+function markdownInlineText(value) {
+  return value
+    .replace(/!\[([^\]\r\n]*)\]\([^\r\n)]*\)/gu, "$1")
+    .replace(/\[([^\]\r\n]+)\]\([^\r\n)]*\)/gu, "$1")
+    .replace(/!?\[([^\]\r\n]+)\]\[[^\]\r\n]*\]/gu, "$1")
+    .replace(/<[^>]*>/gu, "")
+    .replace(/(`+)(.*?)\1/gu, "$2")
+    .replace(/(\*\*|__|~~)(.*?)\1/gu, "$2")
+    .replace(/([*_])(.*?)\1/gu, "$2")
+    .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/gu, "$1")
+    .replace(/&(?:amp|lt|gt|quot|apos);/giu, (entity) =>
+      ({
+        "&amp;": "&",
+        "&apos;": "'",
+        "&gt;": ">",
+        "&lt;": "<",
+        "&quot;": '"',
+      })[entity.toLowerCase()],
+    );
 }
 
 function bashFenceDiagnostic(content) {
@@ -371,7 +449,7 @@ function isValidBash(source) {
   return spawnSync("bash", ["-n"], { input: source, encoding: "utf8" }).status === 0;
 }
 
-function hasForbiddenClaim(content, claim) {
+function hasUnqualifiedClaim(content, claim) {
   for (const match of content.matchAll(claim.expression)) {
     const context = sentencePrefix(content, match.index);
     if (

@@ -167,15 +167,13 @@ Fingerprint version 1 uses this precedence:
 
 1. A non-default explicit Sentry fingerprint, combined with exception type and
    service.
-2. For an exception entry containing a type or value: exception type, normalized
-   exception message, service, and up to five relevant application frames.
-3. For warning messages: logger, service, and a normalized message template.
-
-A stacktrace-only exception entry can be admitted and normalized as an error by
-the ingest boundary, but fingerprint version 1 does not select exception grouping
-for it: warning/fallback logger, service, and message fields are used. Changing
-that behavior requires a new fingerprint version and an explicit migration; it
-must not silently re-key deployed version 1 issues.
+2. For exceptions: exception type, normalized exception message, service, and
+   up to five relevant application frames. This exception strategy applies only
+   when the selected exception has a usable string `type` or `value`.
+3. Otherwise: logger, service, and a normalized title/message template. A
+   stacktrace-only or otherwise nonempty exception without a usable string type
+   or value falls through to this generic logger, service, and title/message
+   strategy.
 
 Frame identity uses module, filename, and function rather than line/column.
 Vendor frames are excluded. For an absolute filename, a volatile prefix is

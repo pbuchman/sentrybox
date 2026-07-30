@@ -8,7 +8,10 @@ readonly repository_root
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
 
-for executable_asset in backup.sh monitor.sh restore-test.sh; do
+for executable_asset in \
+  backup.sh \
+  monitor.sh \
+  restore-test.sh; do
   if [[ ! -f "${script_directory}/${executable_asset}" \
     || -L "${script_directory}/${executable_asset}" \
     || ! -x "${script_directory}/${executable_asset}" ]]; then
@@ -17,7 +20,7 @@ for executable_asset in backup.sh monitor.sh restore-test.sh; do
     exit 1
   fi
 done
-for required_command in caddy cp mktemp sleep systemd-analyze; do
+for required_command in caddy chmod cp find mktemp sleep systemd-analyze; do
   error_hub_require_command "${required_command}"
 done
 
@@ -48,6 +51,8 @@ if [[ "$(id -u)" -ne 0 ]]; then
   printf 'install.sh must run as root.\n' >&2
   exit 1
 fi
+error_hub_require_system_node
+error_hub_normalize_checkout_objects
 
 runtime_uid="${ERROR_HUB_RUNTIME_UID:-$(id -u pbuchman)}"
 runtime_gid="${ERROR_HUB_RUNTIME_GID:-$(id -g pbuchman)}"
@@ -80,6 +85,18 @@ chown "${runtime_uid}:${runtime_gid}" \
   "${error_hub_backup_directory}"
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 error_hub_require_service_credentials
+
+webhook_was_active=0
+if systemctl is-active --quiet sentrybox-deploy-webhook.service; then
+  webhook_was_active=1
+  error_hub_require_root_private_directory \
+    "${error_hub_deploy_credentials_directory}" \
+    "SentryBox deployment credential directory"
+  error_hub_require_root_private_file \
+    "${error_hub_webhook_credential}" \
+    "SentryBox deployment webhook credential"
+fi
+readonly webhook_was_active
 
 if [[ -L "${error_hub_state_directory}" \
   || ( -e "${error_hub_state_directory}" \
@@ -158,6 +175,7 @@ for unit in \
   sentrybox.service \
   sentrybox-deploy.service \
   sentrybox-deploy-webhook.service \
+  sentrybox-deploy-bootstrap.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
   sentrybox-monitor.service \
@@ -172,6 +190,7 @@ systemd-analyze verify \
   "${install_staging}/units/sentrybox.service" \
   "${install_staging}/units/sentrybox-deploy.service" \
   "${install_staging}/units/sentrybox-deploy-webhook.service" \
+  "${install_staging}/units/sentrybox-deploy-bootstrap.service" \
   "${install_staging}/units/sentrybox-backup.service" \
   "${install_staging}/units/sentrybox-backup.timer" \
   "${install_staging}/units/sentrybox-monitor.service" \
@@ -195,6 +214,7 @@ for unit in \
   sentrybox.service \
   sentrybox-deploy.service \
   sentrybox-deploy-webhook.service \
+  sentrybox-deploy-bootstrap.service \
   sentrybox-backup.service \
   sentrybox-backup.timer \
   sentrybox-monitor.service \
@@ -206,6 +226,17 @@ for unit in \
 done
 
 systemctl daemon-reload
+if (( webhook_was_active == 1 )); then
+  systemctl enable sentrybox-deploy-webhook.service >/dev/null
+  if ! systemctl restart sentrybox-deploy-webhook.service; then
+    printf 'Previously active SentryBox deployment webhook failed to restart.\n' >&2
+    exit 1
+  fi
+  if ! systemctl is-active --quiet sentrybox-deploy-webhook.service; then
+    printf 'Restarted SentryBox deployment webhook is not active.\n' >&2
+    exit 1
+  fi
+fi
 systemctl enable --now \
   sentrybox.service \
   sentrybox-backup.timer \
