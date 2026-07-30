@@ -160,9 +160,7 @@ export function readBootstrapToken(
   assertSafeTokenFile(pathMetadata);
 
   const flags =
-    constants.O_RDONLY |
-    constants.O_NOFOLLOW |
-    constants.O_NONBLOCK;
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
   const descriptor = open(path, flags);
   try {
     const descriptorMetadata = fstat(descriptor);
@@ -178,7 +176,9 @@ export function readBootstrapToken(
 
     const token = readFile(descriptor, "utf8").replace(/\r?\n$/u, "");
     if (token.length === 0 || token.includes("\n") || token.includes("\r")) {
-      throw new Error("GitHub bootstrap token must contain one non-empty value");
+      throw new Error(
+        "GitHub bootstrap token must contain one non-empty value",
+      );
     }
     return token;
   } finally {

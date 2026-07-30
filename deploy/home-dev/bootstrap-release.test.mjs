@@ -15,8 +15,7 @@ const SHA = "1234567890abcdef1234567890abcdef12345678";
 const OTHER_SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const WORKFLOW_RUNS_URL =
   "https://api.github.com/repos/pbuchman/sentrybox/actions/workflows/release-image.yml/runs?event=push&status=completed&per_page=100";
-const BOOTSTRAP_TOKEN_FILE =
-  "/var/lib/sentrybox-deploy/bootstrap-github-token";
+const BOOTSTRAP_TOKEN_FILE = "/var/lib/sentrybox-deploy/bootstrap-github-token";
 
 test("bootstrap selects the exact current canonical release and submits the canonical request", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sentrybox-bootstrap-"));
@@ -186,7 +185,9 @@ test("unsafe bootstrap parents prevent content reads and GitHub requests", async
         bootstrapFirstRelease({
           token: readBootstrapToken(BOOTSTRAP_TOKEN_FILE, {
             lstat: (path) =>
-              path === unsafePath ? unsafeMetadata : safeBootstrapMetadata(path),
+              path === unsafePath
+                ? unsafeMetadata
+                : safeBootstrapMetadata(path),
             readFile: () => {
               reads += 1;
               return "must-not-be-read";
