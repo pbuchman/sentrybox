@@ -41,7 +41,7 @@ literals and exercise the real filesystem and Bash parser.
 
 - [ ] **Step 2: Verify the tests fail because the module is absent**
 
-Run: `PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test scripts/docs/verify-documentation.test.mjs`  
+Run: `PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test scripts/docs/verify-documentation.test.mjs`
 Expected: FAIL because `verify-documentation.mjs` does not exist.
 
 - [ ] **Step 3: Implement the minimal verifier**
@@ -55,7 +55,7 @@ Sentry, guaranteed 30-day history, and a hard 5 GiB total limit.
 
 - [ ] **Step 4: Run the focused tests**
 
-Run: `PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test scripts/docs/verify-documentation.test.mjs`  
+Run: `PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test scripts/docs/verify-documentation.test.mjs`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -105,7 +105,7 @@ Home Dev/Code Agent procedures.
 - [ ] **Step 5: Validate the focused product pages**
 
 Run the verifier against the product pages and run:
-`rg -n 'errors\.intexuraos\.cloud|/home/pbuchman|Code Agent' README.md docs/specification.md docs/reference/sentry-compatibility.md`  
+`rg -n 'errors\.intexuraos\.cloud|/home/pbuchman|Code Agent' README.md docs/specification.md docs/reference/sentry-compatibility.md`
 Expected: no tenant deployment details in product pages; compatibility names
 Code Agent only where it precisely scopes the webhook contract.
 
@@ -158,9 +158,9 @@ documentation-contract step to both CI and release workflows before build/test.
 - [ ] **Step 5: Run focused and full checks**
 
 Run:
-`PATH=/opt/homebrew/opt/node@22/bin:$PATH pnpm test:docs`  
-`PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test test/ci/workflow-policy.test.mjs test/container/runtime-contract.test.mjs`  
-`PATH=/opt/homebrew/opt/node@22/bin:$PATH pnpm format:check`  
+`PATH=/opt/homebrew/opt/node@22/bin:$PATH pnpm test:docs`
+`PATH=/opt/homebrew/opt/node@22/bin:$PATH node --test test/ci/workflow-policy.test.mjs test/container/runtime-contract.test.mjs`
+`PATH=/opt/homebrew/opt/node@22/bin:$PATH pnpm format:check`
 Expected: all pass with no broken active links, shell syntax errors, stale active
 paths, or forbidden claims.
 
@@ -191,4 +191,3 @@ Run: `git diff --check origin/main...HEAD` and inspect `git status --short`.
 
 Review against the approved design and every Global Constraint above. Resolve
 all Critical and Important findings before publication.
-

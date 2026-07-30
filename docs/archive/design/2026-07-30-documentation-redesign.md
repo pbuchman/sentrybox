@@ -1,6 +1,6 @@
 # SentryBox Documentation Redesign
 
-**Status:** Approved for implementation on 2026-07-30  
+**Status:** Approved for implementation on 2026-07-30
 **Type:** Historical design record
 
 ## Objective
@@ -85,4 +85,3 @@ A repository-owned checker validates active local links, parses active shell
 examples with `bash -n`, and rejects a small set of misleading unqualified
 Sentry claims. Archive content is retained as history and excluded from current
 product-copy policy. The checker runs in the normal test and CI path.
-
