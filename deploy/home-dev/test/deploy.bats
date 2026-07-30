@@ -301,6 +301,10 @@ case "${request_url}" in
     [ -f "${count_file}" ] && count="$(cat "${count_file}")"
     count=$((count + 1))
     printf '%s\n' "${count}" >"${count_file}"
+    if [ "${count}" -le \
+      "${ERROR_HUB_FAKE_WEBHOOK_STARTUP_REFUSALS:-0}" ]; then
+      exit 7
+    fi
     if [ "${ERROR_HUB_FAKE_WEBHOOK_TRANSIENT:-0}" = 1 ] \
       && [ "${count}" -ge 2 ]; then
       rm -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
@@ -613,6 +617,27 @@ EOF
   [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service" ]
 }
 
+@test "install allows bounded listener startup before proving webhook stability" {
+  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  mkdir -p "${webhook_secret%/*}"
+  chmod 0700 "${webhook_secret%/*}"
+  printf '%064d\n' 0 >"${webhook_secret}"
+  chmod 0600 "${webhook_secret}"
+  printf '%s\n' \
+    '[Service]' \
+    'ExecStart=/usr/bin/node deploy/home-dev/deploy-webhook.mjs' \
+    >"${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+  export ERROR_HUB_FAKE_WEBHOOK_STARTUP_REFUSALS=1
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ "$(cat "${ERROR_HUB_FAKE_STATE}/webhook-probe-count")" -eq 9 ]
+  [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service" ]
+}
+
 @test "install rejects a webhook that is only briefly active after restart" {
   webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
@@ -631,6 +656,7 @@ EOF
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"did not remain stable"* ]]
+  [ "$(cat "${ERROR_HUB_FAKE_STATE}/webhook-probe-count")" -eq 2 ]
 }
 
 @test "active webhook installation rejects an unsafe credential before publishing units" {
