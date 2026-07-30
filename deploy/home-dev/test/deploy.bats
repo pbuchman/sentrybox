@@ -1106,7 +1106,7 @@ EOF
   [ -n "${rollback_restart_line}" ]
   [ "${rollback_checkout_line}" -lt "${rollback_restart_line}" ]
   [ "$(grep -Fc \
-    'checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
     "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
   run grep -F 'respond "temporarily unavailable" 503' \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"

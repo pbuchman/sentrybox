@@ -1,0 +1,46 @@
+[Unit]
+Description=Bootstrap the first verified SentryBox deployment
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/pbuchman/deploy/sentrybox/deploy/home-dev/bootstrap-release.mjs
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/pbuchman/deploy/sentrybox
+ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs
+LoadCredential=github-bootstrap-token:/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token
+StateDirectory=sentrybox-deploy
+StateDirectoryMode=0700
+TimeoutStartSec=22min
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sentrybox-deploy-bootstrap
+MemoryMax=128M
+TasksMax=32
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sentrybox-deploy
+InaccessiblePaths=/var/run/docker.sock
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service pkey_alloc pkey_free pkey_mprotect
