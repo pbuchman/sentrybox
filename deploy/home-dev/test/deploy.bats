@@ -498,9 +498,12 @@ printf 'systemd-analyze %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 exit 0
 EOF
 
-  cat >"${fixture_root}/fake-bin/sleep" <<'EOF'
+cat >"${fixture_root}/fake-bin/sleep" <<'EOF'
 #!/bin/sh
 printf 'sleep %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+if [ "${ERROR_HUB_FAKE_SLEEP_FAIL:-0}" = 1 ]; then
+  exit 1
+fi
 if [ "$*" = 1 ]; then
   exit 0
 fi
@@ -636,6 +639,27 @@ EOF
   [ "${status}" -eq 0 ]
   [ "$(cat "${ERROR_HUB_FAKE_STATE}/webhook-probe-count")" -eq 9 ]
   [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service" ]
+}
+
+@test "install fails closed when the webhook stability wait fails" {
+  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  mkdir -p "${webhook_secret%/*}"
+  chmod 0700 "${webhook_secret%/*}"
+  printf '%064d\n' 0 >"${webhook_secret}"
+  chmod 0600 "${webhook_secret}"
+  printf '%s\n' \
+    '[Service]' \
+    'ExecStart=/usr/bin/node deploy/home-dev/deploy-webhook.mjs' \
+    >"${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+  export ERROR_HUB_FAKE_SLEEP_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"did not remain stable"* ]]
+  [ "$(cat "${ERROR_HUB_FAKE_STATE}/webhook-probe-count")" -eq 2 ]
 }
 
 @test "install rejects a webhook that is only briefly active after restart" {
