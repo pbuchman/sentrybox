@@ -14,6 +14,38 @@ The public hostnames terminate TLS at Cloudflare Tunnel and reach Caddy over
 Home Dev loopback HTTP. The private application is served by Tailscale and has
 no application login because tailnet ACLs are the access boundary.
 
+## Bootstrap service credentials before installation
+
+Before the first `install.sh` run, create the exact two-name credential file.
+The installer fails closed and starts no service when this file is absent,
+empty, malformed, or contains any extra name. Run this from the canonical
+checkout on Home Dev; it prompts on the terminal and never places either value
+in a command argument, environment variable, repository file, or log:
+
+```bash
+sudo bash -c '
+set -euo pipefail
+credential_file=/home/pbuchman/services/sentrybox/env
+install -d -m 0700 /home/pbuchman/services/sentrybox
+read -r -s -p "CODE_AGENT_HMAC_DEV: " code_agent_hmac_dev
+printf "\n" >&2
+read -r -s -p "CODE_AGENT_HMAC_PROD: " code_agent_hmac_prod
+printf "\n" >&2
+[[ -n "${code_agent_hmac_dev}" && -n "${code_agent_hmac_prod}" ]]
+temporary_file="$(mktemp "${credential_file}.XXXXXX")"
+trap "rm -f -- \"${temporary_file}\"" EXIT
+printf "CODE_AGENT_HMAC_DEV=%s\nCODE_AGENT_HMAC_PROD=%s\n" \
+  "${code_agent_hmac_dev}" "${code_agent_hmac_prod}" >"${temporary_file}"
+chown "$(id -u pbuchman):$(id -g pbuchman)" "${temporary_file}"
+chmod 0600 "${temporary_file}"
+mv -f "${temporary_file}" "${credential_file}"
+unset code_agent_hmac_dev code_agent_hmac_prod
+'
+```
+
+Do not add Sentry DSNs, a third name, blank values, or duplicate names. The
+runtime UID/GID must retain access to this mode-`0600` regular file.
+
 ## Install the Caddy fragments
 
 The canonical fragments are:
@@ -50,8 +82,8 @@ handled signal. The operator command must contain the complete transaction; do
 not enter maintenance in one command and perform the change after its lock has
 been released.
 
-From the repository root, run the canonical installer as root with the actual
-private tailnet origin:
+Only after the credential bootstrap completes, run the canonical installer as
+root with the actual private tailnet origin:
 
 ```bash
 sudo ./deploy/home-dev/install.sh \

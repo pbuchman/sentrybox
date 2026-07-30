@@ -116,7 +116,7 @@ test("operator commands load deployment state explicitly", async () => {
   const composeCommands =
     runbook.match(/sudo docker compose[\s\S]*?(?=\n```)/gu) ?? [];
 
-  assert.ok(composeCommands.length >= 6);
+  assert.ok(composeCommands.length >= 5);
   for (const command of composeCommands) {
     assert.match(
       command,
@@ -128,15 +128,16 @@ test("operator commands load deployment state explicitly", async () => {
     Array.from(
       runbook.matchAll(/--config \/run\/config\/sentrybox-projects\.json/gu),
     ).length,
-    7,
+    6,
   );
   const disableSection =
     runbook
       .split("## Disable Code Agent delivery")[1]
-      ?.split("## Disable legacy Sentry shadow forwarding")[0] ?? "";
-  assert.match(disableSection, /\/home\/pbuchman\/services\/sentrybox\/env/u);
-  assert.match(disableSection, /\/var\/lib\/sentrybox-deploy\/runtime\.env/u);
-  assert.match(disableSection, /remove[^.]*HMAC[^.]*name/iu);
+      ?.split("## Environment-mismatch acceptance check")[0] ?? "";
+  assert.match(
+    disableSection,
+    /Keep both HMAC values and their two-name runtime reference list in place/u,
+  );
 });
 
 test("maintenance transition arms recovery before the bounded service stop", async () => {

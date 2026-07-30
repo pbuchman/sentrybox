@@ -22,29 +22,30 @@ The non-secret manifest at
 | `intexuraos-web` | 2 | `dev` | `http://localhost:3000`, `https://dev.intexuraos.cloud` |
 | `intexuraos-web` | 2 | `prod` | `https://intexuraos.cloud` |
 
-Each record binds one environment to one legacy Sentry forwarding reference
-and one Code Agent destination. Development and production use different Code
-Agent HMAC references. All Code Agent destinations start in `disabled` mode.
+Each record has forwarding permanently `disabled` with no forwarding secret
+reference, and binds one environment to one Code Agent destination. Development
+and production use different Code Agent HMAC references. All Code Agent
+destinations start in `disabled` mode.
 The single HTTP exception is the exact local Vite origin
 `http://localhost:3000`, and it is valid only on development keys. Production
 keys and localhost lookalikes remain invalid.
 
 ## Prerequisites
 
-1. Start SentryBox once so its database migrations complete.
-2. Put the four current legacy Sentry DSNs in
-   `/home/pbuchman/services/sentrybox/env`, using the reference names
-   from `deploy/home-dev/env.example`. Set mode `0600` and the runtime UID/GID.
-3. Do not add the Code Agent HMAC values yet. The credential parser rejects
-   entries that are not in `ERROR_HUB_REQUIRED_SECRET_REFERENCES`.
-4. Confirm `/health/ready` is healthy and the Code Agent destinations are still
+1. Before the first install or service start, follow the exact two-name
+   [credential bootstrap in the network-exposure runbook](network-exposure.md#bootstrap-service-credentials-before-installation).
+   It creates mode-`0600` `/home/pbuchman/services/sentrybox/env` without
+   exposing values in a command, environment variable, repository file, or log.
+2. Run `install.sh` only after that bootstrap, then let the first start complete
+   database migrations.
+3. Confirm `/health/ready` is healthy and the Code Agent destinations are still
    disabled.
-5. Put the credential-free HTTPS Grafana Explore URL in the second line of
+4. Put the credential-free HTTPS Grafana Explore URL in the second line of
    `/var/lib/sentrybox-deploy/runtime.env` so event details can open matching
    logs. Keep the required-reference list as the first line:
 
 ```dotenv
-ERROR_HUB_REQUIRED_SECRET_REFERENCES=<comma-separated reference names>
+ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD
 ERROR_HUB_GRAFANA_EXPLORE_URL=https://<grafana-stack-host>/explore?orgId=1&datasource=<loki-datasource-uid>
 ```
 
@@ -87,15 +88,15 @@ sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env exec -T sen
 ```
 
 The validation checks project identity, environment binding, unique 32-byte
-key hashes, exact CORS origins, forwarding references, and disabled webhook
-state. It never emits a hash or DSN.
+key hashes, exact CORS origins, disabled forwarding with no reference, and
+disabled webhook state. It never emits a hash or DSN.
 
 ## Enable Code Agent delivery
 
-Do this only after the shadow phase and the Code Agent reservation fix have
-been verified. Put the following steps in one root-owned, mode-`0700` operator
-script under `/run`; the script must not enable shell tracing or print a
-credential. Execute it with an explicit UTC baseline while the checked-in
+Do this only after the Code Agent reservation fix and steady-state readiness
+have been verified. Put the following steps in one root-owned, mode-`0700`
+operator script under `/run`; the script must not enable shell tracing or print
+a credential. Execute it with an explicit UTC baseline while the checked-in
 maintenance wrapper owns the deployment lock:
 
 ```bash
@@ -146,17 +147,14 @@ this exact order, are:
    `systemctl stop sentrybox.service`. The conservative flag makes the EXIT trap
    restart and probe the service even when the stop fails or is interrupted; a
    redundant start is safe.
-2. For the dev cutover, atomically add only `CODE_AGENT_HMAC_DEV` to the
-   mode-`0600`
-   credential file without printing its value. Add `CODE_AGENT_HMAC_PROD` only
-   during the later production cutover.
-3. Atomically replace `/var/lib/sentrybox-deploy/runtime.env` with a root-owned,
-   mode-`0600` regular file whose **first line** adds the matching HMAC name to
-   `ERROR_HUB_REQUIRED_SECRET_REFERENCES`. Preserve the existing second
-   `ERROR_HUB_GRAFANA_EXPLORE_URL` line byte-for-byte. This file is the
-   persistent source used by normal starts, deployments, and rollbacks; do not
-   export the value only in an interactive shell.
-4. Start a one-off container with the same data/config mounts and run the
+2. Confirm the mode-`0600` credential file still contains exactly
+   `CODE_AGENT_HMAC_DEV` and `CODE_AGENT_HMAC_PROD`, without printing either
+   value. Confirm the first line of `/var/lib/sentrybox-deploy/runtime.env` is
+   exactly `ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD`.
+   Preserve any second `ERROR_HUB_GRAFANA_EXPLORE_URL` line byte-for-byte. This
+   file is the persistent source used by normal starts, deployments, and
+   rollbacks; do not export values only in an interactive shell.
+3. Start a one-off container with the same data/config mounts and run the
    transition with that same baseline argument:
 
 ```bash
@@ -168,7 +166,7 @@ sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --
   --enable-code-agent-at "${baseline}"
 ```
 
-5. Start `sentrybox.service`; only after that command succeeds, set
+4. Start `sentrybox.service`; only after that command succeeds, set
    `service_recovery_required=0`. Then validate development as live against the
    same baseline and production as disabled before the operator script exits:
 
@@ -213,39 +211,16 @@ sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --
   --disable-code-agent-at 2026-07-28T15:00:00.000Z
 ```
 
-Only after disabling that environment, keep maintenance active and the service
-stopped while atomically replacing both files: remove the matching HMAC value
-from `/home/pbuchman/services/sentrybox/env` and remove the matching HMAC name
-from only the first line of `/var/lib/sentrybox-deploy/runtime.env`; preserve its
-Grafana line. Then start the service and validate it with
-`--environment dev --webhook-mode disabled`.
-
-## Disable legacy Sentry shadow forwarding
-
-After the required stable observation window, permanently stop forwarding the
-selected environment to Sentry without manual SQL. If the legacy destination is
-unavailable and cannot produce comparison evidence, use the explicit
-[development direct-cutover procedure](dev-direct-cutover.md) instead of
-pretending that a shadow window passed:
-
-```bash
-sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env run --rm --no-deps sentrybox node \
-  scripts/admin/generate-project-config.mjs \
-  --database /data/error-hub.sqlite \
-  --config /run/config/sentrybox-projects.json \
-  --environment dev \
-  --disable-forwarding-at 2026-08-04T13:00:00.000Z
-```
-
-Validate with `--environment dev --forwarding-mode disabled`, then remove only
-the two matching legacy DSN references from the credential file and the first
-line's required-reference list. Preserve the Grafana line. Repeat for `prod`
-only after its independent stability window.
+Keep both HMAC values and their two-name runtime reference list in place: they
+are the steady-state credential contract. Then start the service and validate it
+with `--environment dev --webhook-mode disabled`.
 
 ## Environment-mismatch acceptance check
 
-Before cutover, send one controlled `dev` envelope through a dev DSN and verify
-one occurrence. Then send a different event through that same DSN with
+As a post-cutover regression check, send one controlled `dev` envelope through
+a dev DSN and verify one occurrence. Then send a different event through that
+same DSN with
 `environment=prod`. The second request must return a Sentry-compatible `400`,
-and the event, occurrence count, shadow-forward queue, and webhook outbox must
-remain unchanged. This contract is also covered by the server ingest test.
+and the event, occurrence count, and webhook outbox must remain unchanged.
+Forwarding is disabled for every bundled key. This contract is also covered by
+the server ingest test.

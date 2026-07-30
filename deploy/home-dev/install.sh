@@ -59,8 +59,15 @@ fi
 
 install -d -m 0755 "${error_hub_checkout}"
 install -d -m 0700 "${error_hub_service_root}"
-if [[ ! -e "${error_hub_environment_file}" ]]; then
-  install -m 0600 /dev/null "${error_hub_environment_file}"
+if [[ -L "${error_hub_environment_file}" ]]; then
+  printf 'SentryBox service credential file must be a regular file.\n' >&2
+  exit 1
+elif [[ ! -e "${error_hub_environment_file}" ]]; then
+  printf 'SentryBox service credential file must be created before installation.\n' >&2
+  exit 1
+elif [[ ! -f "${error_hub_environment_file}" ]]; then
+  printf 'SentryBox service credential file must be a regular file.\n' >&2
+  exit 1
 else
   chmod 0600 "${error_hub_environment_file}"
 fi
@@ -72,6 +79,7 @@ chown "${runtime_uid}:${runtime_gid}" \
   "${error_hub_data_directory}" \
   "${error_hub_backup_directory}"
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
+error_hub_require_service_credentials
 
 if [[ -L "${error_hub_state_directory}" \
   || ( -e "${error_hub_state_directory}" \
@@ -93,7 +101,7 @@ else
   runtime_environment_temporary="${error_hub_runtime_environment_file}.tmp.$$"
   umask 077
   printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' \
-    "${error_hub_initial_secret_references}" >"${runtime_environment_temporary}"
+    "${error_hub_required_secret_references}" >"${runtime_environment_temporary}"
   chown 0:0 "${runtime_environment_temporary}"
   chmod 0600 "${runtime_environment_temporary}"
   mv -f "${runtime_environment_temporary}" "${error_hub_runtime_environment_file}"
