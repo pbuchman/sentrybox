@@ -4,10 +4,11 @@
 
 This page defines the Sentry interoperability boundary for SentryBox. A feature
 is compatible only to the extent recorded here and covered by the repository's
-source and tests. Runtime SDK evidence covers `@sentry/node@8.55.0`; captured
-Envelope fixtures cover `@sentry/react@8.55.0`; and external read-client
-evidence covers `@sentry/mcp-server@0.37.0`. Other versions and clients require
-their own verification.
+source and tests. The evidence baseline is a real `@sentry/node@8.55.0` event
+delivered through the repository's controlled custom transport, a captured
+`@sentry/react@8.55.0` Envelope fixture, and external
+`@sentry/mcp-server@0.37.0`. These evidence levels are not interchangeable;
+other versions and clients require their own verification.
 
 The state labels mean:
 
@@ -20,8 +21,8 @@ The state labels mean:
 
 | Area                 | State             | Normative boundary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | -------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SDK and DSN          | **Supported**     | Standard DSNs and the event flow emitted by `@sentry/node@8.55.0` are verified. Moving this flow requires changing the DSN value, not existing Node SDK capture calls. Query-string authentication and standard `X-Sentry-Auth` are accepted.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| SDK and DSN          | **Partial**       | Captured `@sentry/react@8.55.0` Envelope fixtures verify parsing and ingest compatibility. Runtime browser SDK construction, transport, CORS, authentication, and response handling are not directly exercised. Other SDKs and versions may happen to emit compatible Envelopes, but they are outside the evidence baseline. Project and environment authority comes from the configured numeric project ID/public key pair; event metadata cannot select another project or environment.                                                                                                                                                                                                        |
+| SDK and DSN          | **Supported**     | Standard DSN project/key authentication, query-string authentication, and standard `X-Sentry-Auth` are accepted. The repository initializes real `@sentry/node@8.55.0`, creates and flushes an event, and delivers its Envelope through the controlled custom acceptance transport. This proves the stated event-generation and ingest flow; it does not prove the SDK's default transport against SentryBox.                                                                                                                                                                                                                                                                                                                                            |
+| SDK and DSN          | **Partial**       | A captured Envelope labelled as `@sentry/react@8.55.0` is parsed and exercised through ingest, but this repository does not install or execute that React SDK. Default Node/React transport behavior and DSN-only application migration are therefore unverified. Other SDKs and versions may happen to emit compatible Envelopes, but are outside the evidence baseline. Project and environment authority comes from the configured numeric project ID/public key pair; event metadata cannot select another project or environment.                                                                                                                                                                                                                          |
 | SDK and DSN          | **Not supported** | Legacy `/store/`, minidump, Unreal, security-report, feedback, replay, and attachment endpoints are not implemented. SentryBox is not a drop-in Sentry replacement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Envelope             | **Supported**     | `POST /api/{projectId}/envelope/` accepts newline- or length-framed `event` items in identity or gzip request bodies, with or without `Content-Type`. The decompressed Envelope limit is 1 MiB; duplicate header fields, malformed framing, invalid JSON, and mismatched event IDs are rejected. Exact configured browser origins receive CORS support.                                                                                                                                                                                                                                                                                                                                         |
 | Envelope             | **Partial**       | Only `event` items can be stored. Non-binary `transaction`, `span`, `session`, `sessions`, `client_report`, profile, replay, feedback, and unknown items are acknowledged and discarded so the SDK does not retry unsupported telemetry. `attachment` and any `application/octet-stream` item are rejected with `400` and are never stored.                                                                                                                                                                                                                                                                                                                                                     |
@@ -91,10 +92,12 @@ Every request carries all four headers:
 
 ## Upgrade rule
 
-Changing either SDK version, the external MCP package version, an Envelope
-capability, a facade route, or a fidelity statement changes this compatibility
-contract. The change requires focused compatibility evidence before the matrix
-can be widened.
+Changing either SDK evidence fixture/version, the external MCP package version,
+an Envelope capability, a facade route, or a fidelity statement changes this
+compatibility contract. The change requires focused compatibility evidence
+before the matrix can be widened. DSN-only migration may be claimed only after
+the relevant SDK's default transport is executed against SentryBox in a
+repeatable test.
 
 ## Protocol references
 

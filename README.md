@@ -14,12 +14,10 @@ when an issue is created or regresses.
 
 ## What it provides
 
-- `@sentry/node@8.55.0` supports a DSN-only move without changes to existing
-  capture calls for the verified event flow.
-- React compatibility evidence for `@sentry/react@8.55.0` is limited to
-  captured Envelope fixtures whose parsing and ingest are verified. Browser
-  SDK construction, transport, CORS, authentication, and response handling are
-  not directly exercised, so runtime React compatibility is partial.
+- Tested acceptance of a real `@sentry/node@8.55.0` event Envelope delivered by
+  the repository's controlled custom transport, plus captured
+  `@sentry/react@8.55.0` Envelope coverage. These are deliberately different
+  evidence levels; neither is a blanket DSN-only migration claim.
 - Ownership of normalized error data, access boundaries, retention, and storage
   policy.
 - A public write-only ingest surface separated from the private operator UI,
@@ -31,8 +29,8 @@ when an issue is created or regresses.
 
 ## From SDK to operator
 
-1. A verified Node SDK application, or another client that emits a compatible
-   event Envelope, sends it to a project DSN.
+1. A compatible application sends a supported Sentry event Envelope to a
+   project DSN.
 2. The public listener validates the DSN key, project, environment, origin, body
    limits, and rate limits.
 3. SentryBox admits warning, error, and fatal events; redacts and bounds the
@@ -49,18 +47,21 @@ project model are implemented for multiple projects and environments. The
 current bundled configuration, organization slug, UI permalinks, public hosts,
 and project-configuration validator still contain IntexuraOS-specific defaults.
 Those defaults are visible constraints, not part of the independent product
-boundary.
+boundary. Their removal is tracked separately in
+[GitHub issue #27](https://github.com/pbuchman/sentrybox/issues/27).
 
-The DSN-only move applies only to the verified Node event flow. It does not
-move traces, transactions, spans, sessions, profiles, replay, feedback,
-attachments, or the rest of the Sentry platform.
+The current evidence does not prove that an arbitrary application can move by
+changing only its DSN. It covers one pinned Node SDK flow through the controlled
+custom transport and a captured React Envelope fixture. Traces, transactions,
+spans, sessions, profiles, replay, feedback, attachments, and the rest of the
+Sentry platform remain outside the product boundary.
 
 ## Compatibility summary
 
-SentryBox supports standard DSNs, newline-framed event Envelopes, identity and
-gzip bodies, browser CORS for configured origins, and the response outcomes used
-by the verified Node SDK flow. It provides a custom private UI and a small
-Sentry-shaped read facade for two tested MCP investigations.
+SentryBox supports standard DSN authentication, newline-framed event Envelopes,
+identity and gzip bodies, browser CORS for configured origins, and the documented
+response outcomes. It provides a custom private UI and a small Sentry-shaped read
+facade for two tested MCP investigations.
 
 SentryBox is not a drop-in Sentry replacement and is not fully
 Sentry-compatible. It does not implement Sentry's UI, complete HTTP API,

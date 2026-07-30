@@ -6,20 +6,54 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const FORBIDDEN_CLAIMS = [
-  [
-    "drop-in/full Sentry replacement",
-    /\b(?:drop-in|full)\s+sentry\s+replacement\b/giu,
-  ],
-  ["fully Sentry-compatible", /\bfully\s+sentry-compatible\b/giu],
-  ["built-in/native MCP", /\b(?:built-in|native)\s+MCP\b/giu],
-  ["same grouping as Sentry", /\bsame\s+grouping\s+as\s+Sentry\b/giu],
-  ["guaranteed 30-day history", /\bguaranteed\s+30-day\s+history\b/giu],
-  ["hard 5 GiB total limit", /\b5\s+GiB\s+total\s+limit\b/giu],
-];
-
-const APPROVED_NEGATED_CLAIM_CONTEXTS = [
-  /\b(?:is|are|was|were)\s+not\s+intended\s+by\s+(?:its|their|the)\s+maintainers\s+to\s+be\s+(?:a|an)\s+$/iu,
-  /\b(?:not|(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't)\s+(?!(?:only|just|merely)\b)(?:(?!but\b|however\b|although\b|yet\b)[\p{L}\p{N}-]+\s+){0,4}$/iu,
+  {
+    category: "drop-in/full Sentry replacement",
+    expression: /\b(?:drop-in|full)\s+sentry\s+replacement\b/giu,
+    correctivePrefixes: [
+      /\b(?:is|are)\s+not\s+(?:a\s+)?$/iu,
+      /\b(?:offers?|provides?)\s+no\s+(?:a\s+)?$/iu,
+      /\bwill\s+never\s+be\s+(?:a\s+)?$/iu,
+      /\b(?:does|do)\s+not\s+(?:offer|provide|constitute)\s+(?:a\s+)?$/iu,
+      /\b(?:is|are|was|were)\s+not\s+intended\s+by\s+(?:its|their|the)\s+maintainers\s+to\s+be\s+(?:a|an)\s+$/iu,
+    ],
+  },
+  {
+    category: "fully Sentry-compatible",
+    expression: /\bfully\s+sentry-compatible\b/giu,
+    correctivePrefixes: [/\b(?:is|are)\s+not\s+$/iu],
+  },
+  {
+    category: "built-in/native MCP",
+    expression: /\b(?:built-in|native)\s+MCP\b/giu,
+    correctivePrefixes: [
+      /\b(?:does|do)\s+not\s+(?:include|provide|offer)\s+$/iu,
+      /\b(?:has|have)\s+no\s+$/iu,
+    ],
+  },
+  {
+    category: "same grouping as Sentry",
+    expression: /\bsame\s+grouping\s+as\s+Sentry\b/giu,
+    correctivePrefixes: [
+      /\b(?:does|do)\s+not\s+(?:use|provide|claim)\s+(?:the\s+)?$/iu,
+      /\b(?:is|are)\s+not\s+(?:the\s+)?$/iu,
+    ],
+  },
+  {
+    category: "guaranteed 30-day history",
+    expression: /\bguaranteed\s+30-day\s+history\b/giu,
+    correctivePrefixes: [
+      /\b(?:does|do)\s+not\s+(?:guarantee|offer|provide|promise)\s+$/iu,
+      /\b(?:is|are)\s+not\s+$/iu,
+    ],
+  },
+  {
+    category: "hard 5 GiB total limit",
+    expression: /\b5\s+GiB\s+total\s+limit\b/giu,
+    correctivePrefixes: [
+      /\b(?:does|do)\s+not\s+(?:impose|enforce|have)\s+(?:a\s+)?$/iu,
+      /\b(?:is|are)\s+not\s+(?:a\s+)?$/iu,
+    ],
+  },
 ];
 
 export async function findDocumentationFiles(repositoryRoot) {
@@ -57,7 +91,14 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
     const displayPath = relative(root, path);
     const { source, linkContent } = await documentation(path);
 
-    for (const target of markdownLinkTargets(linkContent)) {
+    for (const link of markdownLinks(linkContent)) {
+      if (link.undefinedReference !== undefined) {
+        diagnostics.push(
+          `${displayPath}: undefined Markdown reference: ${link.undefinedReference}`,
+        );
+        continue;
+      }
+      const target = link.target;
       if (isIgnoredLink(target)) continue;
       const localTarget = parseLocalLinkTarget(target);
       const targetPath =
@@ -90,9 +131,9 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
         diagnostics.push(`${displayPath}: ${bashDiagnostic}`);
       }
 
-      for (const [category, expression] of FORBIDDEN_CLAIMS) {
-        if (hasUnqualifiedClaim(linkContent, expression)) {
-          diagnostics.push(`${displayPath}: forbidden claim: ${category}`);
+      for (const claim of FORBIDDEN_CLAIMS) {
+        if (hasUnqualifiedClaim(linkContent, claim)) {
+          diagnostics.push(`${displayPath}: forbidden claim: ${claim.category}`);
         }
       }
     }
@@ -120,7 +161,7 @@ async function walkMarkdownFiles(directory, root, files) {
   }
 }
 
-function markdownLinkTargets(content) {
+function markdownLinks(content) {
   const targets = [];
   for (const match of content.matchAll(
     /!?\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))(?:\s+[^)]*)?\)/gu,
@@ -140,6 +181,7 @@ function markdownLinkTargets(content) {
     /!?\[([^\]\r\n]+)\](?:\[([^\]\r\n]*)\])?/gu,
   )) {
     if (isEscaped(content, match.index)) continue;
+    if (match[2] === undefined && /^[ x]$/iu.test(match[1])) continue;
     const end = match.index + match[0].length;
     if (content[end] === "(") continue;
     const lineStart = content.lastIndexOf("\n", match.index) + 1;
@@ -153,12 +195,20 @@ function markdownLinkTargets(content) {
       match[2] === undefined || match[2].length === 0 ? match[1] : match[2],
     );
     const target = definitions.get(label);
-    if (target !== undefined) targets.push({ index: match.index, target });
+    if (target !== undefined) {
+      targets.push({ index: match.index, target });
+    } else {
+      targets.push({
+        index: match.index,
+        target: "",
+        undefinedReference: label,
+      });
+    }
   }
 
   return targets
     .sort((left, right) => left.index - right.index)
-    .map(({ target }) => target);
+    .map(({ target, undefinedReference }) => ({ target, undefinedReference }));
 }
 
 function referenceLabel(value) {
@@ -399,28 +449,27 @@ function isValidBash(source) {
   return spawnSync("bash", ["-n"], { input: source, encoding: "utf8" }).status === 0;
 }
 
-function hasUnqualifiedClaim(content, expression) {
-  for (const match of content.matchAll(expression)) {
-    if (!isExplicitlyNegated(content, match.index)) return true;
+function hasUnqualifiedClaim(content, claim) {
+  for (const match of content.matchAll(claim.expression)) {
+    const context = sentencePrefix(content, match.index);
+    if (
+      !claim.correctivePrefixes.some((expression) => expression.test(context))
+    ) {
+      return true;
+    }
   }
   return false;
 }
 
-function isExplicitlyNegated(content, index) {
-  const context = content.slice(
+function sentencePrefix(content, index) {
+  return content.slice(
     Math.max(
-      content.lastIndexOf("\n", index),
       content.lastIndexOf(".", index),
       content.lastIndexOf("!", index),
       content.lastIndexOf("?", index),
       content.lastIndexOf(";", index),
-      content.lastIndexOf(":", index),
-      content.lastIndexOf(",", index),
     ) + 1,
     index,
-  );
-  return APPROVED_NEGATED_CLAIM_CONTEXTS.some((expression) =>
-    expression.test(context),
   );
 }
 

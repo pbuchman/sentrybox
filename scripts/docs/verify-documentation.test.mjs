@@ -48,6 +48,20 @@ test("reports a missing local Markdown link with its source file", async () => {
   );
 });
 
+for (const [description, content, label] of [
+  ["full", "See [setup][missing-full].\n", "missing-full"],
+  ["collapsed", "See [missing collapsed][].\n", "missing collapsed"],
+  ["shortcut", "See [missing shortcut].\n", "missing shortcut"],
+]) {
+  test(`reports an undefined ${description} reference-style Markdown link`, async () => {
+    await withRepository({ "docs/guide.md": content }, async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
+        `docs/guide.md: undefined Markdown reference: ${label}`,
+      ]);
+    });
+  });
+}
+
 test("reports missing inline and reference-style local Markdown images", async () => {
   await withRepository(
     {
@@ -406,6 +420,21 @@ test("rejects a claim after an unrelated earlier negation", async () => {
   );
 });
 
+test("rejects a claim after a broad disputed-status negation", async () => {
+  await withRepository(
+    {
+      "docs/claims.md":
+        "It is not disputed that SentryBox is fully Sentry-compatible.\n",
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/claims.md"]),
+        ["docs/claims.md: forbidden claim: fully Sentry-compatible"],
+      );
+    },
+  );
+});
+
 test("permits a clause-scoped maintainer-intent replacement disclaimer", async () => {
   await withRepository(
     {
@@ -429,18 +458,29 @@ test("states the distinct Node runtime and React fixture evidence", async () => 
     resolve(repositoryRoot, "docs/reference/sentry-compatibility.md"),
     "utf8",
   );
+  const archivedDesign = await readFile(
+    resolve(
+      repositoryRoot,
+      "docs/archive/design/2026-07-30-documentation-redesign.md",
+    ),
+    "utf8",
+  );
 
   assert.match(
     readme,
-    /@sentry\/node@8\.55\.0[^.]*DSN[^.]*capture calls/isu,
+    /@sentry\/node@8\.55\.0[^.]*controlled custom transport/isu,
   );
   assert.match(
     readme,
-    /React[\s\S]{0,160}captured Envelope fixtures[\s\S]{0,80}parsing and ingest/iu,
+    /default transport[^.]*not (?:been )?verified|does not prove[^.]*changing only its DSN/isu,
   );
   assert.match(
     readme,
-    /browser\s+SDK construction[^.]*transport[^.]*CORS[^.]*authentication[^.]*response handling[^.]*not directly exercised/isu,
+    /captured\s+`@sentry\/react@8\.55\.0` Envelope coverage/iu,
+  );
+  assert.match(
+    readme,
+    /\[GitHub issue #27\]\(https:\/\/github\.com\/pbuchman\/sentrybox\/issues\/27\)/u,
   );
 
   const supportedSdkRow = compatibility
@@ -448,17 +488,34 @@ test("states the distinct Node runtime and React fixture evidence", async () => 
     .find(
       (line) =>
         line.startsWith("| SDK and DSN") && line.includes("**Supported**"),
-    );
+  );
   assert.ok(supportedSdkRow);
   assert.match(supportedSdkRow, /@sentry\/node@8\.55\.0/u);
+  assert.match(supportedSdkRow, /custom (?:acceptance )?transport/iu);
+  assert.match(
+    supportedSdkRow,
+    /does not prove the SDK's default transport/iu,
+  );
   assert.doesNotMatch(supportedSdkRow, /@sentry\/react/u);
   assert.match(
     compatibility,
-    /captured `@sentry\/react@8\.55\.0` Envelope fixtures[\s\S]{0,80}parsing and ingest/iu,
+    /Default Node\/React transport behavior and DSN-only application migration are therefore unverified/iu,
   );
   assert.match(
     compatibility,
-    /browser\s+SDK construction[^.]*transport[^.]*CORS[^.]*authentication[^.]*response handling[^.]*not directly exercised/isu,
+    /captured Envelope labelled as `@sentry\/react@8\.55\.0` is parsed and exercised through ingest/iu,
+  );
+  assert.match(
+    compatibility,
+    /does not install or execute that React SDK/iu,
+  );
+  assert.match(
+    archivedDesign,
+    /captured `@sentry\/react@8\.55\.0` Envelope fixture/iu,
+  );
+  assert.doesNotMatch(
+    archivedDesign,
+    /DSN-only migration for the verified Node and React SDK event flow/iu,
   );
 });
 
@@ -475,6 +532,22 @@ test("defines the exception grouping fallback for unusable exception identity", 
   assert.match(
     specification,
     /stacktrace-only[^.]*generic[^.]*logger[^.]*service[^.]*title[^.]*message/isu,
+  );
+  assert.match(
+    specification,
+    /unanchored absolute root remains part of the fingerprint[^.]*different roots remain distinct/isu,
+  );
+});
+
+test("documents the unindexed optional text query", async () => {
+  const specification = await readFile(
+    resolve(repositoryRoot, "docs/specification.md"),
+    "utf8",
+  );
+
+  assert.match(
+    specification,
+    /optional text query uses `LIKE` matching[^.]*not described as an indexed lookup/isu,
   );
 });
 

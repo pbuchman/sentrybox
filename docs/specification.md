@@ -176,7 +176,10 @@ Fingerprint version 1 uses this precedence:
    strategy.
 
 Frame identity uses module, filename, and function rather than line/column.
-Vendor frames, build roots, query strings, UUIDs, common hash lengths,
+Vendor frames are excluded. For an absolute filename, a volatile prefix is
+removed only when the path contains a stable `app`, `apps`, `lib`, `packages`, or
+`src` anchor; an unanchored absolute root remains part of the fingerprint and two
+different roots remain distinct. Query strings, UUIDs, common hash lengths,
 timestamps, and standalone numeric identifiers are normalized before hashing.
 The raw explanation and algorithm version are stored. A future algorithm change
 must use a new version and must not silently re-key existing issues. This is a
@@ -220,9 +223,11 @@ signature. The only Sentry-shaped payload contract is defined in
 ## 8. Storage and retention
 
 SQLite uses WAL mode, foreign keys, a busy timeout, WAL auto-checkpoint,
-incremental auto-vacuum, ordered forward migrations, and indexed columns or
-facet rows for every filter. Normalized event payload JSON is gzip-compressed;
-normal list and facet queries do not decompress it.
+incremental auto-vacuum, and ordered forward migrations. Facet, ordering, and
+retention fields use indexed columns or facet rows. Normalized event payload
+JSON is gzip-compressed; normal list and facet queries do not decompress it.
+The optional text query uses `LIKE` matching over normalized issue and event
+columns and is not described as an indexed lookup.
 
 Retention is based on `received_at`, not an untrusted SDK timestamp:
 
@@ -298,8 +303,10 @@ The following invariants define a conforming SentryBox release:
 
 ### Reporting and privacy
 
-- A verified SDK event flow works after a DSN value change within the exact
-  [compatibility boundary](reference/sentry-compatibility.md).
+- The separately stated Node SDK and captured React Envelope evidence remains
+  accepted within the exact
+  [compatibility boundary](reference/sentry-compatibility.md); default SDK
+  transport and DSN-only migration are not inferred from that evidence.
 - Project and environment authority comes from the verified ingest key; payload
   metadata cannot cross that boundary.
 - Gzip and identity event Envelopes are bounded before persistence.

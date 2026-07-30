@@ -36,7 +36,8 @@ operator UI/API, and can notify one configured automation workflow.
 
 The principal benefits are:
 
-- a DSN-only migration for the verified Node and React SDK event flow;
+- reuse of the verified Sentry Envelope event flow without claiming a general
+  DSN-only migration;
 - operator ownership of error data and storage policy;
 - a private investigation surface separated from public ingest;
 - bounded retention and live-data storage safeguards;
@@ -45,9 +46,11 @@ The principal benefits are:
 ## Compatibility boundary
 
 The compatibility page uses `Supported`, `Partial`, and `Not supported` states.
-It records that evidence covers `@sentry/node@8.55.0` and
-`@sentry/react@8.55.0`, standard DSNs, event Envelopes, identity/gzip request
-bodies, warning/error/fatal events, and the implemented HTTP outcomes.
+It records that evidence covers an `@sentry/node@8.55.0` custom
+acceptance-transport flow, a captured `@sentry/react@8.55.0` Envelope fixture,
+standard DSN parsing, event Envelopes, identity/gzip request bodies,
+warning/error/fatal events, and the implemented HTTP outcomes. It does not
+claim that either SDK's default transport has been verified.
 
 It also records these boundaries:
 
