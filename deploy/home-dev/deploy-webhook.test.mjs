@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -241,6 +242,33 @@ test("production wiring invokes only the fixed deployment unit from an isolated 
     /^LoadCredential=tunnel-token:\/home\/pbuchman\/services\/sentrybox\/deploy\/cloudflare-tunnel-token$/mu,
   );
   assert.doesNotMatch(cloudflaredUnit, /(?:^|\s)--token(?:\s|=)(?!-file)/u);
+});
+
+test("production webhook module loads under jitless without materializing the ESM HTTP facade", () => {
+  const moduleUrl = new URL("./deploy-webhook.mjs", import.meta.url);
+  const source = readFileSync(moduleUrl, "utf8");
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--jitless",
+      "--input-type=module",
+      "--eval",
+      `await import(${JSON.stringify(moduleUrl.href)});`,
+    ],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(
+    child.status,
+    0,
+    `jitless module load failed:\n${child.stdout}${child.stderr}`,
+  );
+  assert.doesNotMatch(
+    source,
+    /import\s+\{\s*createServer\s*\}\s+from\s+"node:http"/u,
+  );
+  assert.match(source, /createRequire\(import\.meta\.url\)/u);
+  assert.match(source, /require\("node:http"\)/u);
 });
 
 test("one valid delivery invokes the fixed deploy callback once and a redelivery is rejected", async () => {

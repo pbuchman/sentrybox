@@ -295,6 +295,24 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "${request_url}" in
+  http://127.0.0.1:9003/github/workflow-run)
+    count_file="${ERROR_HUB_FAKE_STATE}/webhook-probe-count"
+    count=0
+    [ -f "${count_file}" ] && count="$(cat "${count_file}")"
+    count=$((count + 1))
+    printf '%s\n' "${count}" >"${count_file}"
+    if [ "${ERROR_HUB_FAKE_WEBHOOK_TRANSIENT:-0}" = 1 ] \
+      && [ "${count}" -ge 2 ]; then
+      rm -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+      printf '%s\n' 0 \
+        >"${ERROR_HUB_FAKE_STATE}/main-pid-sentrybox-deploy-webhook.service"
+      printf '%s\n' 1 \
+        >"${ERROR_HUB_FAKE_STATE}/restart-count-sentrybox-deploy-webhook.service"
+      exit 7
+    fi
+    printf '400\nworkflow-run-v1'
+    exit 0
+    ;;
   https://errors.intexuraos.cloud/api/*/envelope/*)
     if [ "${request_method}" = 'OPTIONS' ] \
       && [ "${ERROR_HUB_FAKE_PUBLIC_OPTIONS_FAIL:-0}" = 1 ]; then
@@ -397,6 +415,43 @@ fi
 if [ "$1" = restart ]; then
   [ "${ERROR_HUB_FAKE_WEBHOOK_RESTART_FAIL:-0}" = 1 ] && exit 1
   : >"${ERROR_HUB_FAKE_STATE}/active-$2"
+  printf '%s\n' 4242 >"${ERROR_HUB_FAKE_STATE}/main-pid-$2"
+  printf '%s\n' 0 >"${ERROR_HUB_FAKE_STATE}/restart-count-$2"
+  exit 0
+fi
+if [ "$1" = show ]; then
+  unit="$2"
+  case "$*" in
+    *--property=ActiveState*)
+      if [ -f "${ERROR_HUB_FAKE_STATE}/active-${unit}" ]; then
+        printf '%s\n' active
+      else
+        printf '%s\n' inactive
+      fi
+      ;;
+    *--property=SubState*)
+      if [ -f "${ERROR_HUB_FAKE_STATE}/active-${unit}" ]; then
+        printf '%s\n' running
+      else
+        printf '%s\n' failed
+      fi
+      ;;
+    *--property=MainPID*)
+      if [ -f "${ERROR_HUB_FAKE_STATE}/main-pid-${unit}" ]; then
+        cat "${ERROR_HUB_FAKE_STATE}/main-pid-${unit}"
+      else
+        printf '%s\n' 0
+      fi
+      ;;
+    *--property=NRestarts*)
+      if [ -f "${ERROR_HUB_FAKE_STATE}/restart-count-${unit}" ]; then
+        cat "${ERROR_HUB_FAKE_STATE}/restart-count-${unit}"
+      else
+        printf '%s\n' 0
+      fi
+      ;;
+    *) exit 1 ;;
+  esac
   exit 0
 fi
 if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
@@ -556,6 +611,26 @@ EOF
   [ "${restart_line}" -lt "${final_active_line}" ]
   [ -f "${ERROR_HUB_FAKE_STATE}/enabled-sentrybox-deploy-webhook.service" ]
   [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service" ]
+}
+
+@test "install rejects a webhook that is only briefly active after restart" {
+  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  mkdir -p "${webhook_secret%/*}"
+  chmod 0700 "${webhook_secret%/*}"
+  printf '%064d\n' 0 >"${webhook_secret}"
+  chmod 0600 "${webhook_secret}"
+  printf '%s\n' \
+    '[Service]' \
+    'ExecStart=/usr/bin/node deploy/home-dev/deploy-webhook.mjs' \
+    >"${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+  export ERROR_HUB_FAKE_WEBHOOK_TRANSIENT=1
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"did not remain stable"* ]]
 }
 
 @test "active webhook installation rejects an unsafe credential before publishing units" {
