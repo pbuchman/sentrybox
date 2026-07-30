@@ -182,3 +182,33 @@ for (const [category, correctiveLanguage] of [
     );
   });
 }
+
+test("rejects an affirmative not only fully Sentry-compatible claim", async () => {
+  await withRepository(
+    {
+      "docs/claims.md":
+        "SentryBox is not only fully Sentry-compatible, but also faster.\n",
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/claims.md"]),
+        ["docs/claims.md: forbidden claim: fully Sentry-compatible"],
+      );
+    },
+  );
+});
+
+test("rejects a claim after an unrelated earlier negation", async () => {
+  await withRepository(
+    {
+      "docs/claims.md":
+        "It is not trivial to deploy, but fully Sentry-compatible.\n",
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/claims.md"]),
+        ["docs/claims.md: forbidden claim: fully Sentry-compatible"],
+      );
+    },
+  );
+});

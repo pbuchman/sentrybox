@@ -127,7 +127,7 @@ function isExplicitlyNegated(content, index) {
     ) + 1,
     index,
   );
-  return /\b(?:not|never|without|no)\b|\b(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't\b/iu.test(
+  return /\b(?:not|(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't)\s+(?!only\b)(?:(?!but\b|however\b|although\b|yet\b)[\p{L}\p{N}-]+\s+){0,4}$/iu.test(
     context,
   );
 }
