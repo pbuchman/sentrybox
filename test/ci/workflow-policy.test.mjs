@@ -124,12 +124,12 @@ test("pull-request CI is read-only and exercises every required gate", async () 
   }
 });
 
-test("normal checks run the documentation contract before application validation", async () => {
+test("normal checks run verifier unit tests and the live documentation scan before application validation", async () => {
   const packageConfig = JSON.parse(await source("package.json"));
-  assert.equal(
-    packageConfig.scripts["test:docs"],
+  assert.deepEqual(packageConfig.scripts["test:docs"].split(" && "), [
+    "node --test scripts/docs/verify-documentation.test.mjs",
     "node scripts/docs/verify-documentation.mjs",
-  );
+  ]);
   assert.ok(
     packageConfig.scripts.test.split(" && ").includes("pnpm run test:docs"),
     "pnpm test does not run the documentation contract",

@@ -46,8 +46,9 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
       }
     }
 
-    if (!hasValidBashSyntax(content)) {
-      diagnostics.push(`${displayPath}: invalid bash syntax`);
+    const bashDiagnostic = bashFenceDiagnostic(content);
+    if (bashDiagnostic !== null) {
+      diagnostics.push(`${displayPath}: ${bashDiagnostic}`);
     }
 
     for (const [category, expression] of FORBIDDEN_CLAIMS) {
@@ -81,28 +82,103 @@ async function walkMarkdownFiles(directory, root, files) {
 }
 
 function markdownLinkTargets(content) {
-  return [...content.matchAll(/(?<!!)\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)/gu)].map(
-    (match) => match[1].replace(/^<|>$/gu, ""),
-  );
+  const targets = [];
+  for (const match of content.matchAll(
+    /!?\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))(?:\s+[^)]*)?\)/gu,
+  )) {
+    if (isEscaped(content, match.index)) continue;
+    targets.push({ index: match.index, target: match[1] ?? match[2] });
+  }
+
+  const definitions = new Map();
+  for (const match of content.matchAll(
+    /^[ \t]{0,3}\[([^\]\r\n]+)\]:[ \t]*(?:<([^>\r\n]+)>|([^\s]+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/gmu,
+  )) {
+    definitions.set(referenceLabel(match[1]), match[2] ?? match[3]);
+  }
+
+  for (const match of content.matchAll(
+    /!?\[([^\]\r\n]+)\](?:\[([^\]\r\n]*)\])?/gu,
+  )) {
+    if (isEscaped(content, match.index)) continue;
+    const end = match.index + match[0].length;
+    if (content[end] === "(") continue;
+    const lineStart = content.lastIndexOf("\n", match.index) + 1;
+    if (
+      content[end] === ":" &&
+      /^[ \t]{0,3}$/u.test(content.slice(lineStart, match.index))
+    ) {
+      continue;
+    }
+    const label = referenceLabel(
+      match[2] === undefined || match[2].length === 0 ? match[1] : match[2],
+    );
+    const target = definitions.get(label);
+    if (target !== undefined) targets.push({ index: match.index, target });
+  }
+
+  return targets
+    .sort((left, right) => left.index - right.index)
+    .map(({ target }) => target);
+}
+
+function referenceLabel(value) {
+  return value.trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function isEscaped(content, index) {
+  let backslashes = 0;
+  for (let cursor = index - 1; content[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
 }
 
 function isIgnoredLink(target) {
   return target.startsWith("#") || /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(target);
 }
 
-function hasValidBashSyntax(content) {
+function bashFenceDiagnostic(content) {
   let block;
   for (const line of content.split(/\r?\n/u)) {
     if (block === undefined) {
-      if (/^```(?:bash|sh)\s*$/iu.test(line)) block = [];
-    } else if (/^```\s*$/u.test(line)) {
-      if (!isValidBash(block.join("\n"))) return false;
+      const opening = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
+      if (opening === null) continue;
+      block = {
+        character: opening[2][0],
+        indentation: opening[1].length,
+        length: opening[2].length,
+        shell: /^(?:bash|sh)\s*$/iu.test(opening[3]),
+        source: [],
+      };
+      continue;
+    }
+
+    const closing = /^( {0,3})(`{3,}|~{3,})[ \t]*$/u.exec(line);
+    if (
+      closing !== null &&
+      closing[2][0] === block.character &&
+      closing[2].length >= block.length
+    ) {
+      if (block.shell && !isValidBash(block.source.join("\n"))) {
+        return "invalid bash syntax";
+      }
       block = undefined;
-    } else {
-      block.push(line);
+      continue;
+    }
+
+    if (block.shell) {
+      let offset = 0;
+      while (
+        offset < block.indentation &&
+        line[offset] === " "
+      ) {
+        offset += 1;
+      }
+      block.source.push(line.slice(offset));
     }
   }
-  return block === undefined || isValidBash(block.join("\n"));
+  return block?.shell === true ? "unclosed bash fence" : null;
 }
 
 function isValidBash(source) {
@@ -127,7 +203,7 @@ function isExplicitlyNegated(content, index) {
     ) + 1,
     index,
   );
-  return /\b(?:not|(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't)\s+(?!only\b)(?:(?!but\b|however\b|although\b|yet\b)[\p{L}\p{N}-]+\s+){0,4}$/iu.test(
+  return /\b(?:not|(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't)\s+(?!(?:only|just|merely)\b)(?:(?!but\b|however\b|although\b|yet\b)[\p{L}\p{N}-]+\s+){0,4}$/iu.test(
     context,
   );
 }

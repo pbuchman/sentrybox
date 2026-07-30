@@ -13,7 +13,7 @@
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
     "test": "pnpm run test:docs && pnpm run test:dependency-contracts && pnpm -r run test && pnpm run test:admin && pnpm run test:acceptance && pnpm run test:ops",
-    "test:docs": "node scripts/docs/verify-documentation.mjs",
+    "test:docs": "node --test scripts/docs/verify-documentation.test.mjs && node scripts/docs/verify-documentation.mjs",
     "test:admin": "node --test scripts/admin/*.test.mjs",
     "test:acceptance": "node --test scripts/acceptance/*.test.mjs",
     "test:ops": "node --test deploy/home-dev/*.test.mjs test/container/*.test.mjs test/ci/*.test.mjs",

@@ -48,6 +48,39 @@ test("reports a missing local Markdown link with its source file", async () => {
   );
 });
 
+test("reports missing inline and reference-style local Markdown images", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "![inline diagram](./missing-inline.png)",
+        "![reference diagram][architecture]",
+        "",
+        "[architecture]: ./missing-reference.png",
+      ].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
+        "docs/guide.md: missing local link target: ./missing-inline.png",
+        "docs/guide.md: missing local link target: ./missing-reference.png",
+      ]);
+    },
+  );
+});
+
+for (const [description, content] of [
+  ["full", "See [setup][install].\n\n[install]: ./missing.md\n"],
+  ["collapsed", "See [setup][].\n\n[setup]: ./missing.md\n"],
+  ["shortcut", "See [setup].\n\n[setup]: ./missing.md\n"],
+]) {
+  test(`reports a missing ${description} reference-style Markdown link`, async () => {
+    await withRepository({ "docs/guide.md": content }, async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
+        "docs/guide.md: missing local link target: ./missing.md",
+      ]);
+    });
+  });
+}
+
 test("accepts syntactically valid fenced bash and sh blocks", async () => {
   await withRepository(
     {
@@ -59,6 +92,18 @@ test("accepts syntactically valid fenced bash and sh blocks", async () => {
         "```sh",
         "if true; then echo ready; fi",
         "```",
+        "",
+        "  ```bash",
+        "  printf '%s\\n' indented",
+        "  ```",
+        "",
+        "~~~sh",
+        "printf '%s\\n' tilde",
+        "~~~",
+        "",
+        "````bash",
+        "printf '%s\\n' longer",
+        "````",
       ].join("\n"),
     },
     async (root) => {
@@ -84,6 +129,27 @@ test("reports invalid fenced bash syntax with its source file", async () => {
   );
 });
 
+for (const [description, source] of [
+  [
+    "an indented",
+    ["  ```bash", "  if true; then", "  ```"].join("\n"),
+  ],
+  ["a tilde", ["~~~sh", "if true; then", "~~~"].join("\n")],
+  ["a longer", ["````bash", "if true; then", "````"].join("\n")],
+]) {
+  test(`reports invalid syntax in ${description} shell fence`, async () => {
+    await withRepository(
+      { "docs/commands.md": source },
+      async (root) => {
+        assert.deepEqual(
+          await validateDocumentation(root, ["docs/commands.md"]),
+          ["docs/commands.md: invalid bash syntax"],
+        );
+      },
+    );
+  });
+}
+
 test("reports an unclosed fenced bash block with its source file", async () => {
   await withRepository(
     {
@@ -92,7 +158,21 @@ test("reports an unclosed fenced bash block with its source file", async () => {
     async (root) => {
       assert.deepEqual(
         await validateDocumentation(root, ["docs/commands.md"]),
-        ["docs/commands.md: invalid bash syntax"],
+        ["docs/commands.md: unclosed bash fence"],
+      );
+    },
+  );
+});
+
+test("reports an unclosed shell fence whose body has valid bash syntax", async () => {
+  await withRepository(
+    {
+      "docs/commands.md": ["```sh", "printf '%s\\n' ready"].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/commands.md"]),
+        ["docs/commands.md: unclosed bash fence"],
       );
     },
   );
@@ -197,6 +277,31 @@ test("rejects an affirmative not only fully Sentry-compatible claim", async () =
     },
   );
 });
+
+for (const [description, claim, category] of [
+  [
+    "not just",
+    "SentryBox is not just a full Sentry replacement, but a hosted platform too.",
+    "drop-in/full Sentry replacement",
+  ],
+  [
+    "not merely",
+    "SentryBox is not merely fully Sentry-compatible; it extends Sentry.",
+    "fully Sentry-compatible",
+  ],
+]) {
+  test(`rejects an affirmative ${description} Sentry claim`, async () => {
+    await withRepository(
+      { "docs/claims.md": `${claim}\n` },
+      async (root) => {
+        assert.deepEqual(
+          await validateDocumentation(root, ["docs/claims.md"]),
+          [`docs/claims.md: forbidden claim: ${category}`],
+        );
+      },
+    );
+  });
+}
 
 test("rejects a claim after an unrelated earlier negation", async () => {
   await withRepository(
