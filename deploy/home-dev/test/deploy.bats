@@ -100,6 +100,7 @@ EOF
   cat >"${fixture_root}/fake-bin/git" <<'EOF'
 #!/bin/sh
 printf 'git %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+printf 'git-umask %s %s\n' "$(umask)" "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ] && printf '%s' "$*" | grep -q ' fetch '; then
   : >"${ERROR_HUB_FAKE_STATE}/fetch-blocked"
   sleep 0.4
@@ -863,6 +864,60 @@ EOF
   [ "${status}" -eq 0 ]
   run sh -c "grep '^git ' '${ERROR_HUB_COMMAND_LOG}' | grep -vF 'git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} '"
   [ "${status}" -ne 0 ]
+}
+
+@test "detached checkout preserves tracked modes under the private deployment umask" {
+  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
+  real_path="${PATH#"${fixture_root}/fake-bin:"}"
+  PATH="${real_path}" git -C "${canonical_checkout}" init --quiet
+  PATH="${real_path}" git -C "${canonical_checkout}" \
+    -c user.name='SentryBox Test' \
+    -c user.email='sentrybox-test@example.invalid' \
+    commit --quiet --allow-empty -m base
+  base_sha="$(PATH="${real_path}" git -C "${canonical_checkout}" rev-parse HEAD)"
+
+  printf '{}\n' >"${canonical_checkout}/tracked-config.json"
+  printf '#!/bin/sh\nexit 0\n' >"${canonical_checkout}/tracked-script.sh"
+  chmod 0644 "${canonical_checkout}/tracked-config.json"
+  chmod 0755 "${canonical_checkout}/tracked-script.sh"
+  PATH="${real_path}" git -C "${canonical_checkout}" add \
+    tracked-config.json tracked-script.sh
+  PATH="${real_path}" git -C "${canonical_checkout}" \
+    -c user.name='SentryBox Test' \
+    -c user.email='sentrybox-test@example.invalid' \
+    commit --quiet -m assets
+  assets_sha="$(PATH="${real_path}" git -C "${canonical_checkout}" rev-parse HEAD)"
+  PATH="${real_path}" git -C "${canonical_checkout}" checkout --quiet --detach "${base_sha}"
+
+  run env \
+    ERROR_HUB_TEST_MODE=1 \
+    ERROR_HUB_TEST_ROOT="${fixture_root}" \
+    PATH="${real_path}" \
+    bash -c "umask 077; source '${repository_root}/deploy/home-dev/common.sh'; error_hub_checkout_detached '${assets_sha}'"
+
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%a' "${canonical_checkout}/tracked-config.json")" = 644 ]
+  [ "$(stat -c '%a' "${canonical_checkout}/tracked-script.sh")" = 755 ]
+}
+
+@test "deploy and rollback use the mode-preserving checkout helper" {
+  write_runtime_state
+  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
+  printf 'live-database\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+  export ERROR_HUB_FAKE_BACKUP_FAIL=1
+
+  run bash -c "umask 077; '${repository_root}/deploy/home-dev/deploy.sh'"
+
+  [ "${status}" -ne 0 ]
+  run grep -F \
+    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} checkout --quiet --detach ${ERROR_HUB_EXPECTED_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F \
+    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
 }
 
 @test "deploy rejects wrong webhook identity and removes the claimed request" {
