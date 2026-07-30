@@ -73,8 +73,8 @@ is an example deployment rather than the definition of the product.
 
 The repository remains the source of truth for deployment assets and operating
 procedures. Start with the
-[documentation index](docs/README.md#example-deployment-and-operations) for the
-current runbooks.
+[reference deployment index](docs/examples/intexuraos-home-dev/README.md) for
+the current runbooks.
 
 ## Documentation
 

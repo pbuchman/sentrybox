@@ -124,6 +124,42 @@ test("pull-request CI is read-only and exercises every required gate", async () 
   }
 });
 
+test("normal checks run the documentation contract before application validation", async () => {
+  const packageConfig = JSON.parse(await source("package.json"));
+  assert.equal(
+    packageConfig.scripts["test:docs"],
+    "node scripts/docs/verify-documentation.mjs",
+  );
+  assert.ok(
+    packageConfig.scripts.test.split(" && ").includes("pnpm run test:docs"),
+    "pnpm test does not run the documentation contract",
+  );
+
+  for (const path of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/release-image.yml",
+  ]) {
+    const workflow = await source(path);
+    const documentationStep = workflow.indexOf(
+      "      - name: Verify documentation contract\n        run: pnpm test:docs",
+    );
+    assert.notEqual(
+      documentationStep,
+      -1,
+      `${path} is missing the named documentation contract step`,
+    );
+    for (const laterStep of [
+      "      - name: Build application and workspace packages",
+      "      - name: Run unit, protocol, and MCP compatibility tests",
+    ]) {
+      assert.ok(
+        documentationStep < workflow.indexOf(laterStep),
+        `${path} does not run documentation verification before ${laterStep.trim()}`,
+      );
+    }
+  }
+});
+
 test("CI executes the Home Dev network contract with pinned Caddy", async () => {
   const workflow = await source(".github/workflows/ci.yml");
   const routeVerifier = await source(
@@ -306,7 +342,7 @@ test("Dependabot tracks lockfile, Actions, and pinned base image updates", async
 
 test("documentation pins the SentryBox release workflow name", async () => {
   const deploymentPlan = await source(
-    "docs/superpowers/plans/2026-07-28-home-dev-deployment-and-cutover.md",
+    "docs/archive/implementation-plans/2026-07-28-home-dev-deployment-and-cutover.md",
   );
   assert.equal(
     Array.from(deploymentPlan.matchAll(/`Release SentryBox Image`/gu)).length,
@@ -315,21 +351,23 @@ test("documentation pins the SentryBox release workflow name", async () => {
   assert.doesNotMatch(deploymentPlan, /Release Error Hub Image/u);
 });
 
-test("documentation records current Home Dev capacity", async () => {
-  const [specification, deploymentPlan] = await Promise.all([
+test("documentation records durable Home Dev storage safeguards", async () => {
+  const [specification, backupRunbook] = await Promise.all([
     source("docs/specification.md"),
-    source(
-      "docs/superpowers/plans/2026-07-28-home-dev-deployment-and-cutover.md",
-    ),
+    source("docs/examples/intexuraos-home-dev/runbooks/backup-and-recovery.md"),
   ]);
-  assert.doesNotMatch(specification, /97%/u);
-  assert.doesNotMatch(deploymentPlan, /97%/u);
-  assert.match(specification, /581 GiB free[\s\S]*?34% used/u);
-  assert.match(deploymentPlan, /581 GiB free at 34% used/u);
+  assert.match(specification, /5 GiB safety budget/u);
+  assert.match(
+    backupRunbook,
+    /reports `disabled\/degraded`; it does not claim success/u,
+  );
+  assert.doesNotMatch(backupRunbook, /\b(?:581 GiB|34% used|97%)\b/u);
 });
 
 test("network runbook uses the canonical installer and verifies live fragments", async () => {
-  const networkRunbook = await source("docs/runbooks/network-exposure.md");
+  const networkRunbook = await source(
+    "docs/examples/intexuraos-home-dev/runbooks/network-exposure.md",
+  );
   assert.match(
     networkRunbook,
     /sudo \.\/deploy\/home-dev\/install\.sh \\\n+\s+--private-origin "https:\/\/<home-dev-tailnet-name>:8443"/u,
