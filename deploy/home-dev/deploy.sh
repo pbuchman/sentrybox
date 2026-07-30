@@ -91,7 +91,7 @@ cleanup() {
   fi
   if (( checkout_changed == 1 && deployment_committed == 0 )) \
     && [[ -n "${original_checkout_sha}" ]]; then
-    error_hub_git checkout --quiet --detach "${original_checkout_sha}"
+    error_hub_checkout_detached "${original_checkout_sha}"
     checkout_restore_status=$?
     if (( exit_status == 0 && checkout_restore_status != 0 )); then
       exit_status="${checkout_restore_status}"
@@ -171,7 +171,7 @@ if [[ "${remote_main}" != "${request_sha}" ]]; then
   exit 1
 fi
 error_hub_git cat-file -e "${request_sha}^{commit}"
-error_hub_git checkout --quiet --detach "${request_sha}"
+error_hub_checkout_detached "${request_sha}"
 checkout_changed=1
 
 readonly release_tag="${error_hub_image_repository}:sha-${request_sha}"

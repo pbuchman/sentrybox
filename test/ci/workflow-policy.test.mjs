@@ -171,7 +171,7 @@ test("CI and release isolate Alpine deploy tests and run network contracts on th
     );
     assert.match(
       workflow,
-      /-c 'apk add --no-cache jq >\/dev\/null && bats deploy\/home-dev\/test\/deploy\.bats deploy\/home-dev\/test\/backup-retention\.bats'/u,
+      /-c 'apk add --no-cache git jq >\/dev\/null && bats deploy\/home-dev\/test\/deploy\.bats deploy\/home-dev\/test\/backup-retention\.bats'/u,
     );
     assert.doesNotMatch(
       workflow,

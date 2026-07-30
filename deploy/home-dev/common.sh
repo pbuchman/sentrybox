@@ -266,6 +266,14 @@ error_hub_git() {
     -C "${error_hub_checkout}" "$@"
 }
 
+# The deploy unit uses UMask=0077 for state, but public tracked assets must keep
+# their repository modes so the non-root runtime can read and execute them.
+error_hub_checkout_detached() (
+  local eh_checkout_sha="$1"
+  umask 022
+  error_hub_git checkout --quiet --detach "${eh_checkout_sha}"
+)
+
 error_hub_read_state() {
   local eh_requested_state_file="$1"
   local eh_state_line eh_state_key eh_state_value
