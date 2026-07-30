@@ -55,7 +55,7 @@ describe("private API client", () => {
     });
   });
 
-  it("deletes with JSON content type and no body", async () => {
+  it("deletes with a non-empty same-origin JSON request", async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
     const api = createApiClient(fetcher);
 
@@ -67,6 +67,7 @@ describe("private API client", () => {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
+      body: "{}",
     });
   });
 

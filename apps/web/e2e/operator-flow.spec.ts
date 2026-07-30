@@ -295,7 +295,7 @@ async function installPrivateApi(page: Page): Promise<void> {
       if (path === "/api/issues/41" && request.method() === "DELETE") {
         await expectPrivateRequest(request);
         expect(request.headers()["content-type"]).toBe("application/json");
-        expect(request.postData()).toBeNull();
+        expect(request.postData()).toBe("{}");
         return route.fulfill({ status: 204 });
       }
       if (path === "/api/issues/41") {
