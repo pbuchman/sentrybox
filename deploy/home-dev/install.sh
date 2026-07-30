@@ -86,7 +86,7 @@ error_hub_verify_webhook_stability() {
     fi
     (( eh_curl_status == 7 )) || return "${eh_curl_status}"
     if (( eh_attempt < eh_readiness_attempts )); then
-      sleep "${eh_readiness_wait_seconds}"
+      sleep "${eh_readiness_wait_seconds}" || return $?
     fi
   done
   (( eh_ready == 1 )) || return 1
@@ -99,7 +99,7 @@ error_hub_verify_webhook_stability() {
     [[ "${eh_probe}" == "${eh_expected_probe}" ]] || return 1
     [[ "$(error_hub_webhook_state)" == "${eh_state}" ]] || return 1
     if (( eh_attempt < eh_stability_attempts )); then
-      sleep 1
+      sleep 1 || return $?
     fi
   done
 }
