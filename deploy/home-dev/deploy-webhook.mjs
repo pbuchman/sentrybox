@@ -436,6 +436,13 @@ function readSecret(path) {
 
 function invokeFixedDeploy(headSha) {
   writeDeployRequest(headSha);
+  return startFixedDeploy().catch((error) => {
+    removeDeployRequest();
+    throw error;
+  });
+}
+
+export function startFixedDeploy(requestPath = DEPLOY_REQUEST) {
   return new Promise((resolveDeploy, rejectDeploy) => {
     const child = spawn(
       "/usr/bin/systemctl",
@@ -449,15 +456,11 @@ function invokeFixedDeploy(headSha) {
         },
       },
     );
-    child.once("error", (error) => {
-      removeDeployRequest();
-      rejectDeploy(error);
-    });
+    child.once("error", rejectDeploy);
     child.once("exit", (code, signal) => {
-      if (code === 0 && !existsSync(DEPLOY_REQUEST)) {
+      if (code === 0 && !existsSync(requestPath)) {
         resolveDeploy();
       } else {
-        removeDeployRequest();
         rejectDeploy(
           new Error(
             `fixed deployment unit failed (${code === null ? signal : String(code)})`,
@@ -468,8 +471,8 @@ function invokeFixedDeploy(headSha) {
   });
 }
 
-function writeDeployRequest(headSha) {
-  const file = openSync(DEPLOY_REQUEST, "wx", 0o600);
+export function writeDeployRequest(headSha, requestPath = DEPLOY_REQUEST) {
+  const file = openSync(requestPath, "wx", 0o600);
   try {
     writeFileSync(
       file,
@@ -483,15 +486,15 @@ function writeDeployRequest(headSha) {
     fsyncSync(file);
   } catch (error) {
     closeSync(file);
-    removeDeployRequest();
+    removeDeployRequest(requestPath);
     throw error;
   }
   closeSync(file);
 }
 
-function removeDeployRequest() {
+export function removeDeployRequest(requestPath = DEPLOY_REQUEST) {
   try {
-    unlinkSync(DEPLOY_REQUEST);
+    unlinkSync(requestPath);
   } catch (error) {
     if (!isNotFound(error)) throw error;
   }

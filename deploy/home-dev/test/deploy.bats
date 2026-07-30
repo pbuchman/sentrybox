@@ -19,13 +19,16 @@ setup() {
     "${fixture_root}/fake-state" \
     "${fixture_root}/etc/caddy/Caddyfile.d" \
     "${fixture_root}/etc/systemd/system" \
+    "${fixture_root}/home/pbuchman/deploy/sentrybox/.git/objects" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev" \
     "${fixture_root}/home/pbuchman/services/sentrybox/data" \
     "${fixture_root}/home/pbuchman/services/sentrybox/backups" \
+    "${fixture_root}/opt/nodejs/current/bin" \
     "${fixture_root}/run/lock" \
     "${fixture_root}/var/lib/sentrybox-deploy"
   chmod 0700 "${fixture_root}/var/lib/sentrybox-deploy"
   : >"${ERROR_HUB_COMMAND_LOG}"
+  printf '%s\n' "${ERROR_HUB_FAKE_HEAD_SHA}" >"${ERROR_HUB_FAKE_STATE}/git-head"
 
   cp "${repository_root}/deploy/home-dev/compose.yaml" \
     "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml"
@@ -52,6 +55,11 @@ setup() {
     'ERROR_HUB_REQUIRED_SECRET_REFERENCES=CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD' \
     >"${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
+  cat >"${fixture_root}/opt/nodejs/current/bin/node" <<'EOF'
+#!/bin/sh
+printf '%s\n' "${ERROR_HUB_FAKE_SYSTEM_NODE_VERSION:-v22.23.2}"
+EOF
+  chmod 0755 "${fixture_root}/opt/nodejs/current/bin/node"
 
   install_fake_commands
   write_valid_request
@@ -105,11 +113,31 @@ if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ] && printf '%s' "$*" | grep -q ' fe
   : >"${ERROR_HUB_FAKE_STATE}/fetch-blocked"
   sleep 0.4
 fi
+if [ -n "${ERROR_HUB_FAKE_NON_CANONICAL_SHA:-}" ] \
+  && printf '%s' "$*" | grep -Fq \
+    "merge-base --is-ancestor ${ERROR_HUB_FAKE_NON_CANONICAL_SHA} origin/main"; then
+  exit 1
+fi
 case "$*" in
   *"remote get-url origin"*) printf '%s\n' 'https://github.com/pbuchman/sentrybox.git' ;;
   *"status --porcelain"*) ;;
   *"rev-parse origin/main"*) printf '%s\n' "${ERROR_HUB_EXPECTED_SHA}" ;;
-  *"rev-parse HEAD"*) printf '%s\n' "${ERROR_HUB_FAKE_HEAD_SHA}" ;;
+  *"rev-parse HEAD"*) cat "${ERROR_HUB_FAKE_STATE}/git-head" ;;
+  *"fetch --quiet origin main"*)
+    if [ "${ERROR_HUB_FAKE_FETCH_OBJECT:-0}" = 1 ]; then
+      object_directory="${ERROR_HUB_TEST_ROOT}/home/pbuchman/deploy/sentrybox/.git/objects/bb"
+      mkdir -p "${object_directory}"
+      printf 'fetched-object\n' >"${object_directory}/fetched"
+    fi
+    ;;
+  *"checkout --quiet --detach"*)
+    checkout_sha=''
+    for git_argument do checkout_sha="${git_argument}"; done
+    if [ "${ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA:-}" = "${checkout_sha}" ]; then
+      exit 1
+    fi
+    printf '%s\n' "${checkout_sha}" >"${ERROR_HUB_FAKE_STATE}/git-head"
+    ;;
   *) ;;
 esac
 EOF
@@ -439,6 +467,7 @@ EOF
   cmp "${repository_root}/deploy/home-dev/caddy-sentrybox-deploy.caddy" \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy"
   [ -f "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
+  [ -f "${fixture_root}/etc/systemd/system/sentrybox-deploy-bootstrap.service" ]
   [ -x "${repository_root}/deploy/home-dev/restore-test.sh" ]
   [ ! -e "${fixture_root}/etc/systemd/system/cloudflared.service" ]
   run grep -F 'systemd-analyze verify' "${ERROR_HUB_COMMAND_LOG}"
@@ -463,6 +492,31 @@ EOF
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
+}
+
+@test "install requires the pinned root-owned system Node executable before publishing units" {
+  node_binary="${fixture_root}/opt/nodejs/current/bin/node"
+  rm -f "${node_binary}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"system Node.js v22.23.2"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
+
+  cat >"${node_binary}" <<'EOF'
+#!/bin/sh
+printf '%s\n' v22.23.0
+EOF
+  chmod 0755 "${node_binary}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"system Node.js v22.23.2"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
 }
 
 @test "fresh installation requires exact service credentials before starting SentryBox" {
@@ -866,6 +920,26 @@ EOF
   [ "${status}" -ne 0 ]
 }
 
+@test "deploy refuses a candidate before checkout when current state and canonical HEAD disagree" {
+  deployed_sha='cccccccccccccccccccccccccccccccccccccccc'
+  checkout_sha='dddddddddddddddddddddddddddddddddddddddd'
+  write_runtime_state \
+    'ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
+    "${deployed_sha}"
+  printf '%s\n' "${checkout_sha}" >"${fixture_root}/fake-state/git-head"
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"does not match deployment state"* ]]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${checkout_sha}" ]
+  run grep -F "checkout --quiet --detach ${ERROR_HUB_EXPECTED_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
+  run grep '^docker ERROR_HUB_IMAGE= pull ' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
+}
+
 @test "detached checkout preserves tracked modes under the private deployment umask" {
   canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
   real_path="${PATH#"${fixture_root}/fake-bin:"}"
@@ -916,6 +990,29 @@ EOF
   [ "${status}" -eq 0 ]
   run grep -F \
     "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "root deployment repairs existing objects and creates fetched objects readable by the checkout owner" {
+  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
+  existing_directory="${canonical_checkout}/.git/objects/aa"
+  mkdir -p "${existing_directory}"
+  printf 'existing-object\n' >"${existing_directory}/existing"
+  chmod 0700 "${canonical_checkout}/.git/objects" "${existing_directory}"
+  chmod 0400 "${existing_directory}/existing"
+  export ERROR_HUB_FAKE_FETCH_OBJECT=1
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects")" = 755 ]
+  [ "$(stat -c '%a' "${existing_directory}")" = 755 ]
+  [ "$(stat -c '%a' "${existing_directory}/existing")" = 644 ]
+  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects/bb")" = 755 ]
+  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects/bb/fetched")" = 644 ]
+  run grep -F \
+    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} fetch --quiet origin main" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
 }
@@ -994,6 +1091,23 @@ EOF
   [ -n "${first_integrity}" ]
   [ "${first_previous}" -lt "${first_integrity}" ]
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]
+  grep -Fx 'ERROR_HUB_DEPLOYED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  rollback_checkout_line="$(
+    grep -n 'checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+      "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1
+  )"
+  rollback_restart_line="$(
+    grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' \
+      "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
+  )"
+  [ -n "${rollback_checkout_line}" ]
+  [ -n "${rollback_restart_line}" ]
+  [ "${rollback_checkout_line}" -lt "${rollback_restart_line}" ]
+  [ "$(grep -Fc \
+    'checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
   run grep -F 'respond "temporarily unavailable" 503' \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   [ "${status}" -ne 0 ]
@@ -1044,6 +1158,159 @@ EOF
   [ "${status}" -eq 0 ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'consistent-backup' ]
   [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = '1000:1000' ]
+}
+
+@test "operator rollback reconciles the canonical checkout, runtime, and current state to the previous release" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state "${previous_image}" "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  write_runtime_state "${candidate_image}" "${candidate_sha}"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -eq 0 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${previous_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  run grep -F "fetch --quiet origin main" "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F "merge-base --is-ancestor ${previous_sha} origin/main" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F "checkout --quiet --detach ${previous_sha}" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F "ERROR_HUB_IMAGE=${previous_image} compose" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "rollback refuses a previous SHA that is not reachable from canonical origin main" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state "${previous_image}" "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  write_runtime_state "${candidate_image}" "${candidate_sha}"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+  export ERROR_HUB_FAKE_NON_CANONICAL_SHA="${previous_sha}"
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"not reachable from canonical origin/main"* ]]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+}
+
+@test "operator rollback requires current state to match the canonical checkout" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state \
+    'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"does not match deployment state"* ]]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+}
+
+@test "rollback leaves the running release and state untouched when previous checkout reconciliation fails" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state "${previous_image}" "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  write_runtime_state "${candidate_image}" "${candidate_sha}"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+  export ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA="${previous_sha}"
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+}
+
+@test "rollback restores the previously deployed runtime and HEAD when the target runtime cannot start" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state "${previous_image}" "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  write_runtime_state "${candidate_image}" "${candidate_sha}"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+  export ERROR_HUB_FAKE_UP_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  run grep -F "ERROR_HUB_IMAGE=${candidate_image} compose" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "rollback restores the original checkout runtime and state after previous health failure" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
+  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  write_runtime_state "${previous_image}" "${previous_sha}"
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
+    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  write_runtime_state "${candidate_image}" "${candidate_sha}"
+  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
+  export ERROR_HUB_FAKE_READINESS_FAIL=1
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  previous_restart_line="$(
+    grep -n "ERROR_HUB_IMAGE=${previous_image} compose" \
+      "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1
+  )"
+  original_checkout_line="$(
+    grep -n "checkout --quiet --detach ${candidate_sha}" \
+      "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
+  )"
+  original_restart_line="$(
+    grep -n "ERROR_HUB_IMAGE=${candidate_image} compose" \
+      "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
+  )"
+  [ -n "${previous_restart_line}" ]
+  [ -n "${original_checkout_line}" ]
+  [ -n "${original_restart_line}" ]
+  [ "${previous_restart_line}" -lt "${original_checkout_line}" ]
+  [ "${original_checkout_line}" -lt "${original_restart_line}" ]
 }
 
 @test "direct rollback rejects unsafe persistent runtime reference metadata" {
@@ -1724,7 +1991,7 @@ EOF
 
   webhook_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
   run grep -Fx \
-    'ExecStart=/usr/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
     "${webhook_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx 'MemoryMax=128M' "${webhook_unit}"
@@ -1744,6 +2011,23 @@ EOF
   run grep '^InaccessiblePaths=' "${webhook_unit}"
   [ "${status}" -eq 0 ]
   [ "${output}" = $'InaccessiblePaths=\nInaccessiblePaths=/var/run/docker.sock' ]
+}
+
+@test "first-release bootstrap is installed for manual credential-only activation" {
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -eq 0 ]
+
+  bootstrap_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy-bootstrap.service"
+  grep -Fx \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs' \
+    "${bootstrap_unit}"
+  grep -Fx \
+    'LoadCredential=github-bootstrap-token:/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token' \
+    "${bootstrap_unit}"
+  run grep -E 'systemctl (enable|start).*sentrybox-deploy-bootstrap' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
 }
 
 @test "deploy installs the versioned maintenance fragment before runtime mutation" {

@@ -105,6 +105,32 @@ sudo systemctl reload caddy
 The dedicated validation directories keep Caddy's internal-PKI validation
 state out of the canonical Git checkout.
 
+## Bootstrap the first verified deployment
+
+After installation, create
+`/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token` as a
+root-owned mode-`0600` regular file with one link. Use a GitHub fine-grained
+personal access token scoped only to `pbuchman/sentrybox`, with **Actions:
+read**. Never put the token in an argument, environment variable, checkout, or
+log. The bootstrap unit receives it only as the `github-bootstrap-token`
+systemd credential.
+
+Run the bootstrap once on a new host:
+
+```bash
+sudo systemctl start sentrybox-deploy-bootstrap.service
+```
+
+The tool resolves current `main` without modifying the checkout, asks GitHub's
+fixed `release-image.yml` workflow endpoint for an already-successful
+`Release SentryBox Image` push run for exactly that SHA, writes the same
+root-private request used by the webhook, and starts
+`sentrybox-deploy.service`. The deploy service independently fetches and
+verifies `origin/main` plus the immutable image before any runtime change.
+Revoke the bootstrap token immediately after the first successful deployment.
+If delayed bootstrap requires a replacement token, atomically rotate the file
+and revoke the old token.
+
 The ingest fragment enforces a one-MiB edge limit and falls through to a fixed
 `404` for UI, private API, exports, readiness, metrics, non-numeric project
 paths, and every unlisted method. The deployment fragment applies the same body

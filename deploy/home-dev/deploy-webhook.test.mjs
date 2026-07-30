@@ -163,7 +163,6 @@ test("production wiring invokes only the fixed deployment unit from an isolated 
     new URL("./cloudflared.service", import.meta.url),
     "utf8",
   );
-
   assert.match(source, /spawn\(\s*"\/usr\/bin\/systemctl"/u);
   assert.match(source, /import \{ spawn \} from "node:child_process"/u);
   assert.match(source, /\["--wait", "start", DEPLOY_UNIT\]/u);
@@ -193,7 +192,7 @@ test("production wiring invokes only the fixed deployment unit from an isolated 
   );
   assert.match(
     unit,
-    /^ExecStart=\/usr\/bin\/node --jitless deploy\/home-dev\/deploy-webhook\.mjs$/mu,
+    /^ExecStart=\/opt\/nodejs\/current\/bin\/node --jitless deploy\/home-dev\/deploy-webhook\.mjs$/mu,
   );
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
   assert.match(unit, /^ProtectHome=tmpfs$/mu);

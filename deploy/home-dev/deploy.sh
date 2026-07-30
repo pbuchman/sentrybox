@@ -7,7 +7,7 @@ readonly script_directory
 source "${script_directory}/common.sh"
 readonly database_operations="${script_directory}/database-operations.mjs"
 
-for executable in caddy curl df docker flock git jq mktemp systemctl; do
+for executable in caddy chmod curl df docker find flock git jq mktemp systemctl; do
   error_hub_require_command "${executable}"
 done
 
@@ -34,6 +34,7 @@ runtime_changed=0
 had_previous=0
 previous_image=""
 private_origin=""
+rollback_reconciled=0
 
 restore_normal_caddy() {
   error_hub_apply_caddy_fragment "${error_hub_caddy_normal_source}"
@@ -78,7 +79,11 @@ cleanup() {
   if (( runtime_changed == 1 && deployment_committed == 0 )); then
     runtime_restore_status=0
     if (( had_previous == 1 )); then
-      "${script_directory}/rollback.sh" || runtime_restore_status=$?
+      if "${script_directory}/rollback.sh"; then
+        rollback_reconciled=1
+      else
+        runtime_restore_status=$?
+      fi
     else
       ERROR_HUB_IMAGE="${resolved_image:-}" \
         ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
@@ -88,6 +93,9 @@ cleanup() {
     if (( exit_status == 0 && runtime_restore_status != 0 )); then
       exit_status="${runtime_restore_status}"
     fi
+  fi
+  if (( rollback_reconciled == 1 )); then
+    checkout_changed=0
   fi
   if (( checkout_changed == 1 && deployment_committed == 0 )) \
     && [[ -n "${original_checkout_sha}" ]]; then
@@ -163,7 +171,14 @@ fi
 original_checkout_sha="$(error_hub_git rev-parse HEAD)"
 error_hub_require_sha "${original_checkout_sha}"
 readonly original_checkout_sha
-error_hub_git fetch --quiet origin main
+if [[ -e "${error_hub_current_state}" || -L "${error_hub_current_state}" ]]; then
+  error_hub_read_state "${error_hub_current_state}"
+  if [[ "${ERROR_HUB_STATE_SHA}" != "${original_checkout_sha}" ]]; then
+    printf 'Canonical SentryBox checkout does not match deployment state.\n' >&2
+    exit 1
+  fi
+fi
+error_hub_fetch_origin_main
 remote_main="$(error_hub_git rev-parse origin/main)"
 readonly remote_main
 if [[ "${remote_main}" != "${request_sha}" ]]; then
@@ -182,7 +197,7 @@ resolved_image="$(
 readonly resolved_image
 error_hub_require_immutable_image "${resolved_image}"
 
-if [[ -f "${error_hub_current_state}" ]]; then
+if [[ -e "${error_hub_current_state}" || -L "${error_hub_current_state}" ]]; then
   error_hub_read_state "${error_hub_current_state}"
   had_previous=1
   previous_image="${ERROR_HUB_STATE_IMAGE}"

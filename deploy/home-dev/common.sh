@@ -47,6 +47,8 @@ readonly error_hub_caddy_validation_data="${error_hub_caddy_validation_root}/dat
 readonly error_hub_repository="pbuchman/sentrybox"
 readonly error_hub_workflow="Release SentryBox Image"
 readonly error_hub_image_repository="ghcr.io/pbuchman/sentrybox"
+readonly error_hub_system_node="${error_hub_prefix}/opt/nodejs/current/bin/node"
+readonly error_hub_system_node_version="v22.23.2"
 
 # Compose reads the persistent runtime reference list through this path. Tests
 # redirect it into their disposable prefix; production uses the canonical path.
@@ -264,6 +266,61 @@ error_hub_require_free_space() {
 error_hub_git() {
   git -c "safe.directory=${error_hub_checkout}" \
     -C "${error_hub_checkout}" "$@"
+}
+
+error_hub_normalize_checkout_objects() {
+  local eh_git_directory="${error_hub_checkout}/.git"
+  local eh_objects_directory="${eh_git_directory}/objects"
+  local eh_entry
+  if [[ ! -d "${eh_git_directory}" || -L "${eh_git_directory}" \
+    || ! -d "${eh_objects_directory}" || -L "${eh_objects_directory}" ]]; then
+    printf 'Canonical SentryBox checkout must use a regular Git object store.\n' >&2
+    return 1
+  fi
+  while IFS= read -r -d '' eh_entry; do
+    if [[ -L "${eh_entry}" \
+      || ( ! -d "${eh_entry}" && ! -f "${eh_entry}" ) ]]; then
+      printf 'Canonical SentryBox Git object store contains an unsafe entry.\n' >&2
+      return 1
+    fi
+  done < <(find "${eh_objects_directory}" -xdev -print0)
+  find "${eh_objects_directory}" -xdev -type d -exec chmod 0755 {} + \
+    && find "${eh_objects_directory}" -xdev -type f -exec chmod 0644 {} +
+}
+
+error_hub_fetch_origin_main() {
+  local eh_fetch_status=0
+  error_hub_normalize_checkout_objects || return $?
+  (
+    umask 022
+    error_hub_git fetch --quiet origin main
+  ) || eh_fetch_status=$?
+  error_hub_normalize_checkout_objects || return $?
+  return "${eh_fetch_status}"
+}
+
+error_hub_require_system_node() {
+  local eh_node_attributes eh_node_version
+  if [[ ! -f "${error_hub_system_node}" || -L "${error_hub_system_node}" \
+    || ! -x "${error_hub_system_node}" ]]; then
+    printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
+      "${error_hub_system_node_version}" >&2
+    return 1
+  fi
+  eh_node_attributes="$(stat -c '%a:%u:%g:%h' "${error_hub_system_node}")" \
+    || return $?
+  if [[ "${eh_node_attributes}" != "755:0:0:1" ]]; then
+    printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
+      "${error_hub_system_node_version}" >&2
+    return 1
+  fi
+  eh_node_version="$("${error_hub_system_node}" --version 2>/dev/null)" \
+    || return $?
+  if [[ "${eh_node_version}" != "${error_hub_system_node_version}" ]]; then
+    printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
+      "${error_hub_system_node_version}" >&2
+    return 1
+  fi
 }
 
 # The deploy unit uses UMask=0077 for state, but public tracked assets must keep
