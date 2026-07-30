@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -316,4 +316,86 @@ test("rejects a claim after an unrelated earlier negation", async () => {
       );
     },
   );
+});
+
+const repositoryRoot = resolve(import.meta.dirname, "../..");
+
+test("states the distinct Node runtime and React fixture evidence", async () => {
+  const readme = await readFile(resolve(repositoryRoot, "README.md"), "utf8");
+  const compatibility = await readFile(
+    resolve(repositoryRoot, "docs/reference/sentry-compatibility.md"),
+    "utf8",
+  );
+
+  assert.match(
+    readme,
+    /@sentry\/node@8\.55\.0[^.]*DSN[^.]*capture calls/isu,
+  );
+  assert.match(
+    readme,
+    /React[\s\S]{0,160}captured Envelope fixtures[\s\S]{0,80}parsing and ingest/iu,
+  );
+  assert.match(
+    readme,
+    /browser\s+SDK construction[^.]*transport[^.]*CORS[^.]*authentication[^.]*response handling[^.]*not directly exercised/isu,
+  );
+
+  const supportedSdkRow = compatibility
+    .split("\n")
+    .find(
+      (line) =>
+        line.startsWith("| SDK and DSN") && line.includes("**Supported**"),
+    );
+  assert.ok(supportedSdkRow);
+  assert.match(supportedSdkRow, /@sentry\/node@8\.55\.0/u);
+  assert.doesNotMatch(supportedSdkRow, /@sentry\/react/u);
+  assert.match(
+    compatibility,
+    /captured `@sentry\/react@8\.55\.0` Envelope fixtures[\s\S]{0,80}parsing and ingest/iu,
+  );
+  assert.match(
+    compatibility,
+    /browser\s+SDK construction[^.]*transport[^.]*CORS[^.]*authentication[^.]*response handling[^.]*not directly exercised/isu,
+  );
+});
+
+test("defines the exception grouping fallback for unusable exception identity", async () => {
+  const specification = await readFile(
+    resolve(repositoryRoot, "docs/specification.md"),
+    "utf8",
+  );
+
+  assert.match(
+    specification,
+    /exception strategy applies only\s+when the selected exception has a usable string `type` or `value`/iu,
+  );
+  assert.match(
+    specification,
+    /stacktrace-only[^.]*generic[^.]*logger[^.]*service[^.]*title[^.]*message/isu,
+  );
+});
+
+test("documents the hardened one-time bootstrap token source", async () => {
+  const runbook = await readFile(
+    resolve(
+      repositoryRoot,
+      "docs/examples/intexuraos-home-dev/runbooks/network-exposure.md",
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    runbook,
+    /`\/var\/lib\/sentrybox-deploy\/bootstrap-github-token`/u,
+  );
+  assert.doesNotMatch(
+    runbook,
+    /\/home\/pbuchman\/services\/sentrybox\/deploy\/github-bootstrap-token/u,
+  );
+  assert.match(runbook, /atomically[^.]*root-owned[^.]*mode-`0600`/isu);
+  assert.match(runbook, /parent directory chain[^.]*root-owned/isu);
+  assert.match(runbook, /removed only after[^.]*successful deployment/isu);
+  assert.match(runbook, /Revoke[^.]*immediately/isu);
+  assert.match(runbook, /not a scheduled rotation credential/isu);
+  assert.doesNotMatch(runbook, /systemd credential/iu);
 });

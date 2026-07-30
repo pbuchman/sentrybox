@@ -107,18 +107,55 @@ state out of the canonical Git checkout.
 
 ## Bootstrap the first verified deployment
 
-After installation, create
-`/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token` as a
-root-owned mode-`0600` regular file with one link. Use a GitHub fine-grained
-personal access token scoped only to `pbuchman/sentrybox`, with **Actions:
-read**. Never put the token in an argument, environment variable, checkout, or
-log. The bootstrap unit receives it only as the `github-bootstrap-token`
-systemd credential.
+Use a GitHub fine-grained personal access token scoped only to
+`pbuchman/sentrybox`, with **Actions: read**. Provision it atomically as a
+root-owned, mode-`0600`, singly linked regular file at the single fixed source
+`/var/lib/sentrybox-deploy/bootstrap-github-token`. Never put the token in an
+argument, environment variable, checkout, long-lived credential file, or log.
+The complete parent directory chain must be root-owned with the exact modes
+validated below.
+
+```bash
+# Provision in a history-disabled interactive root shell.
+sudo -i
+set +o history
+set -o noclobber
+umask 077
+token_file=/var/lib/sentrybox-deploy/bootstrap-github-token
+test ! -e "${token_file}" && test ! -L "${token_file}"
+temporary="$(mktemp /var/lib/sentrybox-deploy/.bootstrap-github-token.XXXXXX)"
+trap 'rm -f -- "${temporary}"' EXIT
+read -rsp 'One-time GitHub Actions-read token: ' bootstrap_token
+printf '\n'
+printf '%s\n' "${bootstrap_token}" >|"${temporary}"
+unset bootstrap_token
+chown root:root "${temporary}"
+chmod 0600 "${temporary}"
+mv -f -- "${temporary}" "${token_file}"
+trap - EXIT
+exit
+
+# Validate the fixed source and every parent without reading the token.
+test "$(sudo stat -c '%a:%U:%G:%F' /)" = '755:root:root:directory'
+test "$(sudo stat -c '%a:%U:%G:%F' /var)" = '755:root:root:directory'
+test "$(sudo stat -c '%a:%U:%G:%F' /var/lib)" = '755:root:root:directory'
+test "$(sudo stat -c '%a:%U:%G:%F' /var/lib/sentrybox-deploy)" = \
+  '700:root:root:directory'
+sudo test -f /var/lib/sentrybox-deploy/bootstrap-github-token
+sudo test ! -L /var/lib/sentrybox-deploy/bootstrap-github-token
+test "$(sudo stat -c '%a:%h:%U:%G:%F' \
+  /var/lib/sentrybox-deploy/bootstrap-github-token)" = \
+  '600:1:root:root:regular file'
+```
 
 Run the bootstrap once on a new host:
 
 ```bash
 sudo systemctl start sentrybox-deploy-bootstrap.service
+sudo systemctl show sentrybox-deploy-bootstrap.service \
+  --property=Result --value | grep -Fx success
+sudo test ! -e /var/lib/sentrybox-deploy/bootstrap-github-token
+sudo test ! -L /var/lib/sentrybox-deploy/bootstrap-github-token
 ```
 
 The tool resolves current `main` without modifying the checkout, asks GitHub's
@@ -126,10 +163,12 @@ fixed `release-image.yml` workflow endpoint for an already-successful
 `Release SentryBox Image` push run for exactly that SHA, writes the same
 root-private request used by the webhook, and starts
 `sentrybox-deploy.service`. The deploy service independently fetches and
-verifies `origin/main` plus the immutable image before any runtime change.
-Revoke the bootstrap token immediately after the first successful deployment.
-If delayed bootstrap requires a replacement token, atomically rotate the file
-and revoke the old token.
+verifies `origin/main` plus the immutable image before any runtime change. The
+source is removed only after the successful deployment consumes its request;
+it remains available after a failure so the operator can diagnose and retry.
+Revoke the provider token immediately after that success and local removal. It
+is not a scheduled rotation credential and has no recurring use; create a new
+one-time token only when another fresh-host bootstrap is explicitly required.
 
 The ingest fragment enforces a one-MiB edge limit and falls through to a fixed
 `404` for UI, private API, exports, readiness, metrics, non-numeric project
@@ -197,6 +236,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   https://errors-deploy.intexuraos.cloud/health/live         # 404
 curl -sS -o /dev/null -w '%{http_code}\n' -X GET \
   https://errors-deploy.intexuraos.cloud/github/workflow-run # 404
+curl -sS -D - -o /dev/null -X POST \
+  -H 'Content-Type: application/json' --data '{}' \
+  https://errors-deploy.intexuraos.cloud/github/workflow-run
+# 400 plus x-sentrybox-deploy-handler: workflow-run-v1; no deployment starts
 ```
 
 Use a disposable key for CORS and body-size tests. A configured browser origin
