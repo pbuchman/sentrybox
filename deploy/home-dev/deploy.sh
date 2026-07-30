@@ -42,6 +42,9 @@ restore_normal_caddy() {
 
 cleanup() {
   local exit_status=$?
+  local candidate_stop_status=0
+  local runtime_restore_status=0
+  local state_restore_status=0
   trap - EXIT INT TERM
   set +e
   rm -f "${claimed_request}"
@@ -56,8 +59,50 @@ cleanup() {
       fi
     fi
   fi
-  if (( state_write_started == 1 && deployment_committed == 0 )); then
-    state_restore_status=0
+  if (( runtime_changed == 1 && deployment_committed == 0 )); then
+    if (( had_previous == 1 )); then
+      for _ in 1 2; do
+        if "${script_directory}/rollback.sh" --automatic; then
+          rollback_reconciled=1
+          runtime_restore_status=0
+          break
+        else
+          runtime_restore_status=$?
+        fi
+      done
+      # rollback.sh owns checkout, runtime, health, and state reconciliation.
+      # Never follow a failed transaction with checkout-only restoration.
+      checkout_changed=0
+      if (( rollback_reconciled == 0 )); then
+        ERROR_HUB_IMAGE="${resolved_image:-}" \
+          ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
+          docker compose --file "${error_hub_compose_file}" \
+            stop --timeout 30 sentrybox >/dev/null || candidate_stop_status=$?
+        # The prior committed state remains untouched. Keep maintenance routing
+        # active because checkout/runtime health could not be reconciled.
+        maintenance_active=0
+        if (( candidate_stop_status != 0 )); then
+          printf 'Automatic rollback reconciliation failed and candidate shutdown could not be verified; maintenance routing was retained and immediate operator intervention is required.\n' \
+            >&2
+          runtime_restore_status="${candidate_stop_status}"
+        else
+          printf '%s\n' \
+            'Automatic rollback reconciliation failed; the failed candidate was stopped and maintenance routing was retained.' \
+            >&2
+        fi
+      fi
+    else
+      ERROR_HUB_IMAGE="${resolved_image:-}" \
+        ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
+        docker compose --file "${error_hub_compose_file}" \
+          stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
+    fi
+    if (( exit_status == 0 && runtime_restore_status != 0 )); then
+      exit_status="${runtime_restore_status}"
+    fi
+  fi
+  if (( state_write_started == 1 && deployment_committed == 0 \
+    && runtime_changed == 0 )); then
     if (( had_previous == 1 )); then
       install -m 0600 "${error_hub_previous_state}" \
         "${error_hub_current_state}.restore.$$" || state_restore_status=$?
@@ -75,27 +120,6 @@ cleanup() {
         exit_status="${state_restore_status}"
       fi
     fi
-  fi
-  if (( runtime_changed == 1 && deployment_committed == 0 )); then
-    runtime_restore_status=0
-    if (( had_previous == 1 )); then
-      if "${script_directory}/rollback.sh"; then
-        rollback_reconciled=1
-      else
-        runtime_restore_status=$?
-      fi
-    else
-      ERROR_HUB_IMAGE="${resolved_image:-}" \
-        ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
-        docker compose --file "${error_hub_compose_file}" \
-          stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
-    fi
-    if (( exit_status == 0 && runtime_restore_status != 0 )); then
-      exit_status="${runtime_restore_status}"
-    fi
-  fi
-  if (( rollback_reconciled == 1 )); then
-    checkout_changed=0
   fi
   if (( checkout_changed == 1 && deployment_committed == 0 )) \
     && [[ -n "${original_checkout_sha}" ]]; then
@@ -305,15 +329,15 @@ if (( public_route_status != 0 )); then
   printf 'Public HTTPS ingest routing failed its deployment check.\n' >&2
   exit "${public_route_status}"
 fi
+if [[ -f "${predeploy_backup}" ]]; then
+  "${script_directory}/backup.sh" retained-finalize "${resolved_image}" >/dev/null
+fi
 state_write_started=1
 error_hub_write_state \
   "${error_hub_current_state}" \
   "${resolved_image}" \
   "${private_origin}" \
   "${request_sha}"
-if [[ -f "${predeploy_backup}" ]]; then
-  "${script_directory}/backup.sh" retained-finalize "${resolved_image}" >/dev/null
-fi
 maintenance_active=0
 deployment_committed=1
 

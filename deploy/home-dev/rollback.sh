@@ -11,10 +11,14 @@ for executable in chmod curl docker find git jq stat; do
   error_hub_require_command "${executable}"
 done
 
-if (( $# != 0 )); then
-  printf 'rollback.sh does not accept arguments.\n' >&2
+automatic_rollback=0
+if (( $# == 1 )) && [[ "$1" == "--automatic" ]]; then
+  automatic_rollback=1
+elif (( $# != 0 )); then
+  printf 'Usage: rollback.sh [--automatic].\n' >&2
   exit 2
 fi
+readonly automatic_rollback
 
 # Retain the release that was live when this operator rollback began. During an
 # automatic deployment rollback deploy.sh first restores current.env, so this
@@ -44,6 +48,11 @@ fi
 original_checkout_sha="$(error_hub_git rev-parse HEAD)"
 error_hub_require_sha "${original_checkout_sha}"
 readonly original_checkout_sha
+if [[ "${current_sha}" != "${original_checkout_sha}" ]] \
+  && (( automatic_rollback == 0 )); then
+  printf 'Canonical SentryBox checkout does not match deployment state.\n' >&2
+  exit 1
+fi
 if [[ "${current_sha}" != "${original_checkout_sha}" ]] \
   && [[ "${previous_sha}" != "${current_sha}" \
     || "${previous_image}" != "${current_image}" \

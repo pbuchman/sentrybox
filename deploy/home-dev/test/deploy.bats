@@ -133,6 +133,11 @@ case "$*" in
   *"checkout --quiet --detach"*)
     checkout_sha=''
     for git_argument do checkout_sha="${git_argument}"; done
+    if [ "${ERROR_HUB_FAKE_CHECKOUT_FAIL_ONCE_SHA:-}" = "${checkout_sha}" ] \
+      && [ ! -e "${ERROR_HUB_FAKE_STATE}/checkout-failed-once-${checkout_sha}" ]; then
+      : >"${ERROR_HUB_FAKE_STATE}/checkout-failed-once-${checkout_sha}"
+      exit 1
+    fi
     if [ "${ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA:-}" = "${checkout_sha}" ]; then
       exit 1
     fi
@@ -1113,6 +1118,61 @@ EOF
   [ "${status}" -ne 0 ]
 }
 
+@test "automatic rollback retries the complete reconciliation after a transient checkout failure" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  write_runtime_state \
+    'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${previous_sha}"
+  printf 'live-database\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+  export ERROR_HUB_FAKE_READINESS_FAIL=1
+  export ERROR_HUB_FAKE_CHECKOUT_FAIL_ONCE_SHA="${previous_sha}"
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -ne 0 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${previous_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  [ "$(grep -Fc \
+    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${previous_sha}" \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  run grep -F \
+    'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa compose' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "automatic rollback stops the failed candidate and preserves prior state after persistent checkout failure" {
+  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  candidate_sha="${ERROR_HUB_EXPECTED_SHA}"
+  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  write_runtime_state \
+    'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${previous_sha}"
+  printf 'live-database\n' \
+    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+  export ERROR_HUB_FAKE_READINESS_FAIL=1
+  export ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA="${previous_sha}"
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *'Automatic rollback reconciliation failed; the failed candidate was stopped'* ]]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 1 ]
+  run grep -F \
+    "ERROR_HUB_IMAGE=${candidate_image} compose --file ${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml stop --timeout 30 sentrybox" \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -eq 0 ]
+  run grep -F 'respond "temporarily unavailable" 503' \
+    "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
+  [ "${status}" -eq 0 ]
+}
+
 @test "deploy rollback and direct rollback retain live secret references outside image state" {
   live_refs='CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD'
   printf 'ERROR_HUB_REQUIRED_SECRET_REFERENCES=%s\n' "${live_refs}" \
@@ -1855,7 +1915,7 @@ EOF
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
-@test "failed current state commit rolls the runtime back before restoring the checkout" {
+@test "failed current state commit reconciles checkout before restoring the previous runtime" {
   write_runtime_state
   printf 'live-database\n' \
     >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
@@ -1869,15 +1929,21 @@ EOF
   checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
   [ -n "${checkout_line}" ]
-  [ "${rollback_line}" -lt "${checkout_line}" ]
+  [ "${checkout_line}" -lt "${rollback_line}" ]
+  [ "$(grep -Fc \
+    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${ERROR_HUB_FAKE_HEAD_SHA}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'current.env.tmp.*' -print
   [ -z "${output}" ]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -ne 0 ]
+  [ "${status}" -eq 0 ]
 }
 
-@test "termination after runtime switch rolls back before restoring the checkout" {
+@test "termination after runtime switch reconciles checkout before restoring the previous runtime" {
   write_runtime_state
   export ERROR_HUB_FAKE_READINESS_BLOCK=1
 
@@ -1899,7 +1965,13 @@ EOF
   checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
   [ -n "${checkout_line}" ]
-  [ "${rollback_line}" -lt "${checkout_line}" ]
+  [ "${checkout_line}" -lt "${rollback_line}" ]
+  [ "$(grep -Fc \
+    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
+  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${ERROR_HUB_FAKE_HEAD_SHA}" ]
+  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${ERROR_HUB_FAKE_HEAD_SHA}" \
+    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
 }
 
 @test "installed systemd units use fixed scripts, state, timers, and no webhook Docker access" {
