@@ -84,6 +84,20 @@ test("reports invalid fenced bash syntax with its source file", async () => {
   );
 });
 
+test("reports an unclosed fenced bash block with its source file", async () => {
+  await withRepository(
+    {
+      "docs/commands.md": ["```bash", "if true; then"].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/commands.md"]),
+        ["docs/commands.md: invalid bash syntax"],
+      );
+    },
+  );
+});
+
 test("ignores external and fragment-only links", async () => {
   await withRepository(
     {
@@ -133,6 +147,36 @@ for (const [category, claim] of [
         assert.deepEqual(
           await validateDocumentation(root, ["docs/claims.md"]),
           [`docs/claims.md: forbidden claim: ${category}`],
+        );
+      },
+    );
+  });
+}
+
+for (const [category, correctiveLanguage] of [
+  [
+    "drop-in/full Sentry replacement",
+    "SentryBox is not a drop-in Sentry replacement.",
+  ],
+  ["fully Sentry-compatible", "SentryBox is not fully Sentry-compatible."],
+  ["built-in/native MCP", "SentryBox does not include built-in MCP."],
+  [
+    "same grouping as Sentry",
+    "SentryBox does not use the same grouping as Sentry.",
+  ],
+  [
+    "guaranteed 30-day history",
+    "SentryBox does not guarantee 30-day history.",
+  ],
+  ["hard 5 GiB total limit", "SentryBox does not impose a 5 GiB total limit."],
+]) {
+  test(`permits corrective language about ${category}`, async () => {
+    await withRepository(
+      { "docs/claims.md": `${correctiveLanguage}\n` },
+      async (root) => {
+        assert.deepEqual(
+          await validateDocumentation(root, ["docs/claims.md"]),
+          [],
         );
       },
     );

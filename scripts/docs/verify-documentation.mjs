@@ -8,13 +8,13 @@ import { pathToFileURL } from "node:url";
 const FORBIDDEN_CLAIMS = [
   [
     "drop-in/full Sentry replacement",
-    /\b(?:drop-in|full)\s+sentry\s+replacement\b/iu,
+    /\b(?:drop-in|full)\s+sentry\s+replacement\b/giu,
   ],
-  ["fully Sentry-compatible", /\bfully\s+sentry-compatible\b/iu],
-  ["built-in/native MCP", /\b(?:built-in|native)\s+MCP\b/iu],
-  ["same grouping as Sentry", /\bsame\s+grouping\s+as\s+Sentry\b/iu],
-  ["guaranteed 30-day history", /\bguaranteed\s+30-day\s+history\b/iu],
-  ["hard 5 GiB total limit", /\b5\s+GiB\s+total\s+limit\b/iu],
+  ["fully Sentry-compatible", /\bfully\s+sentry-compatible\b/giu],
+  ["built-in/native MCP", /\b(?:built-in|native)\s+MCP\b/giu],
+  ["same grouping as Sentry", /\bsame\s+grouping\s+as\s+Sentry\b/giu],
+  ["guaranteed 30-day history", /\bguaranteed\s+30-day\s+history\b/giu],
+  ["hard 5 GiB total limit", /\b5\s+GiB\s+total\s+limit\b/giu],
 ];
 
 export async function findDocumentationFiles(repositoryRoot) {
@@ -51,7 +51,7 @@ export async function validateDocumentation(repositoryRoot, markdownFiles) {
     }
 
     for (const [category, expression] of FORBIDDEN_CLAIMS) {
-      if (expression.test(content)) {
+      if (hasUnqualifiedClaim(content, expression)) {
         diagnostics.push(`${displayPath}: forbidden claim: ${category}`);
       }
     }
@@ -91,13 +91,45 @@ function isIgnoredLink(target) {
 }
 
 function hasValidBashSyntax(content) {
-  const blocks = content.matchAll(/^```(?:bash|sh)\s*\n([\s\S]*?)^```\s*$/gmu);
-  for (const block of blocks) {
-    if (spawnSync("bash", ["-n"], { input: block[1], encoding: "utf8" }).status !== 0) {
-      return false;
+  let block;
+  for (const line of content.split(/\r?\n/u)) {
+    if (block === undefined) {
+      if (/^```(?:bash|sh)\s*$/iu.test(line)) block = [];
+    } else if (/^```\s*$/u.test(line)) {
+      if (!isValidBash(block.join("\n"))) return false;
+      block = undefined;
+    } else {
+      block.push(line);
     }
   }
-  return true;
+  return block === undefined || isValidBash(block.join("\n"));
+}
+
+function isValidBash(source) {
+  return spawnSync("bash", ["-n"], { input: source, encoding: "utf8" }).status === 0;
+}
+
+function hasUnqualifiedClaim(content, expression) {
+  for (const match of content.matchAll(expression)) {
+    if (!isExplicitlyNegated(content, match.index)) return true;
+  }
+  return false;
+}
+
+function isExplicitlyNegated(content, index) {
+  const context = content.slice(
+    Math.max(
+      content.lastIndexOf("\n", index),
+      content.lastIndexOf(".", index),
+      content.lastIndexOf("!", index),
+      content.lastIndexOf("?", index),
+      content.lastIndexOf(";", index),
+    ) + 1,
+    index,
+  );
+  return /\b(?:not|never|without|no)\b|\b(?:do|does|did|is|are|was|were|can|could|should|would|will|has|have|had)n't\b/iu.test(
+    context,
+  );
 }
 
 async function fileExists(path) {
