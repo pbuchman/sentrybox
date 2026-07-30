@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { constants, existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
   bootstrapFirstRelease,
   currentCanonicalMainSha,
+  githubFetch,
   readBootstrapToken,
 } from "./bootstrap-release.mjs";
 
@@ -55,6 +58,7 @@ test("bootstrap selects the exact current canonical release and submits the cano
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: "Bearer test-token-held-only-in-memory",
+        "User-Agent": "SentryBox-Home-Dev-bootstrap",
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
@@ -62,6 +66,167 @@ test("bootstrap selects the exact current canonical release and submits the cano
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
+});
+
+test("bootstrap uses a bounded HTTPS client that keeps credentials out of the URL", async () => {
+  const calls = [];
+  const token = "test-token-held-only-in-memory";
+  const deadlineHandle = Symbol("deadline");
+  const requestImpl = (url, options, onResponse) => {
+    calls.push({ url: String(url), options });
+    const request = new EventEmitter();
+    request.setTimeout = (milliseconds, onTimeout) => {
+      calls.push({ timeout: milliseconds, onTimeout: typeof onTimeout });
+    };
+    request.destroy = (error) => request.emit("error", error);
+    request.end = () => {
+      queueMicrotask(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        onResponse(response);
+        response.end(JSON.stringify({ workflow_runs: [workflowRun()] }));
+      });
+    };
+    return request;
+  };
+
+  const response = await githubFetch(
+    WORKFLOW_RUNS_URL,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    },
+    requestImpl,
+    {
+      setTimeoutImpl: (callback, milliseconds) => {
+        calls.push({ deadline: milliseconds, callback: typeof callback });
+        return deadlineHandle;
+      },
+      clearTimeoutImpl: (handle) => calls.push({ cleared: handle }),
+    },
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    workflow_runs: [workflowRun()],
+  });
+  assert.equal(calls[0].url, WORKFLOW_RUNS_URL);
+  assert.equal(calls[0].url.includes(token), false);
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${token}`);
+  assert.deepEqual(calls[1], { timeout: 10_000, onTimeout: "function" });
+  assert.deepEqual(calls[2], { deadline: 10_000, callback: "function" });
+  assert.deepEqual(calls[3], { cleared: deadlineHandle });
+});
+
+test("bootstrap HTTPS client rejects timeouts, oversized bodies, and invalid JSON", async () => {
+  const headers = { "User-Agent": "SentryBox-test" };
+  const timeoutRequest = (_url, _options, _onResponse) => {
+    const request = new EventEmitter();
+    let onTimeout;
+    request.setTimeout = (_milliseconds, callback) => {
+      onTimeout = callback;
+    };
+    request.destroy = (error) => request.emit("error", error);
+    request.end = () => queueMicrotask(onTimeout);
+    return request;
+  };
+  await assert.rejects(
+    githubFetch(WORKFLOW_RUNS_URL, { headers }, timeoutRequest),
+    /timed out/u,
+  );
+
+  const responseRequest = (body) => (_url, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.setTimeout = () => {};
+    request.destroy = (error) => request.emit("error", error);
+    request.end = () => {
+      queueMicrotask(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        onResponse(response);
+        response.end(body);
+      });
+    };
+    return request;
+  };
+  await assert.rejects(
+    githubFetch(
+      WORKFLOW_RUNS_URL,
+      { headers },
+      responseRequest(Buffer.alloc(4 * 1024 * 1024 + 1)),
+    ),
+    /too large/u,
+  );
+
+  const malformed = await githubFetch(
+    WORKFLOW_RUNS_URL,
+    { headers },
+    responseRequest("{"),
+  );
+  await assert.rejects(malformed.json(), SyntaxError);
+});
+
+test("bootstrap HTTPS client enforces a deadline for the complete request", async () => {
+  const headers = { "User-Agent": "SentryBox-test" };
+  let deadlineCallback;
+  let destroyedWith;
+  let clearedDeadline;
+  const deadlineHandle = Symbol("deadline");
+  const requestImpl = (_url, _options, onResponse) => {
+    const request = new EventEmitter();
+    request.setTimeout = () => {};
+    request.destroy = (error) => {
+      destroyedWith = error;
+      request.emit("error", error);
+    };
+    request.end = () => {
+      queueMicrotask(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        onResponse(response);
+        response.write("{");
+      });
+    };
+    return request;
+  };
+
+  const pendingResponse = githubFetch(
+    WORKFLOW_RUNS_URL,
+    { headers },
+    requestImpl,
+    {
+      setTimeoutImpl: (callback, milliseconds) => {
+        assert.equal(milliseconds, 10_000);
+        deadlineCallback = callback;
+        return deadlineHandle;
+      },
+      clearTimeoutImpl: (handle) => {
+        clearedDeadline = handle;
+      },
+    },
+  );
+  await Promise.resolve();
+  assert.equal(typeof deadlineCallback, "function");
+  deadlineCallback();
+
+  await assert.rejects(pendingResponse, /timed out/u);
+  assert.match(destroyedWith.message, /timed out/u);
+  assert.equal(clearedDeadline, deadlineHandle);
+});
+
+test("bootstrap production networking avoids the global Fetch API under jitless", async () => {
+  const source = await readFile(
+    new URL("./bootstrap-release.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(source, /fetchImpl\s*=\s*fetch/u);
+  assert.match(source, /require\("node:https"\)/u);
 });
 
 test("bootstrap rejects every non-canonical workflow identity before creating a request", async () => {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
@@ -11,8 +12,13 @@ import {
   readFileSync,
   unlinkSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import process from "node:process";
+import {
+  clearTimeout as clearTimer,
+  setTimeout as setTimer,
+} from "node:timers";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -20,6 +26,9 @@ import {
   startFixedDeploy,
   writeDeployRequest,
 } from "./deploy-webhook.mjs";
+
+const require = createRequire(import.meta.url);
+const { request: httpsRequest } = require("node:https");
 
 const CHECKOUT = "/home/pbuchman/deploy/sentrybox";
 const EXPECTED_REPOSITORY = "pbuchman/sentrybox";
@@ -35,11 +44,13 @@ const DEPLOY_REQUEST = "/var/lib/sentrybox-deploy/deploy-request.json";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const WORKFLOW_RUNS_URL =
   "https://api.github.com/repos/pbuchman/sentrybox/actions/workflows/release-image.yml/runs?event=push&status=completed&per_page=100";
+const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_GITHUB_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export async function bootstrapFirstRelease({
   token,
   currentMainSha,
-  fetchImpl = fetch,
+  fetchImpl = githubFetch,
   requestPath = DEPLOY_REQUEST,
   startDeploy,
   removeBootstrapToken,
@@ -55,6 +66,7 @@ export async function bootstrapFirstRelease({
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
+      "User-Agent": "SentryBox-Home-Dev-bootstrap",
       "X-GitHub-Api-Version": "2022-11-28",
     },
   });
@@ -86,6 +98,101 @@ export async function bootstrapFirstRelease({
     await removeBootstrapToken();
   }
   return selected;
+}
+
+export function githubFetch(
+  url,
+  options = {},
+  requestImpl = httpsRequest,
+  { setTimeoutImpl = setTimer, clearTimeoutImpl = clearTimer } = {},
+) {
+  if (url !== WORKFLOW_RUNS_URL) {
+    return Promise.reject(
+      new Error("GitHub release lookup URL is not canonical"),
+    );
+  }
+  if (
+    options === null ||
+    typeof options !== "object" ||
+    options.headers === null ||
+    typeof options.headers !== "object"
+  ) {
+    return Promise.reject(new TypeError("GitHub request headers are required"));
+  }
+  return new Promise((resolveRequest, rejectRequest) => {
+    let settled = false;
+    let request;
+    let deadline;
+    const clearDeadline = () => {
+      if (deadline === undefined) return;
+      clearTimeoutImpl(deadline);
+      deadline = undefined;
+    };
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      clearDeadline();
+      rejectRequest(error);
+    };
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      clearDeadline();
+      resolveRequest(value);
+    };
+    try {
+      request = requestImpl(
+        url,
+        { method: "GET", headers: options.headers },
+        (response) => {
+          const status = response.statusCode;
+          if (!Number.isInteger(status) || status < 100 || status > 599) {
+            response.resume?.();
+            rejectOnce(new Error("GitHub release lookup returned no status"));
+            return;
+          }
+          const chunks = [];
+          let bytes = 0;
+          response.on("error", rejectOnce);
+          response.on("data", (chunk) => {
+            if (settled) return;
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            bytes += buffer.length;
+            if (bytes > MAX_GITHUB_RESPONSE_BYTES) {
+              rejectOnce(
+                new Error("GitHub release lookup response is too large"),
+              );
+              request.destroy();
+              response.destroy?.();
+              return;
+            }
+            chunks.push(buffer);
+          });
+          response.on("end", () => {
+            if (settled) return;
+            const body = Buffer.concat(chunks, bytes).toString("utf8");
+            resolveOnce({
+              ok: status >= 200 && status < 300,
+              status,
+              json: async () => JSON.parse(body),
+            });
+          });
+        },
+      );
+      request.once("error", rejectOnce);
+      request.setTimeout(GITHUB_REQUEST_TIMEOUT_MS, () => {
+        request.destroy(new Error("GitHub release lookup timed out"));
+      });
+      deadline = setTimeoutImpl(() => {
+        const error = new Error("GitHub release lookup timed out");
+        request.destroy(error);
+        rejectOnce(error);
+      }, GITHUB_REQUEST_TIMEOUT_MS);
+      request.end();
+    } catch (error) {
+      rejectOnce(error);
+    }
+  });
 }
 
 export function selectSuccessfulCurrentMainRelease(payload, currentMainSha) {

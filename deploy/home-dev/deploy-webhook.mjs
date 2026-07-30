@@ -13,11 +13,18 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+
+// Node 22 materializes the WebSocket export when node:http is imported through
+// the ESM facade. That eagerly loads Undici's WASM parser, which is unavailable
+// under the production --jitless + MemoryDenyWriteExecute sandbox. Requiring
+// only the CommonJS HTTP module keeps the listener compatible with that sandbox.
+const require = createRequire(import.meta.url);
+const { createServer } = require("node:http");
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 

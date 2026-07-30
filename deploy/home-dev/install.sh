@@ -20,9 +20,60 @@ for executable_asset in \
     exit 1
   fi
 done
-for required_command in caddy chmod cp find mktemp sleep systemd-analyze; do
+for required_command in caddy chmod cp curl find mktemp sleep systemd-analyze; do
   error_hub_require_command "${required_command}"
 done
+
+error_hub_verify_webhook_stability() {
+  local eh_unit="sentrybox-deploy-webhook.service"
+  local eh_expected_pid=""
+  local eh_expected_restarts=""
+  local eh_active_state eh_attempt eh_main_pid eh_probe eh_restarts eh_sub_state
+  local -r eh_attempts=7
+
+  for ((eh_attempt = 1; eh_attempt <= eh_attempts; eh_attempt++)); do
+    eh_active_state="$(
+      systemctl show "${eh_unit}" --property=ActiveState --value
+    )" || return $?
+    eh_sub_state="$(
+      systemctl show "${eh_unit}" --property=SubState --value
+    )" || return $?
+    eh_main_pid="$(
+      systemctl show "${eh_unit}" --property=MainPID --value
+    )" || return $?
+    eh_restarts="$(
+      systemctl show "${eh_unit}" --property=NRestarts --value
+    )" || return $?
+    if [[ "${eh_active_state}" != "active" \
+      || "${eh_sub_state}" != "running" \
+      || ! "${eh_main_pid}" =~ ^[1-9][0-9]*$ \
+      || ! "${eh_restarts}" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    if (( eh_attempt == 1 )); then
+      eh_expected_pid="${eh_main_pid}"
+      eh_expected_restarts="${eh_restarts}"
+    elif [[ "${eh_main_pid}" != "${eh_expected_pid}" \
+      || "${eh_restarts}" != "${eh_expected_restarts}" ]]; then
+      return 1
+    fi
+    eh_probe="$(
+      curl --silent --show-error --connect-timeout 1 --max-time 2 \
+        --request POST \
+        --header 'content-type: application/json' \
+        --data '{}' \
+        --output /dev/null \
+        --write-out $'%{http_code}\n%header{x-sentrybox-deploy-handler}' \
+        http://127.0.0.1:9003/github/workflow-run
+    )" || return $?
+    if [[ "${eh_probe}" != $'400\nworkflow-run-v1' ]]; then
+      return 1
+    fi
+    if (( eh_attempt < eh_attempts )); then
+      sleep 1
+    fi
+  done
+}
 
 private_origin=""
 while (( $# > 0 )); do
@@ -234,6 +285,10 @@ if (( webhook_was_active == 1 )); then
   fi
   if ! systemctl is-active --quiet sentrybox-deploy-webhook.service; then
     printf 'Restarted SentryBox deployment webhook is not active.\n' >&2
+    exit 1
+  fi
+  if ! error_hub_verify_webhook_stability; then
+    printf 'Restarted SentryBox deployment webhook did not remain stable.\n' >&2
     exit 1
   fi
 fi
