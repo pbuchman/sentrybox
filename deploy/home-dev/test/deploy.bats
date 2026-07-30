@@ -2013,6 +2013,8 @@ EOF
 
   [ "${status}" -ne 0 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
+  run grep -F ' stop --timeout 30 sentrybox' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
   rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]

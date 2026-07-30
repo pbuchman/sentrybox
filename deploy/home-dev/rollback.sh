@@ -212,12 +212,16 @@ if (( restart_status != 0 )); then
 fi
 
 error_hub_health_checks "${previous_origin}" "${previous_image}"
-state_write_started=1
-error_hub_write_state \
-  "${error_hub_current_state}" \
-  "${previous_image}" \
-  "${previous_origin}" \
-  "${previous_sha}"
+if [[ "${previous_image}" != "${current_image}" \
+  || "${previous_origin}" != "${current_origin}" \
+  || "${previous_sha}" != "${current_sha}" ]]; then
+  state_write_started=1
+  error_hub_write_state \
+    "${error_hub_current_state}" \
+    "${previous_image}" \
+    "${previous_origin}" \
+    "${previous_sha}"
+fi
 rollback_committed=1
 
 printf 'SentryBox rolled back to %s.\n' "${previous_sha}"
