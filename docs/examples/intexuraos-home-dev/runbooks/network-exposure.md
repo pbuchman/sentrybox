@@ -194,6 +194,13 @@ rate rule no looser than the SentryBox source budget and verify its response
 does not expose a project or key. Caddy and the application remain the final
 enforcement points even when an edge rule is absent or misconfigured.
 
+These layers intentionally have distinct denial responses. A request sent
+directly to the Caddy origin for an unlisted path or method receives the fixed
+`404` described above. From the public Internet, the live Cloudflare edge rule
+rejects unlisted `errors.intexuraos.cloud` traffic before it reaches Caddy and
+returns `403`. The deployment hostname has no equivalent edge allowlist, so its
+unlisted routes continue to reach Caddy and return `404`.
+
 ## Configure private Tailscale access
 
 With SentryBox healthy on `127.0.0.1:8141`, run:
@@ -229,9 +236,9 @@ From a normal Internet client, verify:
 ```bash
 curl -fsS https://errors.intexuraos.cloud/health/live
 curl -sS -o /dev/null -w '%{http_code}\n' \
-  https://errors.intexuraos.cloud/api/issues                 # 404
+  https://errors.intexuraos.cloud/api/issues                 # 403 (Cloudflare edge)
 curl -sS -o /dev/null -w '%{http_code}\n' -X GET \
-  https://errors.intexuraos.cloud/api/1/envelope/            # 404
+  https://errors.intexuraos.cloud/api/1/envelope/            # 403 (Cloudflare edge)
 curl -sS -o /dev/null -w '%{http_code}\n' \
   https://errors-deploy.intexuraos.cloud/health/live         # 404
 curl -sS -o /dev/null -w '%{http_code}\n' -X GET \
