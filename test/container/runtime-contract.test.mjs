@@ -112,7 +112,9 @@ test("runtime service permits only the preflight data write through its read-onl
 });
 
 test("operator commands load deployment state explicitly", async () => {
-  const runbook = await source("docs/runbooks/project-configuration.md");
+  const runbook = await source(
+    "docs/examples/intexuraos-home-dev/runbooks/project-configuration.md",
+  );
   const composeCommands =
     runbook.match(/sudo docker compose[\s\S]*?(?=\n```)/gu) ?? [];
 
@@ -141,7 +143,9 @@ test("operator commands load deployment state explicitly", async () => {
 });
 
 test("maintenance transition arms recovery before the bounded service stop", async () => {
-  const runbook = await source("docs/runbooks/project-configuration.md");
+  const runbook = await source(
+    "docs/examples/intexuraos-home-dev/runbooks/project-configuration.md",
+  );
   const wrapper = await source("deploy/home-dev/maintenance-window.sh");
   const service = await source("deploy/home-dev/sentrybox.service");
 

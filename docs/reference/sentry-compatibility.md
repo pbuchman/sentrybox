@@ -1,0 +1,109 @@
+# Sentry compatibility
+
+**Status:** Normative
+
+This page defines the Sentry interoperability boundary for SentryBox. A feature
+is compatible only to the extent recorded here and covered by the repository's
+source and tests. The evidence baseline is a real `@sentry/node@8.55.0` event
+delivered through the repository's controlled custom transport, a captured
+`@sentry/react@8.55.0` Envelope fixture, and external
+`@sentry/mcp-server@0.37.0`. These evidence levels are not interchangeable;
+other versions and clients require their own verification.
+
+The state labels mean:
+
+- **Supported** — the described behavior is implemented and directly exercised.
+- **Partial** — a narrow or lossy subset is implemented; the stated limits are
+  part of the contract.
+- **Not supported** — applications must not depend on this capability.
+
+## Compatibility matrix
+
+| Area                 | State             | Normative boundary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SDK and DSN          | **Supported**     | Standard DSN project/key authentication, query-string authentication, and standard `X-Sentry-Auth` are accepted. The repository initializes real `@sentry/node@8.55.0`, creates and flushes an event, and delivers its Envelope through the controlled custom acceptance transport. This proves the stated event-generation and ingest flow; it does not prove the SDK's default transport against SentryBox.                                                                                                                                                                                                                                                                                                                                            |
+| SDK and DSN          | **Partial**       | A captured Envelope labelled as `@sentry/react@8.55.0` is parsed and exercised through ingest, but this repository does not install or execute that React SDK. Default Node/React transport behavior and DSN-only application migration are therefore unverified. Other SDKs and versions may happen to emit compatible Envelopes, but are outside the evidence baseline. Project and environment authority comes from the configured numeric project ID/public key pair; event metadata cannot select another project or environment.                                                                                                                                                                                                                          |
+| SDK and DSN          | **Not supported** | Legacy `/store/`, minidump, Unreal, security-report, feedback, replay, and attachment endpoints are not implemented. SentryBox is not a drop-in Sentry replacement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Envelope             | **Supported**     | `POST /api/{projectId}/envelope/` accepts newline- or length-framed `event` items in identity or gzip request bodies, with or without `Content-Type`. The decompressed Envelope limit is 1 MiB; duplicate header fields, malformed framing, invalid JSON, and mismatched event IDs are rejected. Exact configured browser origins receive CORS support.                                                                                                                                                                                                                                                                                                                                         |
+| Envelope             | **Partial**       | Only `event` items can be stored. Non-binary `transaction`, `span`, `session`, `sessions`, `client_report`, profile, replay, feedback, and unknown items are acknowledged and discarded so the SDK does not retry unsupported telemetry. `attachment` and any `application/octet-stream` item are rejected with `400` and are never stored.                                                                                                                                                                                                                                                                                                                                                     |
+| Envelope             | **Not supported** | Traces, transactions, spans, sessions, profiles, replay, feedback, security reports, minidumps, and attachments are not SentryBox products, even when an unsupported JSON item receives a successful transport acknowledgement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Levels and responses | **Supported**     | `warning`/`warn`, `error`, and `fatal` events are stored. An event with no level and a non-empty exception is stored as `error`. A successful POST returns `200` with the Envelope event ID, or the first `event` item ID when the Envelope header omits one. A successful unsupported-only Envelope with neither ID returns `200` with `{ "id": "" }`. A successful preflight returns `204`. Protocol/authentication errors return `400`, size or decompression-limit errors `413`, rate/concurrency limits `429`, unavailable storage `503`, and an unexpected ingest failure `500`. Sentry error bodies are bounded and do not reflect event data. Retryable outcomes include `Retry-After`.                                                                                     |
+| Levels and responses | **Partial**       | `trace`, `debug`, `info`, unknown levels, and level-less events without an exception receive a normal successful acknowledgement but are discarded and counted rather than persisted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Event fidelity       | **Partial**       | SentryBox stores a bounded, redacted diagnostic projection rather than the original event. From `exception.values`, normalization retains only the first meaningful entry and its bounded frames. Later meaningful exception-chain entries are discarded; only their count and the `exception_chain` truncation reason are retained. Breadcrumbs, selected tags and contexts, release, environment, platform, logger, server name, and correlation identifiers are retained within documented limits. Numeric SDK timestamps are not promoted to the canonical occurrence time and therefore fall back to SentryBox receipt time; only string timestamps are preserved. Top-level `request` is not retained; a `contexts.request` object is sanitized and retained. `tags.service` remains a tag and can influence grouping, but it is not promoted to the canonical service facet; `server_name` supplies that facet. |
+| Event fidelity       | **Not supported** | Byte-for-byte event preservation, complete Sentry event interfaces, source-map processing, symbolication services, and Sentry-identical grouping are not provided. SentryBox does not use the same grouping as Sentry.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| UI and API           | **Supported**     | The private SentryBox UI and native API provide issue lists/details, occurrence reads, facets, filters, resolve/reopen/delete, redacted downloads/exports, system status, health, metrics, and webhook redrive. They are SentryBox interfaces, not copies of the Sentry product.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| UI and API           | **Partial**       | The Sentry-shaped facade has exactly five successful, trailing-slash `GET` route patterns: `GET /api/0/organizations/{org}/issues/{issueId}/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/latest/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/{eventId}/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/`, and `GET /api/0/projects/{org}/{projectSlugOrId}/`. It exposes only fields needed by the tested reads.                                                                                                                                                                                                                                         |
+| UI and API           | **Not supported** | The Sentry UI and complete `/api/0` surface are not implemented. Every other `/api/0` method or route, a missing required trailing slash, and a resource outside the configured organization/project membership return a structured `404`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Webhook              | **Partial**       | One Sentry-shaped `event_alert` / `triggered` contract is implemented for the current Code Agent consumer. It sends the [exact JSON issue/event shape and required headers](#webhook-event-alert-contract). New and regressed issue generations use the same action; repeated occurrences do not each alert.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Webhook              | **Not supported** | Generic Sentry webhook resources/actions, Sentry webhook administration, and arbitrary downstream payload schemas are not implemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| MCP reads            | **Partial**       | SentryBox does not bundle an MCP server. Compatibility tests launch the external pinned `@sentry/mcp-server@0.37.0` against the private five-route facade and verify only `get_issue_details` and `search_issue_events` through `execute_sentry_tool`, with inspect skills enabled and Seer disabled.                                                                                                                                                                                                                                                                                                                                                                                           |
+| MCP reads            | **Not supported** | Other MCP package versions, tools, writes, Seer/autofix, replay, and access beyond the five-route facade are outside the compatibility contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Retention            | **Supported**     | The sweeper removes events older than 30 days by SentryBox `received_at`, recomputes issue aggregates from retained events, and removes empty issues. It removes delivered outbox rows and terminal (`delivered` or `dead_letter`) redrive rows after 7 days.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Retention            | **Partial**       | Thirty days is an age ceiling, not guaranteed history. Storage-budget eviction can remove the oldest events earlier, so the available history is up to 30 days.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Storage              | **Supported**     | Normalized, redacted event payloads and issue state are stored in local SQLite with WAL, foreign keys, indexed facets, retention accounting, checkpointing, and incremental vacuum. Downloads stream without creating export files in the live data directory.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Storage              | **Partial**       | The 5 GiB value is a safety budget for the live data directory—database, WAL/SHM, temporary files, and other live-data contents—not a total installation limit. Logical payload cleanup starts above 4 GiB and targets 3.6 GiB; physical usage becomes critical at 4.75 GiB, and ingest also fails closed when free space is below 256 MiB. External backup storage is outside this budget.                                                                                                                                                                                                                                                                                                     |
+| Storage              | **Not supported** | Sentry-compatible storage backends, multi-node clustering, and unbounded local history are not provided.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+## Webhook event-alert contract
+
+The configured webhook target receives a `POST` whose UTF-8 JSON body has
+exactly this shape and no additional fields:
+
+```json
+{
+  "action": "triggered",
+  "data": {
+    "event": {
+      "event_id": "<event ID>",
+      "title": "<normalized event title>",
+      "web_url": "<private HTTPS origin>/organizations/<organization slug>/issues/<decimal issue ID>/events/<percent-encoded event ID>/",
+      "issue": {
+        "id": "<decimal issue ID>",
+        "shortId": "INTEXURA-HUB-<decimal issue ID>",
+        "title": "<normalized event title>",
+        "permalink": "<private HTTPS origin>/organizations/<organization slug>/issues/<decimal issue ID>/",
+        "status": "unresolved",
+        "project": {
+          "id": "<decimal project ID>",
+          "slug": "<project slug>"
+        }
+      },
+      "project": {
+        "id": "<decimal project ID>",
+        "slug": "<project slug>"
+      }
+    }
+  }
+}
+```
+
+The two `project` objects are identical. The issue `id` and project `id` are
+JSON strings, `shortId` retains the current `INTEXURA-HUB-` prefix, and the
+event and issue `title` values are identical.
+
+Every request carries all four headers:
+
+| Header                   | Exact value or derivation                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `Content-Type`           | `application/json`                                                                                                             |
+| `Sentry-Hook-Resource`   | `event_alert`                                                                                                                   |
+| `Sentry-Hook-Signature`  | 64 lowercase hexadecimal characters: HMAC-SHA256 of the exact stored body bytes using the configured webhook secret           |
+| `X-Error-Hub-Delivery`   | A lowercase UUID identifying this delivery; the same value, stored body, and stored signature are reused for automatic retries |
+
+## Upgrade rule
+
+Changing either SDK evidence fixture/version, the external MCP package version,
+an Envelope capability, a facade route, or a fidelity statement changes this
+compatibility contract. The change requires focused compatibility evidence
+before the matrix can be widened. DSN-only migration may be claimed only after
+the relevant SDK's default transport is executed against SentryBox in a
+repeatable test.
+
+## Protocol references
+
+- [Sentry transport authentication and DSN](https://develop.sentry.dev/sdk/foundations/transport/authentication/)
+- [Sentry Envelope format](https://develop.sentry.dev/sdk/foundations/envelopes/)
+- [Sentry Envelope item types](https://develop.sentry.dev/sdk/foundations/envelopes/envelope-items/)
+- [Sentry transport responses](https://develop.sentry.dev/sdk/foundations/transport/)
+- [Sentry JavaScript SDK 8.55.0](https://github.com/getsentry/sentry-javascript/tree/8.55.0)
+- [External Sentry MCP server](https://github.com/getsentry/sentry-mcp)
