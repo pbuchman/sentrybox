@@ -24,53 +24,82 @@ for required_command in caddy chmod cp curl find mktemp sleep systemd-analyze; d
   error_hub_require_command "${required_command}"
 done
 
-error_hub_verify_webhook_stability() {
+error_hub_webhook_state() {
   local eh_unit="sentrybox-deploy-webhook.service"
-  local eh_expected_pid=""
-  local eh_expected_restarts=""
-  local eh_active_state eh_attempt eh_main_pid eh_probe eh_restarts eh_sub_state
-  local -r eh_attempts=7
+  local eh_active_state eh_main_pid eh_restarts eh_sub_state
 
-  for ((eh_attempt = 1; eh_attempt <= eh_attempts; eh_attempt++)); do
-    eh_active_state="$(
-      systemctl show "${eh_unit}" --property=ActiveState --value
-    )" || return $?
-    eh_sub_state="$(
-      systemctl show "${eh_unit}" --property=SubState --value
-    )" || return $?
-    eh_main_pid="$(
-      systemctl show "${eh_unit}" --property=MainPID --value
-    )" || return $?
-    eh_restarts="$(
-      systemctl show "${eh_unit}" --property=NRestarts --value
-    )" || return $?
-    if [[ "${eh_active_state}" != "active" \
-      || "${eh_sub_state}" != "running" \
-      || ! "${eh_main_pid}" =~ ^[1-9][0-9]*$ \
-      || ! "${eh_restarts}" =~ ^[0-9]+$ ]]; then
-      return 1
+  eh_active_state="$(
+    systemctl show "${eh_unit}" --property=ActiveState --value
+  )" || return $?
+  eh_sub_state="$(
+    systemctl show "${eh_unit}" --property=SubState --value
+  )" || return $?
+  eh_main_pid="$(
+    systemctl show "${eh_unit}" --property=MainPID --value
+  )" || return $?
+  eh_restarts="$(
+    systemctl show "${eh_unit}" --property=NRestarts --value
+  )" || return $?
+  if [[ "${eh_active_state}" != "active" \
+    || "${eh_sub_state}" != "running" \
+    || ! "${eh_main_pid}" =~ ^[1-9][0-9]*$ \
+    || ! "${eh_restarts}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  printf '%s\t%s\n' "${eh_main_pid}" "${eh_restarts}"
+}
+
+error_hub_probe_webhook() {
+  curl --silent --show-error --connect-timeout 1 --max-time 2 \
+    --request POST \
+    --header 'content-type: application/json' \
+    --data '{}' \
+    --output /dev/null \
+    --write-out $'%{http_code}\n%header{x-sentrybox-deploy-handler}' \
+    http://127.0.0.1:9003/github/workflow-run
+}
+
+error_hub_verify_webhook_stability() {
+  local eh_attempt eh_curl_status eh_probe eh_state
+  local eh_ready=0
+  local -r eh_expected_probe=$'400\nworkflow-run-v1'
+  local -r eh_readiness_attempts=10
+  local -r eh_readiness_wait_seconds=0.1
+  local -r eh_stability_attempts=7
+
+  eh_state="$(error_hub_webhook_state)" || return $?
+  for ((eh_attempt = 1; \
+    eh_attempt <= eh_readiness_attempts; \
+    eh_attempt++)); do
+    [[ "$(error_hub_webhook_state)" == "${eh_state}" ]] || return 1
+    eh_probe=""
+    if eh_probe="$(error_hub_probe_webhook)"; then
+      eh_curl_status=0
+    else
+      eh_curl_status=$?
     fi
-    if (( eh_attempt == 1 )); then
-      eh_expected_pid="${eh_main_pid}"
-      eh_expected_restarts="${eh_restarts}"
-    elif [[ "${eh_main_pid}" != "${eh_expected_pid}" \
-      || "${eh_restarts}" != "${eh_expected_restarts}" ]]; then
-      return 1
+    [[ "$(error_hub_webhook_state)" == "${eh_state}" ]] || return 1
+    if (( eh_curl_status == 0 )); then
+      [[ "${eh_probe}" == "${eh_expected_probe}" ]] || return 1
+      eh_ready=1
+      break
     fi
-    eh_probe="$(
-      curl --silent --show-error --connect-timeout 1 --max-time 2 \
-        --request POST \
-        --header 'content-type: application/json' \
-        --data '{}' \
-        --output /dev/null \
-        --write-out $'%{http_code}\n%header{x-sentrybox-deploy-handler}' \
-        http://127.0.0.1:9003/github/workflow-run
-    )" || return $?
-    if [[ "${eh_probe}" != $'400\nworkflow-run-v1' ]]; then
-      return 1
+    (( eh_curl_status == 7 )) || return "${eh_curl_status}"
+    if (( eh_attempt < eh_readiness_attempts )); then
+      sleep "${eh_readiness_wait_seconds}" || return $?
     fi
-    if (( eh_attempt < eh_attempts )); then
-      sleep 1
+  done
+  (( eh_ready == 1 )) || return 1
+
+  for ((eh_attempt = 1; \
+    eh_attempt <= eh_stability_attempts; \
+    eh_attempt++)); do
+    [[ "$(error_hub_webhook_state)" == "${eh_state}" ]] || return 1
+    eh_probe="$(error_hub_probe_webhook)" || return $?
+    [[ "${eh_probe}" == "${eh_expected_probe}" ]] || return 1
+    [[ "$(error_hub_webhook_state)" == "${eh_state}" ]] || return 1
+    if (( eh_attempt < eh_stability_attempts )); then
+      sleep 1 || return $?
     fi
   done
 }
