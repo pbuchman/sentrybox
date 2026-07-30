@@ -2,8 +2,10 @@
 
 SentryBox supports multiple applications and projects. Every configured
 project/environment pair receives its own Sentry-compatible DSN, so another
-application that already uses a Sentry SDK can report by changing only its DSN;
-its SDK call sites stay unchanged.
+application does not need to share an IntexuraOS project. Verify that
+application's SDK, version, Envelope shape, and default transport before treating
+a DSN change as sufficient; the current evidence boundary is recorded in the
+[compatibility matrix](../../../reference/sentry-compatibility.md).
 
 This runbook installs the bundled Home Dev sample: two IntexuraOS projects and
 their four environment-bound DSNs. It never stores a clear SentryBox public key
