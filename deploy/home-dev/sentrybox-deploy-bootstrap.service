@@ -3,6 +3,7 @@ Description=Bootstrap the first verified SentryBox deployment
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/home/pbuchman/deploy/sentrybox/deploy/home-dev/bootstrap-release.mjs
+ConditionPathExists=/var/lib/sentrybox-deploy/bootstrap-github-token
 
 [Service]
 Type=oneshot
@@ -10,7 +11,6 @@ User=root
 Group=root
 WorkingDirectory=/home/pbuchman/deploy/sentrybox
 ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs
-LoadCredential=github-bootstrap-token:/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token
 StateDirectory=sentrybox-deploy
 StateDirectoryMode=0700
 TimeoutStartSec=22min

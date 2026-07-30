@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,8 @@ const SHA = "1234567890abcdef1234567890abcdef12345678";
 const OTHER_SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const WORKFLOW_RUNS_URL =
   "https://api.github.com/repos/pbuchman/sentrybox/actions/workflows/release-image.yml/runs?event=push&status=completed&per_page=100";
+const BOOTSTRAP_TOKEN_FILE =
+  "/var/lib/sentrybox-deploy/bootstrap-github-token";
 
 test("bootstrap selects the exact current canonical release and submits the canonical request", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sentrybox-bootstrap-"));
@@ -122,45 +124,173 @@ test("bootstrap removes its request when the fixed deployment unit fails", async
   }
 });
 
-test("bootstrap credential accepts only root:root 0400 or 0600 regular single-link files", () => {
-  for (const mode of [0o100400, 0o100600]) {
-    let reads = 0;
-    const token = readBootstrapToken("/credential", {
-      lstat: () => metadata({ mode }),
-      readFile: () => {
-        reads += 1;
-        return "credential-value\n";
-      },
-    });
-    assert.equal(token, "credential-value");
-    assert.equal(reads, 1);
-  }
+test("bootstrap validates the complete fixed root-owned source chain before reading", () => {
+  const calls = [];
+  let reads = 0;
+  let closes = 0;
+  const token = readBootstrapToken(BOOTSTRAP_TOKEN_FILE, {
+    lstat: (path) => {
+      calls.push(path);
+      return safeBootstrapMetadata(path);
+    },
+    open: (path, flags) => {
+      assert.equal(path, BOOTSTRAP_TOKEN_FILE);
+      assert.notEqual(flags & constants.O_NOFOLLOW, 0);
+      assert.notEqual(flags & constants.O_NONBLOCK, 0);
+      return 42;
+    },
+    fstat: (descriptor) => {
+      assert.equal(descriptor, 42);
+      return fileMetadata();
+    },
+    readFile: (descriptor) => {
+      assert.equal(descriptor, 42);
+      reads += 1;
+      return "credential-value\n";
+    },
+    close: (descriptor) => {
+      assert.equal(descriptor, 42);
+      closes += 1;
+    },
+  });
+
+  assert.equal(token, "credential-value");
+  assert.deepEqual(calls, [
+    "/",
+    "/var",
+    "/var/lib",
+    "/var/lib/sentrybox-deploy",
+    BOOTSTRAP_TOKEN_FILE,
+  ]);
+  assert.equal(reads, 1);
+  assert.equal(closes, 1);
 });
 
-test("bootstrap credential metadata is checked before token content is read", () => {
-  const unsafe = [
-    ["symlink", metadata({ isFile: () => false })],
-    ["non-root owner", metadata({ uid: 1000 })],
-    ["non-root group", metadata({ gid: 1000 })],
-    ["owner executable", metadata({ mode: 0o100500 })],
-    ["group readable", metadata({ mode: 0o100640 })],
-    ["multiple links", metadata({ nlink: 2 })],
+test("unsafe bootstrap parents prevent content reads and GitHub requests", async () => {
+  const unsafeParents = [
+    ["root owner", "/var", directoryMetadata(0o40755, { uid: 1000 })],
+    ["root group", "/var/lib", directoryMetadata(0o40755, { gid: 1000 })],
+    ["private mode", "/var/lib/sentrybox-deploy", directoryMetadata(0o40755)],
+    [
+      "regular parent",
+      "/var/lib/sentrybox-deploy",
+      fileMetadata({ mode: 0o100700 }),
+    ],
   ];
-  for (const [name, fileMetadata] of unsafe) {
+
+  for (const [name, unsafePath, unsafeMetadata] of unsafeParents) {
     let reads = 0;
-    assert.throws(
-      () =>
-        readBootstrapToken("/credential", {
-          readFile: () => {
-            reads += 1;
-            return "must-not-be-read";
+    let requests = 0;
+    await assert.rejects(
+      Promise.resolve().then(() =>
+        bootstrapFirstRelease({
+          token: readBootstrapToken(BOOTSTRAP_TOKEN_FILE, {
+            lstat: (path) =>
+              path === unsafePath ? unsafeMetadata : safeBootstrapMetadata(path),
+            readFile: () => {
+              reads += 1;
+              return "must-not-be-read";
+            },
+          }),
+          currentMainSha: SHA,
+          fetchImpl: async () => {
+            requests += 1;
+            return response({ workflow_runs: [workflowRun()] });
           },
-          lstat: () => fileMetadata,
         }),
-      /root-owned, private, singly linked regular file/u,
+      ),
+      /root-owned bootstrap token source directory/u,
       name,
     );
     assert.equal(reads, 0, name);
+    assert.equal(requests, 0, name);
+  }
+});
+
+test("unsafe bootstrap files prevent content reads and GitHub requests", async () => {
+  const unsafe = [
+    ["symlink", fileMetadata({ isFile: () => false })],
+    ["fifo", fileMetadata({ isFile: () => false, mode: 0o010600 })],
+    ["device", fileMetadata({ isFile: () => false, mode: 0o020600 })],
+    ["non-root owner", fileMetadata({ uid: 1000 })],
+    ["non-root group", fileMetadata({ gid: 1000 })],
+    ["read-only owner mode", fileMetadata({ mode: 0o100400 })],
+    ["owner executable", fileMetadata({ mode: 0o100500 })],
+    ["group readable", fileMetadata({ mode: 0o100640 })],
+    ["multiple links", fileMetadata({ nlink: 2 })],
+  ];
+  for (const [name, fileMetadata] of unsafe) {
+    let reads = 0;
+    let requests = 0;
+    await assert.rejects(
+      Promise.resolve().then(() =>
+        bootstrapFirstRelease({
+          token: readBootstrapToken(BOOTSTRAP_TOKEN_FILE, {
+            readFile: () => {
+              reads += 1;
+              return "must-not-be-read";
+            },
+            lstat: (path) =>
+              path === BOOTSTRAP_TOKEN_FILE
+                ? fileMetadata
+                : safeBootstrapMetadata(path),
+          }),
+          currentMainSha: SHA,
+          fetchImpl: async () => {
+            requests += 1;
+            return response({ workflow_runs: [workflowRun()] });
+          },
+        }),
+      ),
+      /root-owned, mode 0600, singly linked regular file/u,
+      name,
+    );
+    assert.equal(reads, 0, name);
+    assert.equal(requests, 0, name);
+  }
+});
+
+test("bootstrap revalidates the opened source before reading it", () => {
+  let reads = 0;
+  let closes = 0;
+  assert.throws(
+    () =>
+      readBootstrapToken(BOOTSTRAP_TOKEN_FILE, {
+        lstat: safeBootstrapMetadata,
+        open: () => 42,
+        fstat: () => fileMetadata({ nlink: 2 }),
+        readFile: () => {
+          reads += 1;
+          return "must-not-be-read";
+        },
+        close: () => {
+          closes += 1;
+        },
+      }),
+    /root-owned, mode 0600, singly linked regular file/u,
+  );
+  assert.equal(reads, 0);
+  assert.equal(closes, 1);
+});
+
+test("successful bootstrap removes its one-time local token source", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sentrybox-bootstrap-"));
+  const requestPath = join(directory, "deploy-request.json");
+  let removals = 0;
+  try {
+    await bootstrapFirstRelease({
+      token: "test-token-held-only-in-memory",
+      currentMainSha: SHA,
+      requestPath,
+      fetchImpl: async () => response({ workflow_runs: [workflowRun()] }),
+      startDeploy: async () => unlink(requestPath),
+      removeBootstrapToken: () => {
+        removals += 1;
+      },
+    });
+    assert.equal(removals, 1);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
   }
 });
 
@@ -208,7 +338,7 @@ test("bootstrap rejects a non-canonical origin or ambiguous main lookup", () => 
   }
 });
 
-test("bootstrap unit receives the token only as a credential and uses stable system Node", async () => {
+test("bootstrap unit passes only the fixed root-controlled source path to stable system Node", async () => {
   const unit = await readFile(
     new URL("./sentrybox-deploy-bootstrap.service", import.meta.url),
     "utf8",
@@ -218,10 +348,8 @@ test("bootstrap unit receives the token only as a credential and uses stable sys
     unit,
     /^ExecStart=\/opt\/nodejs\/current\/bin\/node --jitless deploy\/home-dev\/bootstrap-release\.mjs$/mu,
   );
-  assert.match(
-    unit,
-    /^LoadCredential=github-bootstrap-token:\/home\/pbuchman\/services\/sentrybox\/deploy\/github-bootstrap-token$/mu,
-  );
+  assert.doesNotMatch(unit, /^LoadCredential=/mu);
+  assert.match(unit, /\/var\/lib\/sentrybox-deploy\/bootstrap-github-token/u);
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
   assert.match(unit, /^InaccessiblePaths=\/var\/run\/docker\.sock$/mu);
   assert.doesNotMatch(
@@ -248,13 +376,41 @@ function response(body) {
   return { ok: true, status: 200, json: async () => body };
 }
 
-function metadata(overrides = {}) {
+function fileMetadata(overrides = {}) {
   return {
     isFile: () => true,
     mode: 0o100600,
     uid: 0,
     gid: 0,
     nlink: 1,
+    dev: 1,
+    ino: 2,
     ...overrides,
   };
+}
+
+function directoryMetadata(mode, overrides = {}) {
+  return {
+    isDirectory: () => true,
+    isFile: () => false,
+    mode,
+    uid: 0,
+    gid: 0,
+    ...overrides,
+  };
+}
+
+function safeBootstrapMetadata(path) {
+  switch (path) {
+    case "/":
+    case "/var":
+    case "/var/lib":
+      return directoryMetadata(0o40755);
+    case "/var/lib/sentrybox-deploy":
+      return directoryMetadata(0o40700);
+    case BOOTSTRAP_TOKEN_FILE:
+      return fileMetadata();
+    default:
+      throw new Error(`unexpected metadata path: ${path}`);
+  }
 }

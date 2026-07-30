@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -15,8 +24,13 @@ import {
 const CHECKOUT = "/home/pbuchman/deploy/sentrybox";
 const EXPECTED_REPOSITORY = "pbuchman/sentrybox";
 const EXPECTED_WORKFLOW = "Release SentryBox Image";
-const TOKEN_FILE =
-  "/run/credentials/sentrybox-deploy-bootstrap.service/github-bootstrap-token";
+const TOKEN_FILE = "/var/lib/sentrybox-deploy/bootstrap-github-token";
+const TOKEN_PARENT_MODES = new Map([
+  ["/", 0o755],
+  ["/var", 0o755],
+  ["/var/lib", 0o755],
+  ["/var/lib/sentrybox-deploy", 0o700],
+]);
 const DEPLOY_REQUEST = "/var/lib/sentrybox-deploy/deploy-request.json";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const WORKFLOW_RUNS_URL =
@@ -28,6 +42,7 @@ export async function bootstrapFirstRelease({
   fetchImpl = fetch,
   requestPath = DEPLOY_REQUEST,
   startDeploy,
+  removeBootstrapToken,
 }) {
   if (typeof token !== "string" || token.length === 0) {
     throw new TypeError("GitHub bootstrap token is required");
@@ -66,6 +81,9 @@ export async function bootstrapFirstRelease({
   } catch (error) {
     removeDeployRequest(requestPath);
     throw error;
+  }
+  if (removeBootstrapToken !== undefined) {
+    await removeBootstrapToken();
   }
   return selected;
 }
@@ -112,26 +130,74 @@ function isSuccessfulCurrentMainRelease(value, currentMainSha) {
 
 export function readBootstrapToken(
   path,
-  { lstat = lstatSync, readFile = readFileSync } = {},
+  {
+    close = closeSync,
+    fstat = fstatSync,
+    lstat = lstatSync,
+    open = openSync,
+    readFile = readFileSync,
+  } = {},
 ) {
-  const file = lstat(path);
-  const permissions = file.mode & 0o777;
+  if (path !== TOKEN_FILE) {
+    throw new Error("GitHub bootstrap token source path is not canonical");
+  }
+
+  for (const [parent, expectedMode] of TOKEN_PARENT_MODES) {
+    const metadata = lstat(parent);
+    if (
+      metadata.isDirectory?.() !== true ||
+      metadata.uid !== 0 ||
+      metadata.gid !== 0 ||
+      (metadata.mode & 0o777) !== expectedMode
+    ) {
+      throw new Error(
+        "GitHub bootstrap token must use a root-owned bootstrap token source directory with its fixed safe mode",
+      );
+    }
+  }
+
+  const pathMetadata = lstat(path);
+  assertSafeTokenFile(pathMetadata);
+
+  const flags =
+    constants.O_RDONLY |
+    constants.O_NOFOLLOW |
+    constants.O_NONBLOCK;
+  const descriptor = open(path, flags);
+  try {
+    const descriptorMetadata = fstat(descriptor);
+    assertSafeTokenFile(descriptorMetadata);
+    if (
+      descriptorMetadata.dev !== pathMetadata.dev ||
+      descriptorMetadata.ino !== pathMetadata.ino
+    ) {
+      throw new Error(
+        "GitHub bootstrap token source changed while it was being opened",
+      );
+    }
+
+    const token = readFile(descriptor, "utf8").replace(/\r?\n$/u, "");
+    if (token.length === 0 || token.includes("\n") || token.includes("\r")) {
+      throw new Error("GitHub bootstrap token must contain one non-empty value");
+    }
+    return token;
+  } finally {
+    close(descriptor);
+  }
+}
+
+function assertSafeTokenFile(file) {
   if (
-    !file.isFile() ||
+    file.isFile?.() !== true ||
     file.uid !== 0 ||
     file.gid !== 0 ||
     file.nlink !== 1 ||
-    (permissions !== 0o400 && permissions !== 0o600)
+    (file.mode & 0o777) !== 0o600
   ) {
     throw new Error(
-      "GitHub bootstrap token must be a root-owned, private, singly linked regular file",
+      "GitHub bootstrap token must be a root-owned, mode 0600, singly linked regular file",
     );
   }
-  const token = readFile(path, "utf8").replace(/\r?\n$/u, "");
-  if (token.length === 0 || token.includes("\n") || token.includes("\r")) {
-    throw new Error("GitHub bootstrap token must contain one non-empty value");
-  }
-  return token;
 }
 
 export function currentCanonicalMainSha(runGit = runCanonicalGit) {
@@ -168,6 +234,7 @@ async function runMain() {
   const selected = await bootstrapFirstRelease({
     token: readBootstrapToken(TOKEN_FILE),
     currentMainSha,
+    removeBootstrapToken: () => unlinkSync(TOKEN_FILE),
   });
   process.stdout.write(
     `SentryBox first deployment requested at ${selected.headSha}.\n`,

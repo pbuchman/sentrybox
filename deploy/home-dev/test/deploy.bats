@@ -2085,7 +2085,7 @@ EOF
   [ "${output}" = $'InaccessiblePaths=\nInaccessiblePaths=/var/run/docker.sock' ]
 }
 
-@test "first-release bootstrap is installed for manual credential-only activation" {
+@test "first-release bootstrap is installed for one-time fixed-source activation" {
   run "${repository_root}/deploy/home-dev/install.sh" \
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
   [ "${status}" -eq 0 ]
@@ -2095,8 +2095,10 @@ EOF
     'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs' \
     "${bootstrap_unit}"
   grep -Fx \
-    'LoadCredential=github-bootstrap-token:/home/pbuchman/services/sentrybox/deploy/github-bootstrap-token' \
+    'ConditionPathExists=/var/lib/sentrybox-deploy/bootstrap-github-token' \
     "${bootstrap_unit}"
+  run grep -F 'LoadCredential=' "${bootstrap_unit}"
+  [ "${status}" -ne 0 ]
   run grep -E 'systemctl (enable|start).*sentrybox-deploy-bootstrap' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
