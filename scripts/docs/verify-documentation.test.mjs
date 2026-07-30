@@ -178,12 +178,14 @@ test("reports an unclosed shell fence whose body has valid bash syntax", async (
   );
 });
 
-test("ignores external and fragment-only links", async () => {
+test("ignores external links and accepts an existing same-file fragment", async () => {
   await withRepository(
     {
       "docs/links.md": [
+        "# Existing section",
+        "",
         "[website](https://example.com/missing)",
-        "[section](#missing-section)",
+        "[section](#existing-section)",
       ].join("\n"),
     },
     async (root) => {
@@ -192,21 +194,107 @@ test("ignores external and fragment-only links", async () => {
   );
 });
 
-test("scans README and docs while excluding docs/archive", async () => {
+test("reports missing same-file and cross-file fragments", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "# Guide",
+        "",
+        "[local](#missing-section)",
+        "[setup](./setup.md#missing-step)",
+      ].join("\n"),
+      "docs/setup.md": "# Existing step\n",
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), [
+        "docs/guide.md: missing local link fragment: #missing-section",
+        "docs/guide.md: missing local link fragment: ./setup.md#missing-step",
+      ]);
+    },
+  );
+});
+
+test("accepts cross-file fragments with common GitHub heading slugs", async () => {
+  await withRepository(
+    {
+      "docs/guide.md":
+        "See [SDK support](./reference.md#sdk--dsn-whats-supported).\n",
+      "docs/reference.md": "## SDK & DSN: What's supported?\n",
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("accepts duplicate GitHub-style heading slug suffixes", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "# Repeated heading",
+        "",
+        "## Repeated heading",
+        "",
+        "[first](#repeated-heading)",
+        "[second](#repeated-heading-1)",
+      ].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("ignores Markdown link syntax in code and HTML comments", async () => {
+  await withRepository(
+    {
+      "docs/guide.md": [
+        "`[inline](./missing-inline.md)`",
+        "",
+        "```text",
+        "[fenced](./missing-fenced.md)",
+        "```",
+        "",
+        "<!-- [commented](./missing-comment.md) -->",
+        "<!--",
+        "[multiline comment](./missing-multiline-comment.md)",
+        "-->",
+      ].join("\n"),
+    },
+    async (root) => {
+      assert.deepEqual(await validateDocumentation(root, ["docs/guide.md"]), []);
+    },
+  );
+});
+
+test("scans README and all docs, including outbound links from archive", async () => {
   await withRepository(
     {
       "README.md": "# SentryBox\n",
       "docs/current.md": "# Current\n",
-      "docs/archive/obsolete.md": "[broken](./missing.md)\n",
+      "docs/archive/obsolete.md": [
+        "[broken](./missing.md)",
+        "[broken anchor](../current.md#missing-section)",
+        "",
+        "a full Sentry replacement",
+        "",
+        "```bash",
+        "if true; then",
+        "```",
+      ].join("\n"),
     },
     async (root) => {
       assert.deepEqual(await findDocumentationFiles(root), [
         "README.md",
+        "docs/archive/obsolete.md",
         "docs/current.md",
       ]);
       assert.deepEqual(
         await validateDocumentation(root, await findDocumentationFiles(root)),
-        [],
+        [
+          "docs/archive/obsolete.md: missing local link target: ./missing.md",
+          "docs/archive/obsolete.md: missing local link fragment: ../current.md#missing-section",
+        ],
       );
     },
   );
@@ -313,6 +401,21 @@ test("rejects a claim after an unrelated earlier negation", async () => {
       assert.deepEqual(
         await validateDocumentation(root, ["docs/claims.md"]),
         ["docs/claims.md: forbidden claim: fully Sentry-compatible"],
+      );
+    },
+  );
+});
+
+test("permits a clause-scoped maintainer-intent replacement disclaimer", async () => {
+  await withRepository(
+    {
+      "docs/claims.md":
+        "SentryBox is not intended by its maintainers to be a full Sentry replacement.\n",
+    },
+    async (root) => {
+      assert.deepEqual(
+        await validateDocumentation(root, ["docs/claims.md"]),
+        [],
       );
     },
   );
