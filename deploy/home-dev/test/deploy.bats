@@ -378,14 +378,25 @@ EOF
 printf 'systemctl %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 if [ "$1" = enable ]; then
   shift
-  [ "$1" = --now ] || exit 65
-  shift
+  activate=0
+  if [ "$1" = --now ]; then
+    activate=1
+    shift
+  fi
   for unit in "$@"; do
     if [ "${ERROR_HUB_FAKE_TIMER_START_FAIL:-}" = "${unit}" ]; then
       exit 1
     fi
-    : >"${ERROR_HUB_FAKE_STATE}/active-${unit}"
+    : >"${ERROR_HUB_FAKE_STATE}/enabled-${unit}"
+    if [ "${activate}" = 1 ]; then
+      : >"${ERROR_HUB_FAKE_STATE}/active-${unit}"
+    fi
   done
+  exit 0
+fi
+if [ "$1" = restart ]; then
+  [ "${ERROR_HUB_FAKE_WEBHOOK_RESTART_FAIL:-0}" = 1 ] && exit 1
+  : >"${ERROR_HUB_FAKE_STATE}/active-$2"
   exit 0
 fi
 if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
@@ -494,9 +505,86 @@ EOF
   run grep -E 'systemctl (enable|start).*sentrybox-deploy-webhook' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
+  run grep -F 'systemctl restart sentrybox-deploy-webhook.service' \
+    "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
   run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
   [ "${output}" = 'sentrybox' ]
+}
+
+@test "install restarts an already-active legacy webhook only after publishing the canonical unit" {
+  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  mkdir -p "${webhook_secret%/*}"
+  chmod 0700 "${webhook_secret%/*}"
+  printf '%064d\n' 0 >"${webhook_secret}"
+  chmod 0600 "${webhook_secret}"
+  printf '%s\n' \
+    '[Service]' \
+    'ExecStart=/usr/bin/node deploy/home-dev/deploy-webhook.mjs' \
+    >"${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  grep -Fx \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
+    "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
+  detect_line="$(grep -n -m1 -F \
+    'systemctl is-active --quiet sentrybox-deploy-webhook.service' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  verify_line="$(grep -n -m1 -F 'systemd-analyze verify' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  reload_line="$(grep -n -m1 -F 'systemctl daemon-reload' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  enable_line="$(grep -n -m1 -Fx \
+    'systemctl enable sentrybox-deploy-webhook.service' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  restart_line="$(grep -n -m1 -Fx \
+    'systemctl restart sentrybox-deploy-webhook.service' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  active_lines="$(grep -n -F \
+    'systemctl is-active --quiet sentrybox-deploy-webhook.service' \
+    "${ERROR_HUB_COMMAND_LOG}" | cut -d: -f1)"
+  final_active_line="$(printf '%s\n' "${active_lines}" | tail -n1)"
+  [ "${detect_line}" -lt "${verify_line}" ]
+  [ "${verify_line}" -lt "${reload_line}" ]
+  [ "${reload_line}" -lt "${enable_line}" ]
+  [ "${enable_line}" -lt "${restart_line}" ]
+  [ "${restart_line}" -lt "${final_active_line}" ]
+  [ -f "${ERROR_HUB_FAKE_STATE}/enabled-sentrybox-deploy-webhook.service" ]
+  [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service" ]
+}
+
+@test "active webhook installation rejects an unsafe credential before publishing units" {
+  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  mkdir -p "${webhook_secret%/*}"
+  chmod 0700 "${webhook_secret%/*}"
+  : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"webhook credential"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
+
+  printf '%064d\n' 0 >"${webhook_secret}"
+  chmod 0644 "${webhook_secret}"
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"root-owned, mode 0600, and singly linked"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
+
+  chmod 0600 "${webhook_secret}"
+  ln "${webhook_secret}" "${webhook_secret}.second-link"
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"root-owned, mode 0600, and singly linked"* ]]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service" ]
 }
 
 @test "install requires the pinned root-owned system Node executable before publishing units" {

@@ -17,6 +17,7 @@ fi
 readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/sentrybox"
 readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/sentrybox"
 readonly error_hub_deploy_credentials_directory="${error_hub_service_root}/deploy"
+readonly error_hub_webhook_credential="${error_hub_deploy_credentials_directory}/github-webhook-secret"
 readonly error_hub_environment_file="${error_hub_service_root}/env"
 readonly error_hub_data_directory="${error_hub_service_root}/data"
 readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"

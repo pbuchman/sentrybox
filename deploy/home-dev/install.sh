@@ -86,6 +86,18 @@ chown "${runtime_uid}:${runtime_gid}" \
 install -d -o 0 -g 0 -m 0700 "${error_hub_deploy_credentials_directory}"
 error_hub_require_service_credentials
 
+webhook_was_active=0
+if systemctl is-active --quiet sentrybox-deploy-webhook.service; then
+  webhook_was_active=1
+  error_hub_require_root_private_directory \
+    "${error_hub_deploy_credentials_directory}" \
+    "SentryBox deployment credential directory"
+  error_hub_require_root_private_file \
+    "${error_hub_webhook_credential}" \
+    "SentryBox deployment webhook credential"
+fi
+readonly webhook_was_active
+
 if [[ -L "${error_hub_state_directory}" \
   || ( -e "${error_hub_state_directory}" \
     && ! -d "${error_hub_state_directory}" ) ]]; then
@@ -214,6 +226,17 @@ for unit in \
 done
 
 systemctl daemon-reload
+if (( webhook_was_active == 1 )); then
+  systemctl enable sentrybox-deploy-webhook.service >/dev/null
+  if ! systemctl restart sentrybox-deploy-webhook.service; then
+    printf 'Previously active SentryBox deployment webhook failed to restart.\n' >&2
+    exit 1
+  fi
+  if ! systemctl is-active --quiet sentrybox-deploy-webhook.service; then
+    printf 'Restarted SentryBox deployment webhook is not active.\n' >&2
+    exit 1
+  fi
+fi
 systemctl enable --now \
   sentrybox.service \
   sentrybox-backup.timer \
