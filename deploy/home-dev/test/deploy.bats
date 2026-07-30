@@ -104,6 +104,13 @@ if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ] && printf '%s' "$*" | grep -q ' fe
   : >"${ERROR_HUB_FAKE_STATE}/fetch-blocked"
   sleep 0.4
 fi
+if [ "${ERROR_HUB_FAKE_CHECKOUT_REWRITES_CONFIG:-0}" = 1 ] \
+  && printf '%s' "$*" \
+    | grep -q " checkout --quiet --detach ${ERROR_HUB_EXPECTED_SHA}$"; then
+  project_config="${ERROR_HUB_TEST_ROOT}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
+  /bin/rm -f "${project_config}"
+  printf '%s\n' '{"version":1}' >"${project_config}"
+fi
 case "$*" in
   *"remote get-url origin"*) printf '%s\n' 'https://github.com/pbuchman/sentrybox.git' ;;
   *"status --porcelain"*) ;;
@@ -863,6 +870,16 @@ EOF
   [ "${status}" -eq 0 ]
   run sh -c "grep '^git ' '${ERROR_HUB_COMMAND_LOG}' | grep -vF 'git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} '"
   [ "${status}" -ne 0 ]
+}
+
+@test "deploy keeps changed public checkout assets runtime-readable" {
+  export ERROR_HUB_FAKE_CHECKOUT_REWRITES_CONFIG=1
+  project_config="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
+
+  run "${repository_root}/deploy/home-dev/deploy.sh"
+
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%a' "${project_config}")" = 644 ]
 }
 
 @test "deploy rejects wrong webhook identity and removes the claimed request" {
