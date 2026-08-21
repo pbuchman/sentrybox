@@ -20,6 +20,7 @@ const PROJECT_SLUG = "intexuraos-backend";
 const PRIVATE_ORIGIN = "https://hub.test:8443";
 const EVENT_ONE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const EVENT_TWO = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const NOW = "2026-07-28T10:01:00.000Z";
 
 describe("Sentry worker evidence API", () => {
   let database: ErrorHubDatabase;
@@ -38,6 +39,7 @@ describe("Sentry worker evidence API", () => {
       allowedHosts: ["hub.test:8443"],
       allowedOrigins: [PRIVATE_ORIGIN],
       publicIngestHosts: ["errors.test"],
+      now: () => new Date(NOW),
     });
   });
 
@@ -353,6 +355,7 @@ describe("pinned official Sentry MCP compatibility", () => {
         allowedHosts: [host],
         allowedOrigins: [PRIVATE_ORIGIN],
         publicIngestHosts: ["errors.test"],
+        now: () => new Date(NOW),
       });
       app = activeApp;
       activeApp.addHook("onRequest", async (request) => {
