@@ -153,7 +153,11 @@ describe("webhook lifecycle and dispatch", () => {
     const created = record(
       "4f7a4f2c0e8e4c2a9c3d5e7f90123456",
       FINGERPRINT,
-      {},
+      {
+        taskId: "task-review-1",
+        dispatchAttemptId: "dispatch-attempt-1",
+        traceId: "trace-1",
+      },
       { references: () => [SECRET_REF], resolve },
     );
     activeSecret = "rotated-secret";
@@ -197,6 +201,16 @@ describe("webhook lifecycle and dispatch", () => {
     expect(requests[1]?.body).toEqual(row?.body);
     expect(requests[1]?.headers).toEqual(requests[0]?.headers);
     expect(requests[0]?.headers["X-Error-Hub-Delivery"]).toBe(row?.deliveryId);
+    expect(JSON.parse(required(row).body.toString("utf8"))).toMatchObject({
+      data: {
+        event: {
+          environment: "dev",
+          task_id: "task-review-1",
+          dispatch_attempt_id: "dispatch-attempt-1",
+          trace_id: "trace-1",
+        },
+      },
+    });
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(resolve).toHaveBeenCalledWith(SECRET_REF);
     expect(row?.signature).not.toBe(
@@ -883,7 +897,11 @@ describe("webhook lifecycle and dispatch", () => {
 
   it("expires stale automatic work before network and sends one audited corrected redrive", async () => {
     setKey("live");
-    const created = record("stale-automatic", FINGERPRINT);
+    const created = record("stale-automatic", FINGERPRINT, {
+      taskId: "task-review-redrive",
+      dispatchAttemptId: "dispatch-attempt-redrive",
+      traceId: "trace-redrive",
+    });
     const outboxId = required(created.outboxId);
     const original = required(outbox.getById(outboxId));
     const automaticSend = vi.fn<WebhookHttpClient["send"]>();
@@ -965,6 +983,18 @@ describe("webhook lifecycle and dispatch", () => {
         "Sentry-Hook-Signature": redrive.signature,
       },
     });
+    expect(JSON.parse(redriveRequests[0]!.body.toString("utf8"))).toMatchObject(
+      {
+        data: {
+          event: {
+            environment: "dev",
+            task_id: "task-review-redrive",
+            dispatch_attempt_id: "dispatch-attempt-redrive",
+            trace_id: "trace-redrive",
+          },
+        },
+      },
+    );
     expect(outbox.getRedriveById(redrive.id)).toMatchObject({
       state: "delivered",
       attempts: 1,
@@ -1077,6 +1107,7 @@ function record(
     requestId: null,
     traceId: null,
     taskId: null,
+    dispatchAttemptId: null,
     payload: { contexts: {}, extras: {}, correlations: {} },
     payloadBytes: 100,
     truncated: false,

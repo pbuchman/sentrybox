@@ -13,6 +13,10 @@ export interface SentryEventAlertInput {
   readonly issueId: number;
   readonly eventId: string;
   readonly title: string;
+  readonly environment: string;
+  readonly taskId?: string | null;
+  readonly dispatchAttemptId?: string | null;
+  readonly traceId?: string | null;
 }
 
 export interface SentryEventAlertHeadersInput {
@@ -53,6 +57,7 @@ export function createSentryEventAlertBody(
   const issueId = positiveInteger(input.issueId, "issue id");
   const eventId = nonEmpty(input.eventId, "event id");
   const title = nonEmpty(input.title, "event title");
+  const environment = nonEmpty(input.environment, "event environment");
   const issuePath = `/organizations/${organization}/issues/${String(issueId)}/`;
   const issueUrl = new URL(issuePath, origin).toString();
   const eventUrl = new URL(
@@ -67,6 +72,10 @@ export function createSentryEventAlertBody(
         event_id: eventId,
         title,
         web_url: eventUrl,
+        environment,
+        ...optionalEventField("task_id", input.taskId),
+        ...optionalEventField("dispatch_attempt_id", input.dispatchAttemptId),
+        ...optionalEventField("trace_id", input.traceId),
         issue: {
           id: String(issueId),
           shortId: `INTEXURA-HUB-${String(issueId)}`,
@@ -117,6 +126,12 @@ export function buildCodeAgentOutboxDraft(
     issueId: input.transition.issueId,
     eventId: input.transition.eventId,
     title: eventTitle(input.event),
+    environment: eventEnvironment(input.event),
+    taskId: input.event.taskId,
+    ...(input.event.dispatchAttemptId === undefined
+      ? {}
+      : { dispatchAttemptId: input.event.dispatchAttemptId }),
+    traceId: input.event.traceId,
   });
   const deliveryId = deliveryUuid(input.deliveryId);
   if (input.destination.mode === "disabled") {
@@ -151,6 +166,10 @@ function eventTitle(event: NormalizedEvent): string {
   return nonEmpty(event.title, "event title");
 }
 
+function eventEnvironment(event: NormalizedEvent): string {
+  return nonEmpty(event.environment ?? "", "event environment");
+}
+
 function validatedPrivateOrigin(input: URL): URL {
   if (
     input.protocol !== "https:" ||
@@ -182,6 +201,15 @@ function positiveInteger(value: number, field: string): number {
 function nonEmpty(value: string, field: string): string {
   if (value.length === 0) throw new TypeError(`${field} must not be empty`);
   return value;
+}
+
+function optionalEventField(
+  key: "task_id" | "dispatch_attempt_id" | "trace_id",
+  value: string | null | undefined,
+): Readonly<Record<string, string>> {
+  return typeof value === "string" && value.trim().length > 0
+    ? { [key]: value }
+    : {};
 }
 
 function deliveryUuid(value: string): string {

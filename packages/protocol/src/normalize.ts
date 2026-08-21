@@ -66,6 +66,7 @@ export interface NormalizedEvent {
   readonly requestId: string | null;
   readonly traceId: string | null;
   readonly taskId: string | null;
+  readonly dispatchAttemptId?: string | null;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly payloadBytes: number;
   readonly truncated: boolean;
@@ -96,6 +97,8 @@ const REQUEST_HEADERS = new Set([
 ]);
 const EXTRA_KEYS = new Set([
   "code",
+  "dispatchAttemptId",
+  "dispatch_attempt_id",
   "errorCode",
   "error_code",
   "logger",
@@ -234,6 +237,7 @@ export function normalizeEvent(
     requestId: correlations.requestId.value,
     traceId: correlations.traceId.value,
     taskId: correlations.taskId.value,
+    dispatchAttemptId: correlations.dispatchAttemptId.value,
     payload: {
       contexts,
       extras,
@@ -447,7 +451,10 @@ function extractCorrelations(
   extras: Readonly<Record<string, unknown>>,
   contexts: Readonly<Record<string, unknown>>,
   reasons: Set<string>,
-): Record<"requestId" | "traceId" | "taskId", CorrelationSelection> {
+): Record<
+  "requestId" | "traceId" | "taskId" | "dispatchAttemptId",
+  CorrelationSelection
+> {
   const sources = [
     { source: "tags" as const, value: tags },
     { source: "extras" as const, value: extras },
@@ -470,6 +477,12 @@ function extractCorrelations(
       sources,
       ["taskId", "task_id"],
       ["task", "correlation"],
+      reasons,
+    ),
+    dispatchAttemptId: findCorrelation(
+      sources,
+      ["dispatchAttemptId", "dispatch_attempt_id"],
+      ["dispatch", "correlation"],
       reasons,
     ),
   };
@@ -509,7 +522,11 @@ function readAliases(
 ): Pick<CorrelationSelection, "alias" | "value"> | null {
   for (const alias of aliases) {
     const rawValue = source[alias];
-    if (typeof rawValue !== "string" || redactString(rawValue) !== rawValue) {
+    if (
+      typeof rawValue !== "string" ||
+      rawValue.trim().length === 0 ||
+      redactString(rawValue) !== rawValue
+    ) {
       continue;
     }
     return {
@@ -527,7 +544,7 @@ function readAliases(
 
 function correlationEvidence(
   correlations: Record<
-    "requestId" | "traceId" | "taskId",
+    "requestId" | "traceId" | "taskId" | "dispatchAttemptId",
     CorrelationSelection
   >,
 ): Readonly<
@@ -721,6 +738,7 @@ function enforceNormalizedEventLimit(
       event.requestId = null;
       event.traceId = null;
       event.taskId = null;
+      event.dispatchAttemptId = null;
       event.id = null;
       event.message = null;
       event.title = truncateUtf8(event.title, 256);
@@ -841,6 +859,7 @@ interface MutableNormalizedEvent {
   requestId: string | null;
   traceId: string | null;
   taskId: string | null;
+  dispatchAttemptId: string | null;
   payload: Readonly<Record<string, unknown>>;
   payloadBytes: number;
   truncated: boolean;

@@ -34,7 +34,7 @@ The state labels mean:
 | UI and API           | **Supported**     | The private SentryBox UI and native API provide issue lists/details, occurrence reads, facets, filters, resolve/reopen/delete, redacted downloads/exports, system status, health, metrics, and webhook redrive. They are SentryBox interfaces, not copies of the Sentry product.                                                                                                                                                                                                                                                                                                                                                                                                                |
 | UI and API           | **Partial**       | The Sentry-shaped facade has exactly five successful, trailing-slash `GET` route patterns: `GET /api/0/organizations/{org}/issues/{issueId}/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/latest/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/{eventId}/`, `GET /api/0/organizations/{org}/issues/{issueId}/events/`, and `GET /api/0/projects/{org}/{projectSlugOrId}/`. It exposes only fields needed by the tested reads.                                                                                                                                                                                                                                         |
 | UI and API           | **Not supported** | The Sentry UI and complete `/api/0` surface are not implemented. Every other `/api/0` method or route, a missing required trailing slash, and a resource outside the configured organization/project membership return a structured `404`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Webhook              | **Partial**       | One Sentry-shaped `event_alert` / `triggered` contract is implemented for the current Code Agent consumer. It sends the [exact JSON issue/event shape and required headers](#webhook-event-alert-contract). New and regressed issue generations use the same action; repeated occurrences do not each alert.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Webhook              | **Partial**       | One Sentry-shaped `event_alert` / `triggered` contract is implemented for the current Code Agent consumer. It sends the [exact JSON issue/event shape and required headers](#webhook-event-alert-contract), including the authoritative ingest environment and any retained task, dispatch-attempt, and trace correlations. New and regressed issue generations use the same action; repeated occurrences do not each alert.                                                                                                                                                                                                                                                                                                                       |
 | Webhook              | **Not supported** | Generic Sentry webhook resources/actions, Sentry webhook administration, and arbitrary downstream payload schemas are not implemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | MCP reads            | **Partial**       | SentryBox does not bundle an MCP server. Compatibility tests launch the external pinned `@sentry/mcp-server@0.37.0` against the private five-route facade and verify only `get_issue_details` and `search_issue_events` through `execute_sentry_tool`, with inspect skills enabled and Seer disabled.                                                                                                                                                                                                                                                                                                                                                                                           |
 | MCP reads            | **Not supported** | Other MCP package versions, tools, writes, Seer/autofix, replay, and access beyond the five-route facade are outside the compatibility contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -46,8 +46,8 @@ The state labels mean:
 
 ## Webhook event-alert contract
 
-The configured webhook target receives a `POST` whose UTF-8 JSON body has
-exactly this shape and no additional fields:
+The configured webhook target receives a `POST` whose UTF-8 JSON body has this
+exact shape when all optional correlation fields are available:
 
 ```json
 {
@@ -57,6 +57,10 @@ exactly this shape and no additional fields:
       "event_id": "<event ID>",
       "title": "<normalized event title>",
       "web_url": "<private HTTPS origin>/organizations/<organization slug>/issues/<decimal issue ID>/events/<percent-encoded event ID>/",
+      "environment": "<configured ingest environment>",
+      "task_id": "<normalized task correlation ID>",
+      "dispatch_attempt_id": "<normalized dispatch-attempt correlation ID>",
+      "trace_id": "<normalized trace correlation ID>",
       "issue": {
         "id": "<decimal issue ID>",
         "shortId": "INTEXURA-HUB-<decimal issue ID>",
@@ -80,6 +84,15 @@ exactly this shape and no additional fields:
 The two `project` objects are identical. The issue `id` and project `id` are
 JSON strings, `shortId` retains the current `INTEXURA-HUB-` prefix, and the
 event and issue `title` values are identical.
+
+`environment` is always present and comes from the authenticated project ingest
+key. `task_id`, `dispatch_attempt_id`, and `trace_id` are optional; each key is
+omitted when that correlation is unavailable. The body is built from the
+stored normalized event. `dispatch_attempt_id` accepts the same structured
+correlation sources, source precedence, camelCase/snake_case alias precedence,
+redaction checks, and byte limits as the existing request, task, and trace
+identifiers. It remains only in the compressed normalized payload and is not an
+indexed SQLite column.
 
 Every request carries all four headers:
 
