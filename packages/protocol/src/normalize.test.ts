@@ -65,16 +65,19 @@ describe("normalizeEvent", () => {
         timestamp: "2026-07-28T12:00:00.000Z",
         message: "Could not process order",
         tags: {
+          dispatch_attempt_id: "tag-dispatch-attempt",
           reqId: "tag-req",
           trace_id: "tag-trace",
           task_id: "tag-task",
         },
         extra: {
+          dispatchAttemptId: "extra-dispatch-attempt",
           requestId: "extra-request",
           traceId: "extra-trace",
           taskId: "extra-task",
         },
         contexts: {
+          dispatch: { dispatch_attempt_id: "context-dispatch-attempt" },
           request: { requestId: "context-request" },
           trace: { trace_id: "context-trace" },
         },
@@ -86,12 +89,18 @@ describe("normalizeEvent", () => {
       accepted: true,
       event: {
         id: "event-1",
+        dispatchAttemptId: "tag-dispatch-attempt",
         requestId: "tag-req",
         traceId: "tag-trace",
         taskId: "tag-task",
         tags: { reqId: "tag-req" },
         payload: {
           correlations: {
+            dispatchAttemptId: {
+              source: "tags",
+              alias: "dispatch_attempt_id",
+              value: "tag-dispatch-attempt",
+            },
             requestId: { source: "tags", alias: "reqId", value: "tag-req" },
           },
         },
@@ -116,6 +125,66 @@ describe("normalizeEvent", () => {
     });
   });
 
+  it("prefers dispatchAttemptId over dispatch_attempt_id within a correlation source", () => {
+    const result = normalizeEvent(
+      {
+        event_id: "dispatch-alias-precedence",
+        level: "error",
+        extra: {
+          dispatchAttemptId: "selected",
+          dispatch_attempt_id: "lower-priority",
+        },
+      },
+      "2026-07-28T12:01:00.000Z",
+    );
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: {
+        dispatchAttemptId: "selected",
+        payload: {
+          correlations: {
+            dispatchAttemptId: {
+              source: "extras",
+              alias: "dispatchAttemptId",
+              value: "selected",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("skips a trim-empty camelCase dispatch attempt and selects the valid snake_case alias", () => {
+    const result = normalizeEvent(
+      {
+        event_id: "dispatch-empty-alias-fallback",
+        level: "error",
+        extra: {
+          dispatchAttemptId: " \t ",
+          dispatch_attempt_id: "valid-snake-attempt",
+        },
+      },
+      "2026-07-28T12:01:00.000Z",
+    );
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: {
+        dispatchAttemptId: "valid-snake-attempt",
+        payload: {
+          correlations: {
+            dispatchAttemptId: {
+              source: "extras",
+              alias: "dispatch_attempt_id",
+              value: "valid-snake-attempt",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("uses direct extras before contexts when tags have no correlation", () => {
     const result = normalizeEvent(
       {
@@ -137,23 +206,26 @@ describe("normalizeEvent", () => {
     });
   });
 
-  it("does not invent a canonical correlation from a redacted identifier", () => {
-    const secret = "Bearer correlation-secret";
-    const result = normalizeEvent(
-      {
-        event_id: "redacted-correlation",
-        level: "error",
-        extra: { requestId: secret },
-      },
-      "2026-07-28T12:01:00.000Z",
-    );
+  it.each(["requestId", "dispatchAttemptId"] as const)(
+    "does not invent a canonical %s correlation from a redacted identifier",
+    (field) => {
+      const secret = "Bearer correlation-secret";
+      const result = normalizeEvent(
+        {
+          event_id: `redacted-${field}`,
+          level: "error",
+          extra: { [field]: secret },
+        },
+        "2026-07-28T12:01:00.000Z",
+      );
 
-    expect(result).toMatchObject({
-      accepted: true,
-      event: { requestId: null },
-    });
-    expect(JSON.stringify(result)).not.toContain(secret);
-  });
+      expect(result).toMatchObject({
+        accepted: true,
+        event: { [field]: null },
+      });
+      expect(JSON.stringify(result)).not.toContain(secret);
+    },
+  );
 
   it("applies byte-aware limits and records deterministic truncation reasons", () => {
     const result = normalizeEvent(
@@ -370,7 +442,7 @@ describe("normalizeEvent", () => {
     expect(JSON.stringify(relative)).toContain("/orders?");
   });
 
-  it.each(["requestId", "traceId", "taskId"] as const)(
+  it.each(["requestId", "traceId", "taskId", "dispatchAttemptId"] as const)(
     "hard-bounds an oversized multibyte %s within the serialized event cap",
     (field) => {
       const result = normalizeEvent(

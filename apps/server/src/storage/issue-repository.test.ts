@@ -259,6 +259,9 @@ describe("IssueRepository.recordOccurrence", () => {
       payloadBytes: Buffer.byteLength(encodedA.json),
       payload: event,
     });
+    expect(stored?.payload).toMatchObject({
+      dispatchAttemptId: "dispatch-attempt-1",
+    });
   });
 
   it("rolls back issue, event, facets, and outbox together on an outbox error", () => {
@@ -414,6 +417,7 @@ function normalizedEvent(
     requestId: "request-1",
     traceId: "trace-1",
     taskId: "task-1",
+    dispatchAttemptId: "dispatch-attempt-1",
     payload: {
       contexts: { runtime: { name: "node", version: "22" } },
       extras: { operation: "dispatch" },
