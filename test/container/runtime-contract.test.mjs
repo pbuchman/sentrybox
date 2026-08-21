@@ -29,7 +29,7 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
   assert.match(dockerfile, /scripts\/admin\/validate-project-config\.mjs/u);
 
   const patchCopy = dockerfile.indexOf(
-    "COPY patches/brace-expansion@5.0.8.patch patches/brace-expansion@5.0.8.patch",
+    "COPY patches/brace-expansion@5.0.9.patch patches/brace-expansion@5.0.9.patch",
   );
   const frozenInstall = dockerfile.indexOf(
     "RUN pnpm install --frozen-lockfile",
