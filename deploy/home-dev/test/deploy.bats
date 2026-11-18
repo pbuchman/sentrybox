@@ -2215,6 +2215,7 @@ EOF
   run grep -Fx 'Environment=XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data' \
     "${deploy_unit}"
   [ "${status}" -eq 0 ]
+  grep -Fx 'TemporaryFileSystem=/var/log/caddy:rw,nosuid,nodev,noexec,mode=0700,size=1M' "${deploy_unit}"
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'WorkingDirectory=/home/pbuchman/deploy/sentrybox' "${runtime_unit}"
