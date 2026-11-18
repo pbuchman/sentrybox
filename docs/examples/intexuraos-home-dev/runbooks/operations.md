@@ -54,9 +54,11 @@ check failed after a later retention run succeeds.
 
 Home Dev keeps one local rollback snapshot and has no external backup target.
 The daily job records the external posture in root-private `backup.state`
-and returns success after a successful local scrub. The monitor alerts on a
-failed, stale, missing, or invalid scrub or restore check. The daily job
-does not publish an external `backup.success` marker.
+and returns success after a successful local scrub. The monitor checks the
+latest scrub outcome and the age and validity of the last successful restore
+test. A failed restore test returns an error from its own unit and preserves
+the previous success marker. The daily job does not publish an external
+`backup.success` marker.
 
 ## Response sequence
 
