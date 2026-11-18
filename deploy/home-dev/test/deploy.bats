@@ -1654,8 +1654,8 @@ EOF
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
 
-  [ "${status}" -ne 0 ]
-  [[ "${output}" == *"disabled/degraded"* ]]
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Retained snapshot scrub passed"* ]]
   [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/scheduled.sqlite" ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
@@ -1729,8 +1729,8 @@ EOF
   unset ERROR_HUB_FAKE_RETAINED_CRASH
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
 
-  [ "${status}" -ne 0 ]
-  [[ "${output}" == *"no external Home Dev backup target"* ]]
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Retained snapshot scrub passed"* ]]
   [ ! -e "${staging}" ]
   backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
   grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
@@ -1755,8 +1755,8 @@ EOF
   rm "${staging}/unexpected"
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
 
-  [ "${status}" -ne 0 ]
-  [[ "${output}" == *"no external Home Dev backup target"* ]]
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Retained snapshot scrub passed"* ]]
   [ ! -e "${staging}" ]
   backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
   grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
@@ -2215,6 +2215,7 @@ EOF
   run grep -Fx 'Environment=XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data' \
     "${deploy_unit}"
   [ "${status}" -eq 0 ]
+  grep -Fx 'TemporaryFileSystem=/var/log/caddy:rw,nosuid,nodev,noexec,mode=0700,size=1M' "${deploy_unit}"
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'WorkingDirectory=/home/pbuchman/deploy/sentrybox' "${runtime_unit}"

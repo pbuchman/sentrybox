@@ -359,7 +359,7 @@ test("documentation records durable Home Dev storage safeguards", async () => {
   assert.match(specification, /5 GiB safety budget/u);
   assert.match(
     backupRunbook,
-    /reports `disabled\/degraded`; it does not claim success/u,
+    /records the external backup posture as `disabled_degraded`/u,
   );
   assert.doesNotMatch(backupRunbook, /\b(?:581 GiB|34% used|97%)\b/u);
 });
