@@ -3,11 +3,9 @@
 ## Current Home Dev state
 
 Home Dev has no configured external backup target, external backup mount, or
-backup transport. `sentrybox-backup.timer` therefore starts a service that exits
-non-zero and reports `disabled/degraded`; it does not claim success and does not
-accumulate local daily snapshots. When `predeploy.sqlite` exists, the scheduled
-run first re-applies the 23-day retention profile to that same snapshot while
-holding the deployment lock.
+backup transport. The daily job re-applies the 23-day retention profile to
+`predeploy.sqlite` under the deployment lock. It exits zero when the local
+scrub succeeds and records the external backup posture as `disabled_degraded`.
 
 Inspect the explicit degraded state:
 
@@ -19,8 +17,7 @@ sudo journalctl -u sentrybox-backup.service --since today --no-pager
 
 The application remains available when this independent oneshot service fails.
 The operational monitor treats a local scrub result older than 26 hours, or
-future-dated by more than five minutes, as a separate alert in addition to the
-expected external-backup degradation.
+future-dated by more than five minutes, as an operational alert.
 Do not represent disaster recovery as ready until an encrypted external target,
 checksum verification, seven daily generations, and the 23-day backup scrub are
 implemented and restore-tested.

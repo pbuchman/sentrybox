@@ -38,8 +38,7 @@ endpoints plus root-private operational state under
 - unavailable or oversized private metrics (responses are capped at `256 KiB`);
 - a delta of two or more application-generated `429` or `503` ingest
   responses since the previous five-minute observation; and
-- external backup status `disabled/degraded`, independently from a failed or
-  unavailable local retained-snapshot scrub, a scrub result older than 26
+- a failed or unavailable local retained-snapshot scrub, a scrub result older than 26
   hours, or a result future-dated by more than five minutes; and
 - a successful restore test older than 35 days or future-dated by more than
   five minutes.
@@ -53,19 +52,11 @@ re-establish the baseline rather than accumulating an unbounded total.
 The latest-retention gauge likewise prevents an old failure from keeping the
 check failed after a later retention run succeeds.
 
-The current Home Dev installation intentionally has no external backup target.
-Its daily backup unit is therefore expected to report `disabled/degraded` and
-exit non-zero instead of creating unbounded root-filesystem snapshots. It
-records that outcome separately in root-private `backup.state`, alongside the
-latest local retained-snapshot scrub outcome. Lock contention, an invalid
-snapshot, or a failed scrub is an additional alert and is never collapsed into
-the expected external degradation. The local `predeploy.sqlite` rollback
-snapshot is never treated as external backup success, regardless of its
-modification time. With no transport configured,
-the backup job never creates `backup.success`, so
-`backup_disabled_degraded` is the expected monitor result. A future success
-marker may be published only after a real off-host upload and checksum
-verification. Do not add GCS, R2, or another storage target ad hoc.
+Home Dev keeps one local rollback snapshot and has no external backup target.
+The daily job records the external posture in root-private `backup.state`
+and returns success after a successful local scrub. The monitor alerts on a
+failed, stale, missing, or invalid scrub or restore check. The daily job
+does not publish an external `backup.success` marker.
 
 ## Response sequence
 
@@ -80,9 +71,8 @@ verification. Do not add GCS, R2, or another storage target ad hoc.
 4. For backup or restore alerts, follow
    [backup and recovery](backup-and-recovery.md). A failed restore test must
    not be "fixed" by writing its success marker or restoring over live data.
-5. Before closing an incident, re-run the monitor. Until an approved external
-   backup target exists, require that all alerts except the documented
-   `backup_disabled_degraded` condition are cleared.
+5. Before closing an incident, re-run the monitor and require exit code zero
+   and `SENTRYBOX_ALERTS=none`.
 
 ## Journal hygiene
 

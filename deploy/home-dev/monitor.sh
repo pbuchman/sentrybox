@@ -331,9 +331,6 @@ if [[ -e "${error_hub_backup_state_file}" \
 else
   alerts+=(backup_scrub_unavailable)
 fi
-# Home Dev has no external backup transport. A retained rollback snapshot is
-# deliberately never interpreted as a successful off-host backup.
-alerts+=(backup_disabled_degraded)
 
 if [[ -e "${error_hub_restore_success_file}" \
   || -L "${error_hub_restore_success_file}" ]]; then

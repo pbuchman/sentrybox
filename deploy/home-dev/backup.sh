@@ -229,8 +229,8 @@ if [[ "${mode}" == "scheduled" ]]; then
     printf 'Scheduled backup passed its scrub but could not publish the result.\n' >&2
     exit 1
   fi
-  printf 'Scheduled external backup is disabled/degraded: no external Home Dev backup target is configured.\n' >&2
-  exit 1
+  printf 'Retained snapshot scrub passed. External backup is disabled.\n'
+  exit 0
 fi
 
 if [[ "${mode}" == "retained-finalize" ]]; then

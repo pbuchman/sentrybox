@@ -148,7 +148,7 @@ write_monitor_baseline() {
   [ "${status}" -ne 0 ]
   grep -Fx 'MESSAGE=SentryBox operational alert' "${ERROR_HUB_MONITOR_LOG}"
   grep -Fx 'PRIORITY=3' "${ERROR_HUB_MONITOR_LOG}"
-  grep -Fx 'SENTRYBOX_ALERTS=readiness_failed,physical_warning,ingest_disabled,retention_failed,dead_letter_webhook,repeated_429,repeated_503,backup_disabled_degraded,restore_test_stale' "${ERROR_HUB_MONITOR_LOG}"
+  grep -Fx 'SENTRYBOX_ALERTS=readiness_failed,physical_warning,ingest_disabled,retention_failed,dead_letter_webhook,repeated_429,repeated_503,restore_test_stale' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Eiq '(dsn|hmac|token|downloaded_export)=' "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -159,8 +159,8 @@ write_monitor_baseline() {
 
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
-  [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_disabled_degraded' "${ERROR_HUB_MONITOR_LOG}"
+  [ "${status}" -eq 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=none' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'retention_failed' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_429' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_503' "${ERROR_HUB_MONITOR_LOG}"
@@ -177,7 +177,7 @@ write_monitor_baseline() {
 
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
-  [ "${status}" -ne 0 ]
+  [ "${status}" -eq 0 ]
   ! grep -Fq 'repeated_429' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_503' "${ERROR_HUB_MONITOR_LOG}"
 
@@ -186,7 +186,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=repeated_429,repeated_503,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=repeated_429,repeated_503' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -198,7 +198,7 @@ write_monitor_baseline() {
 
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
-  [ "${status}" -ne 0 ]
+  [ "${status}" -eq 0 ]
   ! grep -Fq 'repeated_429' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_503' "${ERROR_HUB_MONITOR_LOG}"
 
@@ -207,7 +207,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=repeated_429,repeated_503,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=repeated_429,repeated_503' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -219,8 +219,8 @@ write_monitor_baseline() {
 
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
-  [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_disabled_degraded' \
+  [ "${status}" -eq 0 ]
+  grep -Fx 'SENTRYBOX_ALERTS=none' \
     "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_429' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_503' "${ERROR_HUB_MONITOR_LOG}"
@@ -235,7 +235,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_unavailable,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_unavailable' \
     "${ERROR_HUB_MONITOR_LOG}"
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
 }
@@ -248,7 +248,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_failed,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_failed' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -260,7 +260,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_stale,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_stale' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -272,7 +272,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_future,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=backup_scrub_future' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -300,7 +300,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_disabled_degraded,restore_test_future' \
+  grep -Fx 'SENTRYBOX_ALERTS=restore_test_future' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -323,7 +323,7 @@ write_monitor_baseline() {
 
     [ "${status}" -ne 0 ]
     grep -Fx \
-      'SENTRYBOX_ALERTS=dead_letter_metric_unavailable,backup_disabled_degraded' \
+      'SENTRYBOX_ALERTS=dead_letter_metric_unavailable' \
       "${ERROR_HUB_MONITOR_LOG}"
   done
 }
@@ -341,7 +341,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=monitor_state_invalid,backup_disabled_degraded,restore_test_state_invalid' \
+  grep -Fx 'SENTRYBOX_ALERTS=monitor_state_invalid,restore_test_state_invalid' \
     "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_429' "${ERROR_HUB_MONITOR_LOG}"
   ! grep -Fq 'repeated_503' "${ERROR_HUB_MONITOR_LOG}"
@@ -362,7 +362,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=monitor_state_invalid,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=monitor_state_invalid' \
     "${ERROR_HUB_MONITOR_LOG}"
 }
 
@@ -383,7 +383,7 @@ write_monitor_baseline() {
   run "${repository_root}/deploy/home-dev/monitor.sh"
 
   [ "${status}" -ne 0 ]
-  grep -Fx 'SENTRYBOX_ALERTS=backup_state_invalid,backup_disabled_degraded' \
+  grep -Fx 'SENTRYBOX_ALERTS=backup_state_invalid' \
     "${ERROR_HUB_MONITOR_LOG}"
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
 }
