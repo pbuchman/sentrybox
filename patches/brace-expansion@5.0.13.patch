@@ -1,0 +1,44 @@
+diff --git a/dist/commonjs/index.d.ts b/dist/commonjs/index.d.ts
+index 1fd22a7..19bb275 100644
+--- a/dist/commonjs/index.d.ts
++++ b/dist/commonjs/index.d.ts
+@@ -11,4 +11,5 @@ export type BraceExpansionOptions = {
+     maxSteps?: number;
+ };
+ export declare function expand(str: string, options?: BraceExpansionOptions): string[];
++export default expand;
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
+diff --git a/dist/commonjs/index.js b/dist/commonjs/index.js
+index 7397d29..9e1dd43 100644
+--- a/dist/commonjs/index.js
++++ b/dist/commonjs/index.js
+@@ -516,4 +516,5 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, budget, isTo
+     }
+     return acc;
+ }
++module.exports = Object.assign(expand, exports);
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/dist/esm/index.d.ts b/dist/esm/index.d.ts
+index 1fd22a7..19bb275 100644
+--- a/dist/esm/index.d.ts
++++ b/dist/esm/index.d.ts
+@@ -11,4 +11,5 @@ export type BraceExpansionOptions = {
+     maxSteps?: number;
+ };
+ export declare function expand(str: string, options?: BraceExpansionOptions): string[];
++export default expand;
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
+diff --git a/dist/esm/index.js b/dist/esm/index.js
+index ea6488f..dbc0815 100644
+--- a/dist/esm/index.js
++++ b/dist/esm/index.js
+@@ -512,4 +512,5 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, budget, isTo
+     }
+     return acc;
+ }
++export default expand;
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file

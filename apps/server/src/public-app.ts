@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type {
   OutboxDraft,
   OutboxTransition,
@@ -63,7 +63,7 @@ export function createPublicApp(options: PublicAppOptions): FastifyInstance {
   const app = Fastify({
     logger: false,
     bodyLimit: MAX_COMPRESSED_ENVELOPE_BYTES,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     requestTimeout: limits.requestTimeoutMs,
     connectionTimeout: limits.requestTimeoutMs,
     trustProxy: ["127.0.0.1", "::1"],
