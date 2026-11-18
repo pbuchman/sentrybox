@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { SecretStore } from "./secrets.js";
 import type { ErrorHubDatabase } from "./storage/database.js";
 import { registerEventRoutes } from "./api/events.js";
@@ -37,7 +37,7 @@ export function createPrivateApp(options: PrivateAppOptions): FastifyInstance {
   validateOrganizationSlug(options.organizationSlug);
   const app = Fastify({
     logger: false,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     exposeHeadRoutes: false,
   });
   installPrivateRequestGuard(app, options);

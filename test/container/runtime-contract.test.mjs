@@ -14,7 +14,7 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
 
   assert.match(
     dockerfile,
-    /node:22\.23\.1-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3/u,
+    /node:22\.23\.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee/u,
   );
   assert.match(dockerfile, /\bAS builder\b/u);
   assert.match(dockerfile, /\bAS runtime\b/u);
@@ -29,7 +29,7 @@ test("the image uses a pinned Node 22 builder and numeric non-root runtime", asy
   assert.match(dockerfile, /scripts\/admin\/validate-project-config\.mjs/u);
 
   const patchCopy = dockerfile.indexOf(
-    "COPY patches/brace-expansion@5.0.9.patch patches/brace-expansion@5.0.9.patch",
+    "COPY patches/brace-expansion@5.0.13.patch patches/brace-expansion@5.0.13.patch",
   );
   const frozenInstall = dockerfile.indexOf(
     "RUN pnpm install --frozen-lockfile",

@@ -440,7 +440,7 @@ describe("pinned official Sentry MCP compatibility", () => {
       expect(urls).toContain(
         `/api/0/organizations/${ORGANIZATION}/issues/${shortId}/events/latest/`,
       );
-      expect(urls).toContain(
+      expect(urls).not.toContain(
         `/api/0/organizations/${ORGANIZATION}/issues/${shortId}/autofix/`,
       );
       expect(urls).toContain(
