@@ -5,18 +5,17 @@ After=docker.service sentrybox.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
-ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/backup.sh scheduled
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
+ExecStart=/opt/sentrybox-control/current/deploy/home-dev/backup.sh scheduled
 TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/pbuchman/services/sentrybox/backups
+ProtectHome=true
+ReadWritePaths=/var/lib/sentrybox/backups
 ReadWritePaths=/var/lib/sentrybox-deploy
-ReadWritePaths=/run/lock
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

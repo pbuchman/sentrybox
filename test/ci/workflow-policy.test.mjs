@@ -368,9 +368,16 @@ test("network runbook uses the canonical installer and verifies live fragments",
   const networkRunbook = await source(
     "docs/examples/intexuraos-home-dev/runbooks/network-exposure.md",
   );
+  const protectedRunbook = await source(
+    "docs/examples/intexuraos-home-dev/runbooks/protected-control.md",
+  );
   assert.match(
     networkRunbook,
-    /sudo \.\/deploy\/home-dev\/install\.sh \\\n+\s+--private-origin "https:\/\/<home-dev-tailnet-name>:8443"/u,
+    /\[protected control installation\]\(protected-control\.md\)/u,
+  );
+  assert.match(
+    protectedRunbook,
+    /sudo "\/opt\/sentrybox-control\/releases\/\$\{control_sha\}\/deploy\/home-dev\/install\.sh"[\s\S]*?--private-origin "\$\{private_origin\}"/u,
   );
   assert.match(
     networkRunbook,

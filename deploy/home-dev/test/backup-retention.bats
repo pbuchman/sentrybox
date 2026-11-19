@@ -12,7 +12,7 @@ setup() {
 
   mkdir -p \
     "${fixture_root}/bin" \
-    "${fixture_root}/home/pbuchman/services/sentrybox/backups"
+    "${fixture_root}/var/lib/sentrybox/backups"
   install -d -o 0 -g 0 -m 0700 \
     "${fixture_root}/var/lib/sentrybox-deploy"
   cat >"${fixture_root}/var/lib/sentrybox-deploy/current.env" <<'EOF'
@@ -230,7 +230,7 @@ write_monitor_baseline() {
   write_metrics 4831838208 0 1 0 0 0 0
   write_restore_success
   printf 'fresh rollback snapshot\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
 
   run "${repository_root}/deploy/home-dev/monitor.sh"
 

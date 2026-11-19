@@ -1,17 +1,19 @@
 [Unit]
+Requires=sentrybox-deploy-request.socket
+After=sentrybox-deploy-request.socket
 Description=SentryBox verified GitHub deployment webhook
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy-webhook.mjs
+ConditionPathExists=/opt/sentrybox-control/current/deploy/home-dev/deploy-webhook.mjs
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
-ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs
-LoadCredential=github-webhook-secret:/home/pbuchman/services/sentrybox/deploy/github-webhook-secret
-StateDirectory=sentrybox-deploy
+User=sentrybox-webhook
+Group=sentrybox-webhook
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
+ExecStart=/opt/nodejs/current/bin/node --jitless /opt/sentrybox-control/current/deploy/home-dev/deploy-webhook.mjs
+LoadCredential=github-webhook-secret:/etc/sentrybox/github-webhook-secret
+StateDirectory=sentrybox-deploy-webhook
 StateDirectoryMode=0700
 UMask=0077
 Restart=on-failure
@@ -32,15 +34,12 @@ PrivateTmp=true
 ProtectClock=true
 ProtectControlGroups=true
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox
 ProtectHostname=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/sentrybox-deploy
-InaccessiblePaths=
-InaccessiblePaths=/var/run/docker.sock
+InaccessiblePaths=/var/run/docker.sock /run/dbus/system_bus_socket
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

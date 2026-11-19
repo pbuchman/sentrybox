@@ -464,41 +464,30 @@ test("bootstrap resolves current main with a zero-write canonical ls-remote look
   const calls = [];
   const sha = currentCanonicalMainSha((args) => {
     calls.push(args);
-    if (args.join(" ") === "remote get-url origin") {
-      return "https://github.com/pbuchman/sentrybox.git";
-    }
-    if (args.join(" ") === "ls-remote --exit-code origin refs/heads/main") {
-      return `${SHA}\trefs/heads/main`;
-    }
+    if (args[0] === "ls-remote") return `${SHA}\trefs/heads/main`;
     assert.fail(`unexpected git arguments: ${args.join(" ")}`);
   });
 
   assert.equal(sha, SHA);
   assert.deepEqual(calls, [
-    ["remote", "get-url", "origin"],
-    ["ls-remote", "--exit-code", "origin", "refs/heads/main"],
+    [
+      "ls-remote",
+      "--exit-code",
+      "https://github.com/pbuchman/sentrybox.git",
+      "refs/heads/main",
+    ],
   ]);
   assert.equal(calls.flat().includes("fetch"), false);
 });
 
-test("bootstrap rejects a non-canonical origin or ambiguous main lookup", () => {
-  assert.throws(
-    () => currentCanonicalMainSha(() => "https://github.com/attacker/repo.git"),
-    /unexpected origin/u,
-  );
-
+test("bootstrap rejects ambiguous or invalid canonical main results", () => {
   for (const output of [
     `${OTHER_SHA}\trefs/heads/other`,
     `${SHA}\trefs/heads/main\n${OTHER_SHA}\trefs/heads/main`,
     "not-a-sha\trefs/heads/main",
   ]) {
     assert.throws(
-      () =>
-        currentCanonicalMainSha((args) =>
-          args[0] === "remote"
-            ? "git@github.com:pbuchman/sentrybox.git"
-            : output,
-        ),
+      () => currentCanonicalMainSha(() => output),
       /current origin\/main SHA is invalid/u,
     );
   }
@@ -512,7 +501,7 @@ test("bootstrap unit passes only the fixed root-controlled source path to stable
 
   assert.match(
     unit,
-    /^ExecStart=\/opt\/nodejs\/current\/bin\/node --jitless deploy\/home-dev\/bootstrap-release\.mjs$/mu,
+    /^ExecStart=\/opt\/nodejs\/current\/bin\/node --jitless \/opt\/sentrybox-control\/current\/deploy\/home-dev\/bootstrap-release\.mjs$/mu,
   );
   assert.doesNotMatch(unit, /^LoadCredential=/mu);
   assert.match(unit, /\/var\/lib\/sentrybox-deploy\/bootstrap-github-token/u);

@@ -14,7 +14,7 @@ product, not a requirement for other SentryBox installations.
 - GitHub Actions publishes immutable `ghcr.io/pbuchman/sentrybox:sha-<commit>`
   images. The Home Dev deployment records and rolls back exact image digests.
 - Live SQLite data is stored under
-  `/home/pbuchman/services/sentrybox/data`; root-private deployment, monitor,
+  `/var/lib/sentrybox/data`; root-private deployment, monitor,
   backup, and restore state is stored under `/var/lib/sentrybox-deploy`.
 - A five-minute host monitor checks readiness, live-data thresholds, retention,
   delivery failures, response pressure, backup posture, and restore-test age.
@@ -27,6 +27,7 @@ product, not a requirement for other SentryBox installations.
 ## Active runbooks
 
 - [Project configuration](runbooks/project-configuration.md)
+- [Protected control installation](runbooks/protected-control.md)
 - [Network exposure](runbooks/network-exposure.md)
 - [Operations and monitoring](runbooks/operations.md)
 - [Backup and recovery](runbooks/backup-and-recovery.md)

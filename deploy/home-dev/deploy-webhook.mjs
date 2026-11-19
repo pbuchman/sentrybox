@@ -16,7 +16,7 @@ import {
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { pathToFileURL } from "node:url";
 
 // Node 22 materializes the WebSocket export when node:http is imported through
@@ -38,9 +38,8 @@ const EXPECTED_REPOSITORY = "pbuchman/sentrybox";
 const EXPECTED_WORKFLOW = "Release SentryBox Image";
 const SECRET_FILE =
   "/run/credentials/sentrybox-deploy-webhook.service/github-webhook-secret";
-const DELIVERY_STORE = "/var/lib/sentrybox-deploy/deliveries.json";
-const DEPLOY_REQUEST = "/var/lib/sentrybox-deploy/deploy-request.json";
-const DEPLOY_UNIT = "sentrybox-deploy.service";
+const DELIVERY_STORE = "/var/lib/sentrybox-deploy-webhook/deliveries.json";
+const DEPLOY_SOCKET = "/run/sentrybox-deploy-request.sock";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DELIVERY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
 const SIGNATURE_PATTERN = /^sha256=([0-9a-f]{64})$/u;
@@ -442,70 +441,30 @@ function readSecret(path) {
   return secret;
 }
 
-function invokeFixedDeploy(headSha) {
-  writeDeployRequest(headSha);
-  return startFixedDeploy().catch((error) => {
-    removeDeployRequest();
-    throw error;
-  });
-}
-
-export function startFixedDeploy(requestPath = DEPLOY_REQUEST) {
+export function invokeFixedDeploy(headSha, socketPath = DEPLOY_SOCKET) {
+  if (!SHA_PATTERN.test(headSha)) {
+    throw new TypeError("deployment SHA is invalid");
+  }
   return new Promise((resolveDeploy, rejectDeploy) => {
-    const child = spawn(
-      "/usr/bin/systemctl",
-      ["--wait", "start", DEPLOY_UNIT],
-      {
-        cwd: "/",
-        shell: false,
-        stdio: ["ignore", "inherit", "inherit"],
-        env: {
-          PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        },
-      },
-    );
-    child.once("error", rejectDeploy);
-    child.once("exit", (code, signal) => {
-      if (code === 0 && !existsSync(requestPath)) {
-        resolveDeploy();
-      } else {
-        rejectDeploy(
-          new Error(
-            `fixed deployment unit failed (${code === null ? signal : String(code)})`,
-          ),
-        );
+    const socket = createConnection(socketPath);
+    socket.setTimeout(21 * 60_000, () => {
+      socket.destroy(new Error("fixed deployment request timed out"));
+    });
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.end(headSha + "\n"));
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.length > 3) {
+        socket.destroy(new Error("fixed deployment response is invalid"));
       }
     });
+    socket.once("error", rejectDeploy);
+    socket.once("close", () => {
+      if (response === "OK\n") resolveDeploy();
+      else rejectDeploy(new Error("fixed deployment unit failed"));
+    });
   });
-}
-
-export function writeDeployRequest(headSha, requestPath = DEPLOY_REQUEST) {
-  const file = openSync(requestPath, "wx", 0o600);
-  try {
-    writeFileSync(
-      file,
-      `${JSON.stringify({
-        version: 1,
-        repository: EXPECTED_REPOSITORY,
-        workflow: EXPECTED_WORKFLOW,
-        headSha,
-      })}\n`,
-    );
-    fsyncSync(file);
-  } catch (error) {
-    closeSync(file);
-    removeDeployRequest(requestPath);
-    throw error;
-  }
-  closeSync(file);
-}
-
-export function removeDeployRequest(requestPath = DEPLOY_REQUEST) {
-  try {
-    unlinkSync(requestPath);
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
-  }
 }
 
 function isNotFound(error) {

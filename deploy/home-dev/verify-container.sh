@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly verify_image="${1:-sentrybox:verify}"
-verify_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+verify_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly verify_root
 verify_uid="$(id -u)"
 readonly verify_uid

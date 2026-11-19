@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_directory
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
@@ -21,6 +21,7 @@ fi
 
 error_hub_read_state "${error_hub_current_state}"
 readonly image="${ERROR_HUB_STATE_IMAGE}"
+error_hub_require_root_private_file "${backup_file}" "Pre-deployment backup"
 
 if [[ ! -f "${backup_file}" || -L "${backup_file}" \
   || ! -s "${backup_file}" ]]; then

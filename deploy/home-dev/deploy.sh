@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_directory
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
@@ -26,8 +26,6 @@ maintenance_active=0
 migration_probe_directory=""
 migration_probe=""
 migration_probe_cleanup_armed=0
-original_checkout_sha=""
-checkout_changed=0
 deployment_committed=0
 state_write_started=0
 runtime_changed=0
@@ -70,16 +68,13 @@ cleanup() {
           runtime_restore_status=$?
         fi
       done
-      # rollback.sh owns checkout, runtime, health, and state reconciliation.
-      # Never follow a failed transaction with checkout-only restoration.
-      checkout_changed=0
       if (( rollback_reconciled == 0 )); then
         ERROR_HUB_IMAGE="${resolved_image:-}" \
           ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
-          docker compose --file "${error_hub_compose_file}" \
+          error_hub_docker_compose \
             stop --timeout 30 sentrybox >/dev/null || candidate_stop_status=$?
         # The prior committed state remains untouched. Keep maintenance routing
-        # active because checkout/runtime health could not be reconciled.
+        # active because runtime health could not be reconciled.
         maintenance_active=0
         if (( candidate_stop_status != 0 )); then
           printf 'Automatic rollback reconciliation failed and candidate shutdown could not be verified; maintenance routing was retained and immediate operator intervention is required.\n' \
@@ -94,7 +89,7 @@ cleanup() {
     else
       ERROR_HUB_IMAGE="${resolved_image:-}" \
         ERROR_HUB_PRIVATE_ORIGIN="${private_origin:-}" \
-        docker compose --file "${error_hub_compose_file}" \
+        error_hub_docker_compose \
           stop --timeout 30 sentrybox >/dev/null || runtime_restore_status=$?
     fi
     if (( exit_status == 0 && runtime_restore_status != 0 )); then
@@ -119,14 +114,6 @@ cleanup() {
       if (( exit_status == 0 )); then
         exit_status="${state_restore_status}"
       fi
-    fi
-  fi
-  if (( checkout_changed == 1 && deployment_committed == 0 )) \
-    && [[ -n "${original_checkout_sha}" ]]; then
-    error_hub_checkout_detached "${original_checkout_sha}"
-    checkout_restore_status=$?
-    if (( exit_status == 0 && checkout_restore_status != 0 )); then
-      exit_status="${checkout_restore_status}"
     fi
   fi
   if (( maintenance_active == 1 )); then
@@ -179,39 +166,11 @@ readonly request_sha
 error_hub_require_sha "${request_sha}"
 error_hub_require_free_space "${error_hub_service_root}"
 
-repository_remote="$(error_hub_git remote get-url origin)"
-readonly repository_remote
-case "${repository_remote}" in
-  https://github.com/pbuchman/sentrybox.git|git@github.com:pbuchman/sentrybox.git) ;;
-  *)
-    printf 'Canonical SentryBox checkout has an unexpected origin.\n' >&2
-    exit 1
-    ;;
-esac
-if [[ -n "$(error_hub_git status --porcelain --untracked-files=normal)" ]]; then
-  printf 'Canonical SentryBox deployment checkout must be clean.\n' >&2
+remote_main="$(error_hub_canonical_main)"
+if [[ "${remote_main}" != "${request_sha}"$'\trefs/heads/main' ]]; then
+  printf 'Verified workflow SHA is not the current canonical main commit.\n' >&2
   exit 1
 fi
-original_checkout_sha="$(error_hub_git rev-parse HEAD)"
-error_hub_require_sha "${original_checkout_sha}"
-readonly original_checkout_sha
-if [[ -e "${error_hub_current_state}" || -L "${error_hub_current_state}" ]]; then
-  error_hub_read_state "${error_hub_current_state}"
-  if [[ "${ERROR_HUB_STATE_SHA}" != "${original_checkout_sha}" ]]; then
-    printf 'Canonical SentryBox checkout does not match deployment state.\n' >&2
-    exit 1
-  fi
-fi
-error_hub_fetch_origin_main
-remote_main="$(error_hub_git rev-parse origin/main)"
-readonly remote_main
-if [[ "${remote_main}" != "${request_sha}" ]]; then
-  printf 'Verified workflow SHA is not the current origin/main commit.\n' >&2
-  exit 1
-fi
-error_hub_git cat-file -e "${request_sha}^{commit}"
-error_hub_checkout_detached "${request_sha}"
-checkout_changed=1
 
 readonly release_tag="${error_hub_image_repository}:sha-${request_sha}"
 docker pull "${release_tag}" >/dev/null

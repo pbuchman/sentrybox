@@ -1,26 +1,25 @@
 [Unit]
-Description=Verify an SentryBox backup by restoring it
+Description=Verify a SentryBox backup by restoring it
 Requires=docker.service
 After=docker.service
-ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh
+ConditionFileIsExecutable=/opt/sentrybox-control/current/deploy/home-dev/restore-test.sh
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
-ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
+ExecStart=/opt/sentrybox-control/current/deploy/home-dev/restore-test.sh
 TimeoutStartSec=45min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadOnlyPaths=/home/pbuchman/services/sentrybox/backups
+ProtectHome=true
+ReadOnlyPaths=/var/lib/sentrybox/backups
 ReadWritePaths=/var/lib/sentrybox-deploy
-ReadWritePaths=/run/lock
-InaccessiblePaths=/home/pbuchman/services/sentrybox/data
-InaccessiblePaths=/home/pbuchman/services/sentrybox/env
-InaccessiblePaths=/home/pbuchman/services/sentrybox/deploy
+InaccessiblePaths=/var/lib/sentrybox/data
+InaccessiblePaths=/var/lib/sentrybox/env
+InaccessiblePaths=/etc/sentrybox
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

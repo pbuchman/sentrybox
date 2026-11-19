@@ -8,24 +8,19 @@ ConditionPathExists=/var/lib/sentrybox-deploy/current.env
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
-EnvironmentFile=/var/lib/sentrybox-deploy/current.env
-Environment=ERROR_HUB_RUNTIME_UID=1000
-Environment=ERROR_HUB_RUNTIME_GID=1000
-Environment=ERROR_HUB_RUNTIME_ENV_FILE=/var/lib/sentrybox-deploy/runtime.env
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
 UMask=0077
-ExecStartPre=/home/pbuchman/deploy/sentrybox/deploy/home-dev/preflight.sh ${ERROR_HUB_IMAGE}
-ExecStart=/usr/bin/docker compose --file /home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml up -d --wait --remove-orphans
-ExecReload=/usr/bin/docker compose --file /home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml up -d --wait --remove-orphans
-ExecStop=/usr/bin/docker compose --file /home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml stop --timeout 30
+ExecStart=/opt/sentrybox-control/current/deploy/home-dev/runtime.sh start
+ExecReload=/opt/sentrybox-control/current/deploy/home-dev/runtime.sh reload
+ExecStop=/opt/sentrybox-control/current/deploy/home-dev/runtime.sh stop
 TimeoutStartSec=10min
 TimeoutStopSec=2min
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/pbuchman/services/sentrybox/data
+ProtectHome=true
+ReadWritePaths=/var/lib/sentrybox/data
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

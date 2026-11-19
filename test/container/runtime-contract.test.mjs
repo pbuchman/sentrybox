@@ -86,28 +86,31 @@ test("compose keeps both listeners on host loopback and hardens the container", 
   assert.match(compose, /\/health\/ready/u);
   assert.match(compose, /max-size:\s*"?10m"?/u);
   assert.match(compose, /max-file:\s*"?3"?/u);
-  assert.match(compose, /\/home\/pbuchman\/services\/sentrybox\/data:\/data/u);
   assert.match(
     compose,
-    /\/home\/pbuchman\/services\/sentrybox\/env:\/run\/secrets\/sentrybox-env:ro/u,
+    /source: \/var\/lib\/sentrybox\/data\s+target: \/data/u,
   );
   assert.match(
     compose,
-    /\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/config\.example\.json:\/run\/config\/sentrybox-projects\.json:ro/u,
+    /source: \/var\/lib\/sentrybox\/env\s+target: \/run\/secrets\/sentrybox-env\s+read_only: true/u,
+  );
+  assert.match(
+    compose,
+    /source: \.\/config\.example\.json\s+target: \/run\/config\/sentrybox-projects\.json\s+read_only: true/u,
   );
   assert.doesNotMatch(compose, /^volumes:\s*$/mu);
   assert.doesNotMatch(compose, /\bdown\s+-v\b/u);
   assert.doesNotMatch(compose, /(?:^|[:@])latest(?:$|\s)/mu);
 });
 
-test("runtime service permits only the preflight data write through its read-only home sandbox", async () => {
+test("runtime service permits only the preflight data write through its protected runtime sandbox", async () => {
   const unit = await source("deploy/home-dev/sentrybox.service");
 
   assert.match(unit, /^ProtectSystem=strict$/mu);
-  assert.match(unit, /^ProtectHome=read-only$/mu);
+  assert.match(unit, /^ProtectHome=true$/mu);
   assert.deepEqual(
     Array.from(unit.matchAll(/^ReadWritePaths=(.+)$/gmu), (match) => match[1]),
-    ["/home/pbuchman/services/sentrybox/data"],
+    ["/var/lib/sentrybox/data"],
   );
 });
 
@@ -294,12 +297,12 @@ test("disabled scheduled backup and restore checks are explicit and isolated fro
   assert.doesNotMatch(rollbackIntegrity, /dst=\/data,readonly/u);
 
   assert.match(backupUnit, /^ExecStart=.*\/backup\.sh scheduled$/mu);
-  assert.match(backupUnit, /^ReadWritePaths=\/run\/lock$/mu);
+  assert.match(backupUnit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
   assert.match(restoreUnit, /^Requires=docker\.service$/mu);
-  assert.match(restoreUnit, /^ReadWritePaths=\/run\/lock$/mu);
+  assert.match(restoreUnit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
   assert.match(
     restoreUnit,
-    /^InaccessiblePaths=\/home\/pbuchman\/services\/sentrybox\/data$/mu,
+    /^InaccessiblePaths=\/var\/lib\/sentrybox\/data$/mu,
   );
   assert.match(installer, /systemd-analyze verify/u);
   assert.match(

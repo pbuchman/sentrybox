@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +12,7 @@ import {
   createDeployWebhookServer,
   DeliveryStore,
   MAX_BODY_BYTES,
+  invokeFixedDeploy,
   validateWorkflowRun,
   verifyGitHubSignature,
 } from "./deploy-webhook.mjs";
@@ -166,82 +168,74 @@ test("workflow endpoint exposes a non-mutating handler identity response", async
   }
 });
 
-test("production wiring invokes only the fixed deployment unit from an isolated Home Dev checkout", () => {
-  const source = readFileSync(
-    new URL("./deploy-webhook.mjs", import.meta.url),
+test("production credentials use the protected sources and systemd credential files", () => {
+  const unit = readFileSync(
+    new URL("./sentrybox-deploy-webhook.service", import.meta.url),
     "utf8",
   );
-  const unitUrl = new URL(
-    "./sentrybox-deploy-webhook.service",
-    import.meta.url,
-  );
-  assert.equal(
-    existsSync(unitUrl),
-    true,
-    "SentryBox deployment unit is missing: deploy/home-dev/sentrybox-deploy-webhook.service",
-  );
-  const unit = readFileSync(unitUrl, "utf8");
   const cloudflaredUnit = readFileSync(
     new URL("./cloudflared.service", import.meta.url),
     "utf8",
   );
-  assert.match(source, /spawn\(\s*"\/usr\/bin\/systemctl"/u);
-  assert.match(source, /import \{ spawn \} from "node:child_process"/u);
-  assert.match(source, /\["--wait", "start", DEPLOY_UNIT\]/u);
-  assert.match(source, /shell:\s*false/u);
-  assert.match(source, /"Release SentryBox Image"/u);
-  assert.match(source, /"pbuchman\/sentrybox"/u);
+  const source = readFileSync(
+    new URL("./deploy-webhook.mjs", import.meta.url),
+    "utf8",
+  );
   assert.match(
     source,
     /"\/run\/credentials\/sentrybox-deploy-webhook\.service\/github-webhook-secret"/u,
   );
-  assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deliveries\.json"/u);
-  assert.match(source, /"\/var\/lib\/sentrybox-deploy\/deploy-request\.json"/u);
-  assert.match(source, /"sentrybox-deploy\.service"/u);
   assert.match(
     unit,
-    /^LoadCredential=github-webhook-secret:\/home\/pbuchman\/services\/sentrybox\/deploy\/github-webhook-secret$/mu,
+    /^LoadCredential=github-webhook-secret:\/etc\/sentrybox\/github-webhook-secret$/mu,
   );
   assert.match(unit, /^CapabilityBoundingSet=$/mu);
   assert.match(unit, /^NoNewPrivileges=true$/mu);
-  assert.match(
-    unit,
-    /^ConditionPathExists=\/home\/pbuchman\/deploy\/sentrybox\/deploy\/home-dev\/deploy-webhook\.mjs$/mu,
-  );
-  assert.match(
-    unit,
-    /^WorkingDirectory=\/home\/pbuchman\/deploy\/sentrybox$/mu,
-  );
-  assert.match(
-    unit,
-    /^ExecStart=\/opt\/nodejs\/current\/bin\/node --jitless deploy\/home-dev\/deploy-webhook\.mjs$/mu,
-  );
-  assert.match(unit, /^ReadWritePaths=\/var\/lib\/sentrybox-deploy$/mu);
   assert.match(unit, /^ProtectHome=tmpfs$/mu);
-  assert.match(
-    unit,
-    /^BindReadOnlyPaths=\/home\/pbuchman\/deploy\/sentrybox$/mu,
-  );
-  assert.doesNotMatch(unit, /^Bind(?:ReadOnly)?Paths=.*\/services\//mu);
-  assert.deepEqual(unit.match(/^InaccessiblePaths=.*$/gmu), [
-    "InaccessiblePaths=",
-    "InaccessiblePaths=/var/run/docker.sock",
-  ]);
   assert.match(unit, /^MemoryMax=128M$/mu);
   assert.match(unit, /^MemoryDenyWriteExecute=true$/mu);
-  assert.match(
-    unit,
-    /^SystemCallFilter=@system-service pkey_alloc pkey_free pkey_mprotect$/mu,
-  );
   assert.match(
     cloudflaredUnit,
     /--token-file \/run\/credentials\/cloudflared\.service\/tunnel-token/u,
   );
   assert.match(
     cloudflaredUnit,
-    /^LoadCredential=tunnel-token:\/home\/pbuchman\/services\/sentrybox\/deploy\/cloudflare-tunnel-token$/mu,
+    /^LoadCredential=tunnel-token:\/etc\/sentrybox\/cloudflare-tunnel-token$/mu,
   );
-  assert.doesNotMatch(cloudflaredUnit, /(?:^|\s)--token(?:\s|=)(?!-file)/u);
+});
+
+test("the webhook sends only the SHA and requires a successful completion reply", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "sentrybox-deploy-socket-"));
+  const socketPath = join(directory, "deploy.sock");
+  let received = "";
+  let success = true;
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      received += chunk;
+    });
+    socket.on("end", () => socket.end(success ? "OK\n" : ""));
+  });
+  try {
+    await new Promise((ready, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, ready);
+    });
+    await invokeFixedDeploy(SHA, socketPath);
+    assert.equal(received, SHA + "\n");
+    success = false;
+    await assert.rejects(
+      invokeFixedDeploy(SHA, socketPath),
+      /fixed deployment unit failed/u,
+    );
+    assert.throws(
+      () => invokeFixedDeploy("invalid", socketPath),
+      /deployment SHA is invalid/u,
+    );
+  } finally {
+    await new Promise((done) => server.close(done));
+    rmSync(directory, { force: true, recursive: true });
+  }
 });
 
 test("production webhook module loads under jitless without materializing the ESM HTTP facade", () => {

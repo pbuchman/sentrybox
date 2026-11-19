@@ -7,11 +7,11 @@ ConditionPathExists=/var/lib/sentrybox-deploy/deploy-request.json
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
 Environment=XDG_CONFIG_HOME=/var/lib/sentrybox-deploy/caddy-validation/config
 Environment=XDG_DATA_HOME=/var/lib/sentrybox-deploy/caddy-validation/data
-ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy.sh
-ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy
+ExecStart=/opt/sentrybox-control/current/deploy/home-dev/deploy.sh
+ExecStopPost=/usr/bin/install -m 0644 /opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy
 ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile
 ExecStopPost=/usr/bin/systemctl reload caddy
 TimeoutStartSec=20min
@@ -24,12 +24,10 @@ PrivateDevices=true
 # Caddy opens configured file loggers during validation. The running proxy uses its own mount namespace.
 TemporaryFileSystem=/var/log/caddy:rw,nosuid,nodev,noexec,mode=0700,size=1M
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/pbuchman/deploy/sentrybox
-ReadWritePaths=/home/pbuchman/services/sentrybox/data
-ReadWritePaths=/home/pbuchman/services/sentrybox/backups
+ProtectHome=true
+ReadWritePaths=/var/lib/sentrybox/data
+ReadWritePaths=/var/lib/sentrybox/backups
 ReadWritePaths=/var/lib/sentrybox-deploy
-ReadWritePaths=/run/lock
 ReadWritePaths=/etc/caddy/Caddyfile.d
 ProtectKernelTunables=true
 ProtectKernelModules=true

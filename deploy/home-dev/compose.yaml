@@ -27,9 +27,23 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - /home/pbuchman/services/sentrybox/data:/data
-      - /home/pbuchman/services/sentrybox/env:/run/secrets/sentrybox-env:ro
-      - /home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json:/run/config/sentrybox-projects.json:ro
+      - type: bind
+        source: /var/lib/sentrybox/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/sentrybox/env
+        target: /run/secrets/sentrybox-env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.example.json
+        target: /run/config/sentrybox-projects.json
+        read_only: true
+        bind:
+          create_host_path: false
     pids_limit: 128
     mem_limit: 512m
     restart: unless-stopped

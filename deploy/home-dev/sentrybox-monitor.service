@@ -2,14 +2,14 @@
 Description=Check SentryBox operational readiness
 After=network-online.target sentrybox.service
 Wants=network-online.target
-ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
+ConditionFileIsExecutable=/opt/sentrybox-control/current/deploy/home-dev/monitor.sh
 
 [Service]
 Type=oneshot
 User=root
 Group=root
-WorkingDirectory=/home/pbuchman/deploy/sentrybox
-ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
+WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev
+ExecStart=/opt/sentrybox-control/current/deploy/home-dev/monitor.sh
 TimeoutStartSec=30s
 StateDirectory=sentrybox-deploy
 StateDirectoryMode=0700
@@ -29,7 +29,6 @@ PrivateTmp=true
 ProtectClock=true
 ProtectControlGroups=true
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox
 ProtectHostname=true
 ProtectKernelLogs=true
 ProtectKernelModules=true
