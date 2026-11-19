@@ -8,6 +8,10 @@ current canonical `main` commit. It uses the selected control release for
 Compose, database helpers, systemd and Caddy. An operator installs a new control
 release explicitly after review.
 
+Home Dev requires the Ubuntu `acl` package. The webhook validates the
+systemd credential directory and its file ACL when the kernel represents
+the service's private read permission as a group mask.
+
 The application digest and source SHA remain in
 `/var/lib/sentrybox-deploy/{current,previous}.env`. Rolling back the application
 uses the protected Compose and database helpers with the prior recorded

@@ -45,9 +45,12 @@ for executable_asset in \
     exit 1
   fi
 done
-for required_command in caddy chmod cp curl find flock mktemp sleep systemd-analyze systemd-sysusers; do
+for required_command in caddy chmod cp curl find flock mktemp sleep systemd-analyze; do
   error_hub_require_command "${required_command}"
 done
+if [[ -z "${error_hub_prefix}" ]]; then
+  error_hub_require_command systemd-sysusers
+fi
 
 error_hub_webhook_state() {
   local eh_unit="sentrybox-deploy-webhook.service"
@@ -159,6 +162,10 @@ done
 error_hub_require_private_origin "${private_origin}"
 
 error_hub_require_system_node
+if [[ ! -x /usr/bin/getfacl ]]; then
+  printf 'Install the acl package to verify the systemd webhook credential.\n' >&2
+  exit 1
+fi
 
 runtime_uid="${ERROR_HUB_RUNTIME_UID:-$(id -u pbuchman)}"
 runtime_gid="${ERROR_HUB_RUNTIME_GID:-$(id -g pbuchman)}"

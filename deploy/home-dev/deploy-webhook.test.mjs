@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -13,6 +20,8 @@ import {
   DeliveryStore,
   MAX_BODY_BYTES,
   invokeFixedDeploy,
+  isDirectExecution,
+  serviceOnlyCredentialAcl,
   validateWorkflowRun,
   verifyGitHubSignature,
 } from "./deploy-webhook.mjs";
@@ -20,6 +29,33 @@ import {
 const NOW = new Date("2026-07-29T05:00:00.000Z");
 const SECRET = "fixture-deploy-webhook-secret-with-32-bytes";
 const SHA = "1234567890abcdef1234567890abcdef12345678";
+
+test("the protected current symlink resolves to the actual script entry", () => {
+  const root = mkdtempSync(join(tmpdir(), "sentrybox-entry-"));
+  try {
+    const moduleUrl = new URL("./deploy-webhook.mjs", import.meta.url);
+    const entry = join(root, "current.mjs");
+    symlinkSync(fileURLToPath(moduleUrl), entry);
+    assert.equal(isDirectExecution(entry, moduleUrl.href), true);
+    assert.equal(isDirectExecution(entry, import.meta.url), false);
+    assert.equal(isDirectExecution(undefined, moduleUrl.href), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("credential ACL accepts only the designated reader in systemd's protected mode", () => {
+  const acl = "user::r--\nuser:123:r--\ngroup::---\nmask::r--\nother::---\n";
+  assert.equal(serviceOnlyCredentialAcl(acl, 123, "r--"), true);
+  assert.equal(serviceOnlyCredentialAcl(acl, 124, "r--"), false);
+  assert.equal(serviceOnlyCredentialAcl(acl, 123, "r-x"), false);
+  for (const extra of ["group::r--", "group:456:r--\ngroup::---"]) {
+    assert.equal(
+      serviceOnlyCredentialAcl(acl.replace("group::---", extra), 123, "r--"),
+      false,
+    );
+  }
+});
 
 test("verifies sha256 over exact raw bytes and rejects malformed signatures", () => {
   const body = Buffer.from('{"fixture":true}');

@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import process from "node:process";
 import { createConnection } from "node:net";
 import { pathToFileURL } from "node:url";
@@ -421,14 +425,74 @@ function structuredLog(entry) {
   );
 }
 
-function readSecret(path) {
-  const status = statSync(path);
-  if (!status.isFile() || (status.mode & 0o077) !== 0) {
-    throw new Error(
-      "deployment webhook secret file must be a mode-0600 regular file",
-    );
+export function serviceOnlyCredentialAcl(acl, uid, rights) {
+  const expected = [
+    `user::${rights}`,
+    `user:${uid}:${rights}`,
+    "group::---",
+    `mask::${rights}`,
+    "other::---",
+  ];
+  return acl.trim() === expected.join("\n");
+}
+
+function privateSystemdCredential(path, file) {
+  const directory = dirname(SECRET_FILE);
+  if (
+    path !== SECRET_FILE ||
+    process.env.CREDENTIALS_DIRECTORY !== directory ||
+    realpathSync(directory) !== directory ||
+    file.uid !== 0 ||
+    file.gid !== 0 ||
+    (file.mode & 0o777) !== 0o440
+  )
+    return false;
+  const parent = lstatSync(directory);
+  if (
+    !parent.isDirectory() ||
+    parent.uid !== 0 ||
+    parent.gid !== 0 ||
+    (parent.mode & 0o777) !== 0o550
+  )
+    return false;
+  for (const [target, rights] of [
+    [path, "r--"],
+    [directory, "r-x"],
+  ]) {
+    const actual = execFileSync("/usr/bin/getfacl", ["-cpn", "--", target], {
+      encoding: "utf8",
+      env: { LC_ALL: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+      maxBuffer: 4096,
+    });
+    if (!serviceOnlyCredentialAcl(actual, process.getuid(), rights))
+      return false;
   }
-  const secret = readFileSync(path, "utf8").replace(/\r?\n$/u, "");
+  return true;
+}
+
+function readSecret(path) {
+  const fd = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  let secret;
+  try {
+    const file = fstatSync(fd);
+    if (
+      !file.isFile() ||
+      (file.uid !== 0 && file.uid !== process.getuid()) ||
+      ((file.mode & 0o077) !== 0 && !privateSystemdCredential(path, file))
+    ) {
+      throw new Error(
+        "deployment webhook credential is not private to its service",
+      );
+    }
+    secret = readFileSync(fd, "utf8").replace(/\r?\n$/u, "");
+  } finally {
+    closeSync(fd);
+  }
   if (
     Buffer.byteLength(secret) < 32 ||
     secret.includes("\n") ||
@@ -503,15 +567,15 @@ async function runMain() {
   });
 }
 
-function isDirectExecution() {
-  const entry = process.argv[1];
+export function isDirectExecution(entry, moduleUrl) {
   return (
     entry !== undefined &&
-    pathToFileURL(resolve(entry)).href === import.meta.url
+    existsSync(entry) &&
+    pathToFileURL(realpathSync(entry)).href === moduleUrl
   );
 }
 
-if (isDirectExecution()) {
+if (isDirectExecution(process.argv[1], import.meta.url)) {
   void runMain().catch((error) => {
     structuredLog({
       level: "error",
