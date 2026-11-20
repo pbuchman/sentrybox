@@ -23,7 +23,7 @@ arguments.
 2. In an interactive root session with history disabled and `umask 077`, write
    that clipboard value to:
 
-   `/home/pbuchman/services/sentrybox/deploy/cloudflare-tunnel-token`
+   `/etc/sentrybox/cloudflare-tunnel-token`
 
    The file must be owned by root, be a regular file, contain exactly one
    non-empty line, and have mode `0600`.
@@ -45,7 +45,7 @@ unit backup, shell history, note, or repository.
 1. Generate a dedicated random GitHub webhook secret in a non-logging process
    and store it as the mode-`0600` root-owned file:
 
-   `/home/pbuchman/services/sentrybox/deploy/github-webhook-secret`
+   `/etc/sentrybox/github-webhook-secret`
 
 2. Install `sentrybox-deploy-webhook.service` and the deployment unit,
    then run `systemd-analyze verify` on both. Enable the handler only after the

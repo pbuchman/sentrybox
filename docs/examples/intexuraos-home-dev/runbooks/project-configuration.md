@@ -36,7 +36,7 @@ keys and localhost lookalikes remain invalid.
 
 1. Before the first install or service start, follow the exact two-name
    [credential bootstrap in the network-exposure runbook](network-exposure.md#bootstrap-service-credentials-before-installation).
-   It creates mode-`0600` `/home/pbuchman/services/sentrybox/env` without
+   It creates mode-`0600` `/var/lib/sentrybox/env` without
    exposing values in a command, environment variable, repository file, or log.
 2. Run `install.sh` only after that bootstrap, then let the first start complete
    database migrations.
@@ -59,7 +59,7 @@ deep-link format together with the exact query and time range.
 
 ## Generate the four DSNs once
 
-Run from `/home/pbuchman/deploy/sentrybox/deploy/home-dev`:
+Run from `/opt/sentrybox-control/current/deploy/home-dev`:
 
 ```bash
 sudo docker compose --env-file /var/lib/sentrybox-deploy/current.env exec sentrybox node \
@@ -103,7 +103,7 @@ maintenance wrapper owns the deployment lock:
 
 ```bash
 baseline="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-sudo ./deploy/home-dev/maintenance-window.sh -- \
+sudo /opt/sentrybox-control/current/deploy/home-dev/maintenance-window.sh -- \
   /run/sentrybox-enable-code-agent-dev "${baseline}"
 ```
 
@@ -116,7 +116,7 @@ set -euo pipefail
 baseline="${1:?UTC baseline is required}"
 [[ "${baseline}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.000Z$ ]]
 
-source /home/pbuchman/deploy/sentrybox/deploy/home-dev/common.sh
+source /opt/sentrybox-control/current/deploy/home-dev/common.sh
 error_hub_read_state "${error_hub_current_state}"
 private_origin="${ERROR_HUB_STATE_PRIVATE_ORIGIN}"
 service_recovery_required=0

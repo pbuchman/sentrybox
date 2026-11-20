@@ -25,12 +25,12 @@ import {
   removeDeployRequest,
   startFixedDeploy,
   writeDeployRequest,
-} from "./deploy-webhook.mjs";
+} from "./deploy-request.mjs";
 
 const require = createRequire(import.meta.url);
 const { request: httpsRequest } = require("node:https");
 
-const CHECKOUT = "/home/pbuchman/deploy/sentrybox";
+const CANONICAL_REPOSITORY = "https://github.com/pbuchman/sentrybox.git";
 const EXPECTED_REPOSITORY = "pbuchman/sentrybox";
 const EXPECTED_WORKFLOW = "Release SentryBox Image";
 const TOKEN_FILE = "/var/lib/sentrybox-deploy/bootstrap-github-token";
@@ -308,17 +308,10 @@ function assertSafeTokenFile(file) {
 }
 
 export function currentCanonicalMainSha(runGit = runCanonicalGit) {
-  const remote = runGit(["remote", "get-url", "origin"]);
-  if (
-    remote !== "https://github.com/pbuchman/sentrybox.git" &&
-    remote !== "git@github.com:pbuchman/sentrybox.git"
-  ) {
-    throw new Error("canonical SentryBox checkout has an unexpected origin");
-  }
   const listing = runGit([
     "ls-remote",
     "--exit-code",
-    "origin",
+    CANONICAL_REPOSITORY,
     "refs/heads/main",
   ]);
   const match = listing.match(/^([0-9a-f]{40})\trefs\/heads\/main$/u);

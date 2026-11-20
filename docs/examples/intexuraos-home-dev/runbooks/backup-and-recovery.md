@@ -27,7 +27,7 @@ implemented and restore-tested.
 Immediately before a deployment, `backup.sh predeploy` uses SQLite's online
 backup API from an immutable SentryBox image. It does not stop the live database
 or copy the database/WAL files directly. It atomically replaces
-`/home/pbuchman/services/sentrybox/backups/predeploy.sqlite`, keeps the staging
+`/var/lib/sentrybox/backups/predeploy.sqlite`, keeps the staging
 directory bounded, and rejects a result larger than 5 GiB.
 
 The full `predeploy.sqlite` is reserved for deployment rollback until every

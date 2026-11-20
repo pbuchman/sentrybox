@@ -14,18 +14,24 @@ else
   readonly error_hub_prefix=""
 fi
 
-readonly error_hub_checkout="${error_hub_prefix}/home/pbuchman/deploy/sentrybox"
-readonly error_hub_service_root="${error_hub_prefix}/home/pbuchman/services/sentrybox"
-readonly error_hub_deploy_credentials_directory="${error_hub_service_root}/deploy"
+readonly error_hub_control_root="${error_hub_prefix}/opt/sentrybox-control"
+if [[ -n "${error_hub_prefix}" ]]; then
+  readonly error_hub_control_assets="${error_hub_control_root}/current/deploy/home-dev"
+else
+  error_hub_control_assets="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || exit
+  readonly error_hub_control_assets
+fi
+readonly error_hub_service_root="${error_hub_prefix}/var/lib/sentrybox"
+readonly error_hub_deploy_credentials_directory="${error_hub_prefix}/etc/sentrybox"
 readonly error_hub_webhook_credential="${error_hub_deploy_credentials_directory}/github-webhook-secret"
 readonly error_hub_environment_file="${error_hub_service_root}/env"
 readonly error_hub_data_directory="${error_hub_service_root}/data"
 readonly error_hub_database="${error_hub_data_directory}/error-hub.sqlite"
-readonly error_hub_backup_directory="${error_hub_prefix}/home/pbuchman/services/sentrybox/backups"
+readonly error_hub_backup_directory="${error_hub_prefix}/var/lib/sentrybox/backups"
 readonly error_hub_state_directory="${error_hub_prefix}/var/lib/sentrybox-deploy"
 readonly error_hub_runtime_environment_file="${error_hub_state_directory}/runtime.env"
 readonly error_hub_required_secret_references="CODE_AGENT_HMAC_DEV,CODE_AGENT_HMAC_PROD"
-readonly error_hub_lock_file="${error_hub_prefix}/run/lock/sentrybox-deploy.lock"
+readonly error_hub_lock_file="${error_hub_state_directory}/deployment.lock"
 readonly error_hub_request_file="${error_hub_state_directory}/deploy-request.json"
 readonly error_hub_current_state="${error_hub_state_directory}/current.env"
 readonly error_hub_previous_state="${error_hub_state_directory}/previous.env"
@@ -33,14 +39,14 @@ readonly error_hub_backup_state_file="${error_hub_state_directory}/backup.state"
 readonly error_hub_backup_success_file="${error_hub_state_directory}/backup.success"
 readonly error_hub_restore_success_file="${error_hub_state_directory}/restore-test.success"
 readonly error_hub_monitor_baseline_file="${error_hub_state_directory}/monitor-baseline"
-readonly error_hub_compose_file="${error_hub_checkout}/deploy/home-dev/compose.yaml"
-readonly error_hub_project_config="${error_hub_checkout}/deploy/home-dev/config.example.json"
-readonly error_hub_database_operations="${error_hub_checkout}/deploy/home-dev/database-operations.mjs"
+readonly error_hub_compose_file="${error_hub_control_assets}/compose.yaml"
+readonly error_hub_project_config="${error_hub_control_assets}/config.example.json"
+readonly error_hub_database_operations="${error_hub_control_assets}/database-operations.mjs"
 readonly error_hub_caddy_directory="${error_hub_prefix}/etc/caddy/Caddyfile.d"
 readonly error_hub_caddy_fragment="${error_hub_caddy_directory}/sentrybox.caddy"
 readonly error_hub_caddy_deploy_fragment="${error_hub_caddy_directory}/sentrybox-deploy.caddy"
-readonly error_hub_caddy_normal_source="${error_hub_checkout}/deploy/home-dev/caddy-sentrybox.caddy"
-readonly error_hub_caddy_maintenance_source="${error_hub_checkout}/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+readonly error_hub_caddy_normal_source="${error_hub_control_assets}/caddy-sentrybox.caddy"
+readonly error_hub_caddy_maintenance_source="${error_hub_control_assets}/caddy-sentrybox-maintenance.caddy"
 readonly error_hub_caddy_config="${error_hub_prefix}/etc/caddy/Caddyfile"
 readonly error_hub_caddy_validation_root="${error_hub_state_directory}/caddy-validation"
 readonly error_hub_caddy_validation_config="${error_hub_caddy_validation_root}/config"
@@ -49,7 +55,7 @@ readonly error_hub_repository="pbuchman/sentrybox"
 readonly error_hub_workflow="Release SentryBox Image"
 readonly error_hub_image_repository="ghcr.io/pbuchman/sentrybox"
 readonly error_hub_system_node="${error_hub_prefix}/opt/nodejs/current/bin/node"
-readonly error_hub_system_node_version="v22.23.2"
+readonly error_hub_system_node_versions="v22.23.2 or v22.23.3"
 
 # Compose reads the persistent runtime reference list through this path. Tests
 # redirect it into their disposable prefix; production uses the canonical path.
@@ -264,40 +270,22 @@ error_hub_require_free_space() {
   fi
 }
 
-error_hub_git() {
-  git -c "safe.directory=${error_hub_checkout}" \
-    -C "${error_hub_checkout}" "$@"
-}
-
-error_hub_normalize_checkout_objects() {
-  local eh_git_directory="${error_hub_checkout}/.git"
-  local eh_objects_directory="${eh_git_directory}/objects"
-  local eh_entry
-  if [[ ! -d "${eh_git_directory}" || -L "${eh_git_directory}" \
-    || ! -d "${eh_objects_directory}" || -L "${eh_objects_directory}" ]]; then
-    printf 'Canonical SentryBox checkout must use a regular Git object store.\n' >&2
-    return 1
+error_hub_canonical_main() (
+  cd /
+  # Ignore ambient Git config and repository metadata. Root only needs the
+  # canonical public main ref, never a checkout or Git credential helper.
+  if [[ -n "${error_hub_prefix}" ]]; then
+    git ls-remote --exit-code https://github.com/pbuchman/sentrybox.git refs/heads/main
+  else
+    env -i PATH=/usr/bin:/bin HOME=/nonexistent \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+      GIT_CEILING_DIRECTORIES=/ \
+      /usr/bin/git ls-remote --exit-code https://github.com/pbuchman/sentrybox.git refs/heads/main
   fi
-  while IFS= read -r -d '' eh_entry; do
-    if [[ -L "${eh_entry}" \
-      || ( ! -d "${eh_entry}" && ! -f "${eh_entry}" ) ]]; then
-      printf 'Canonical SentryBox Git object store contains an unsafe entry.\n' >&2
-      return 1
-    fi
-  done < <(find "${eh_objects_directory}" -xdev -print0)
-  find "${eh_objects_directory}" -xdev -type d -exec chmod 0755 {} + \
-    && find "${eh_objects_directory}" -xdev -type f -exec chmod 0644 {} +
-}
+)
 
-error_hub_fetch_origin_main() {
-  local eh_fetch_status=0
-  error_hub_normalize_checkout_objects || return $?
-  (
-    umask 022
-    error_hub_git fetch --quiet origin main
-  ) || eh_fetch_status=$?
-  error_hub_normalize_checkout_objects || return $?
-  return "${eh_fetch_status}"
+error_hub_docker_compose() {
+  docker compose --env-file /dev/null --project-directory "${error_hub_control_assets}"     --file "${error_hub_compose_file}" "$@"
 }
 
 error_hub_require_system_node() {
@@ -305,32 +293,40 @@ error_hub_require_system_node() {
   if [[ ! -f "${error_hub_system_node}" || -L "${error_hub_system_node}" \
     || ! -x "${error_hub_system_node}" ]]; then
     printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
-      "${error_hub_system_node_version}" >&2
+      "${error_hub_system_node_versions}" >&2
     return 1
+  fi
+  if [[ -z "${error_hub_prefix}" ]]; then
+    local eh_node_directory
+    eh_node_directory="$(dirname "$(realpath -e "${error_hub_system_node}")")" || return $?
+    if [[ ! "${eh_node_directory}" =~ ^/opt/nodejs/node-v22[.]23[.][23]-linux-x64/bin$ ]] \
+      || [[ "$(stat -c '%u:%g' /opt/nodejs/current)" != 0:0 ]]; then
+      printf 'The system Node.js selector must refer to a protected pinned release.\n' >&2
+      return 1
+    fi
+    while [[ "${eh_node_directory}" != / ]]; do
+      if [[ "$(stat -c '%a:%u:%g' "${eh_node_directory}")" != 755:0:0 ]]; then
+        printf 'System Node.js release directories must be root-owned with mode 0755.\n' >&2
+        return 1
+      fi
+      eh_node_directory="$(dirname "${eh_node_directory}")"
+    done
   fi
   eh_node_attributes="$(stat -c '%a:%u:%g:%h' "${error_hub_system_node}")" \
     || return $?
   if [[ "${eh_node_attributes}" != "755:0:0:1" ]]; then
     printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
-      "${error_hub_system_node_version}" >&2
+      "${error_hub_system_node_versions}" >&2
     return 1
   fi
   eh_node_version="$("${error_hub_system_node}" --version 2>/dev/null)" \
     || return $?
-  if [[ "${eh_node_version}" != "${error_hub_system_node_version}" ]]; then
+  if [[ "${eh_node_version}" != v22.23.2 && "${eh_node_version}" != v22.23.3 ]]; then
     printf 'SentryBox requires the root-owned system Node.js %s executable at /opt/nodejs/current/bin/node.\n' \
-      "${error_hub_system_node_version}" >&2
+      "${error_hub_system_node_versions}" >&2
     return 1
   fi
 }
-
-# The deploy unit uses UMask=0077 for state, but public tracked assets must keep
-# their repository modes so the non-root runtime can read and execute them.
-error_hub_checkout_detached() (
-  local eh_checkout_sha="$1"
-  umask 022
-  error_hub_git checkout --quiet --detach "${eh_checkout_sha}"
-)
 
 error_hub_read_state() {
   local eh_requested_state_file="$1"
@@ -407,7 +403,7 @@ error_hub_compose_up() {
   error_hub_require_runtime_environment || return $?
   ERROR_HUB_IMAGE="${eh_compose_image}" \
     ERROR_HUB_PRIVATE_ORIGIN="${eh_compose_origin}" \
-    docker compose --file "${error_hub_compose_file}" \
+    error_hub_docker_compose \
       up -d --wait --remove-orphans
 }
 

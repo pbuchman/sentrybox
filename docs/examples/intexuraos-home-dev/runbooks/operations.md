@@ -1,9 +1,9 @@
 # Home Dev operations
 
-Run the Home Dev operational check from the canonical checkout as root:
+Run the Home Dev operational check from the protected control release as root:
 
 ```bash
-sudo /home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh
+sudo /opt/sentrybox-control/current/deploy/home-dev/monitor.sh
 ```
 
 The installed `sentrybox-monitor.timer` runs this check every five minutes,

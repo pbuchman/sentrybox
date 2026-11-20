@@ -1,0 +1,14 @@
+[Unit]
+Description=SentryBox restricted deployment request socket
+
+[Socket]
+ListenStream=/run/sentrybox-deploy-request.sock
+SocketUser=root
+SocketGroup=sentrybox-webhook
+SocketMode=0660
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_directory
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
@@ -10,6 +10,7 @@ readonly database_operations="${script_directory}/database-operations.mjs"
 readonly mode="${1:-}"
 error_hub_require_command docker
 error_hub_require_command mktemp
+readonly protected_files="${script_directory}/protected-files.py"
 readonly final_backup="${error_hub_backup_directory}/predeploy.sqlite"
 
 record_backup_state() {
@@ -91,6 +92,7 @@ finalize_retained_snapshot() (
     printf 'Retained backup requires a numeric non-root runtime UID and GID.\n' >&2
     return 1
   fi
+  error_hub_require_root_private_file "${final_backup}" "Pre-deployment backup"
   require_safe_snapshot "${final_backup}" "Pre-deployment backup"
   temporary_directory="${error_hub_backup_directory}/.retained-finalize"
   temporary_retained="${temporary_directory}/.retained.sqlite.COPY000"
@@ -191,8 +193,8 @@ finalize_retained_snapshot() (
     "/retained/${temporary_retained##*/}" \
     <"${database_operations}"
   require_safe_snapshot "${temporary_retained}" "Retained backup"
-  chmod 0600 "${temporary_retained}"
-  mv -f "${temporary_retained}" "${final_backup}"
+  /usr/bin/python3 -I "${protected_files}" seal-backup \
+    "${temporary_retained}" "${final_backup}" "${runtime_uid}" "${runtime_gid}"
 )
 
 if [[ "${mode}" == "scheduled" ]]; then
@@ -213,7 +215,8 @@ if [[ "${mode}" == "scheduled" ]]; then
     record_scheduled_failure deployment_state_invalid \
       'Scheduled external backup is disabled/degraded, and deployment state is invalid.'
   fi
-  if ! require_safe_snapshot "${final_backup}" "Retained backup"; then
+  if ! error_hub_require_root_private_file "${final_backup}" "Retained backup" \
+    || ! require_safe_snapshot "${final_backup}" "Retained backup"; then
     record_scheduled_failure retained_snapshot_invalid \
       'Scheduled external backup is disabled/degraded, and no retained snapshot is available.'
   fi
@@ -265,11 +268,11 @@ if [[ ! "${runtime_uid}" =~ ^[1-9][0-9]*$ \
   exit 1
 fi
 
-mkdir -p "${error_hub_backup_directory}"
-chmod 0700 "${error_hub_backup_directory}"
-readonly temporary_backup="${error_hub_backup_directory}/.predeploy.sqlite.tmp"
-rm -f "${temporary_backup}"
-trap 'rm -f "${temporary_backup}"' EXIT
+temporary_directory="$(mktemp -d "${error_hub_backup_directory}/.online-backup.XXXXXX")"
+readonly temporary_directory
+readonly temporary_backup="${temporary_directory}/.predeploy.sqlite.tmp"
+trap 'rm -rf -- "${temporary_directory}"' EXIT
+chown "${runtime_uid}:${runtime_gid}" "${temporary_directory}"
 
 docker run --rm --interactive \
   --user "${runtime_uid}:${runtime_gid}" \
@@ -280,15 +283,15 @@ docker run --rm --interactive \
   --tmpfs /tmp:size=32m,mode=1777 \
   --label sentrybox-check=online-backup \
   --mount "type=bind,src=${error_hub_data_directory},dst=/data" \
-  --mount "type=bind,src=${error_hub_backup_directory},dst=/backup" \
+  --mount "type=bind,src=${temporary_directory},dst=/backup" \
   --entrypoint node \
   "${image}" \
   --input-type=module - online-backup \
   <"${database_operations}"
 
 require_safe_snapshot "${temporary_backup}" "SQLite online backup"
-chmod 0600 "${temporary_backup}"
-mv -f "${temporary_backup}" "${final_backup}"
+/usr/bin/python3 -I "${protected_files}" seal-backup \
+  "${temporary_backup}" "${final_backup}" "${runtime_uid}" "${runtime_gid}"
 find "${error_hub_backup_directory}" -maxdepth 1 -type f \
   -name '*.sqlite' ! -name 'predeploy.sqlite' -delete
 

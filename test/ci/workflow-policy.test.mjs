@@ -207,7 +207,7 @@ test("CI and release isolate Alpine deploy tests and run network contracts on th
     );
     assert.match(
       workflow,
-      /-c 'apk add --no-cache git jq >\/dev\/null && bats deploy\/home-dev\/test\/deploy\.bats deploy\/home-dev\/test\/backup-retention\.bats'/u,
+      /-c 'apk add --no-cache acl git jq python3 >\/dev\/null && bats deploy\/home-dev\/test\/deploy\.bats deploy\/home-dev\/test\/backup-retention\.bats'/u,
     );
     assert.doesNotMatch(
       workflow,
@@ -368,9 +368,16 @@ test("network runbook uses the canonical installer and verifies live fragments",
   const networkRunbook = await source(
     "docs/examples/intexuraos-home-dev/runbooks/network-exposure.md",
   );
+  const protectedRunbook = await source(
+    "docs/examples/intexuraos-home-dev/runbooks/protected-control.md",
+  );
   assert.match(
     networkRunbook,
-    /sudo \.\/deploy\/home-dev\/install\.sh \\\n+\s+--private-origin "https:\/\/<home-dev-tailnet-name>:8443"/u,
+    /\[protected control installation\]\(protected-control\.md\)/u,
+  );
+  assert.match(
+    protectedRunbook,
+    /sudo "\/opt\/sentrybox-control\/releases\/\$\{control_sha\}\/deploy\/home-dev\/install\.sh"[\s\S]*?--private-origin "\$\{private_origin\}"/u,
   );
   assert.match(
     networkRunbook,

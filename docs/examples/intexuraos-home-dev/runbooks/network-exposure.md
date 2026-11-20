@@ -18,15 +18,14 @@ no application login because tailnet ACLs are the access boundary.
 
 Before the first `install.sh` run, create the exact two-name credential file.
 The installer fails closed and starts no service when this file is absent,
-empty, malformed, or contains any extra name. Run this from the canonical
-checkout on Home Dev; it prompts on the terminal and never places either value
+empty, malformed, or contains any extra name. Run this on Home Dev; it prompts on the terminal and never places either value
 in a command argument, environment variable, repository file, or log:
 
 ```bash
 sudo bash -c '
 set -euo pipefail
-credential_file=/home/pbuchman/services/sentrybox/env
-install -d -m 0700 /home/pbuchman/services/sentrybox
+credential_file=/var/lib/sentrybox/env
+install -d -m 0700 /var/lib/sentrybox
 read -r -s -p "CODE_AGENT_HMAC_DEV: " code_agent_hmac_dev
 printf "\n" >&2
 read -r -s -p "CODE_AGENT_HMAC_PROD: " code_agent_hmac_prod
@@ -55,14 +54,14 @@ The canonical fragments are:
 - `deploy/home-dev/caddy-sentrybox-deploy.caddy`
 
 Installation copies the normal ingest and deploy callback sources to these live
-paths; the maintenance source stays versioned in the canonical checkout until
+paths; the maintenance source stays in the protected control release until
 a deployment or operator window activates it:
 
 - `/etc/caddy/Caddyfile.d/sentrybox.caddy`
 - `/etc/caddy/Caddyfile.d/sentrybox-deploy.caddy`
 
 The Home Dev Caddyfile imports `/etc/caddy/Caddyfile.d/*.caddy`; it does not
-import either source directly from the deployment checkout. When
+import either source directly from the protected control directory. When
 `sentrybox-deploy.service` runs the deployment transaction, only the live
 `sentrybox.caddy` ingest fragment is temporarily replaced from the checked-in
 maintenance fragment and then restored from `deploy/home-dev/caddy-sentrybox.caddy`.
@@ -72,23 +71,19 @@ methods. The live deploy callback fragment remains unchanged.
 For an operator change, run the complete change through the checked-in wrapper:
 
 ```bash
-sudo ./deploy/home-dev/maintenance-window.sh -- /absolute/path/to/operator-command argument
+sudo /opt/sentrybox-control/current/deploy/home-dev/maintenance-window.sh -- /absolute/path/to/operator-command argument
 ```
 
-The wrapper holds `/run/lock/sentrybox-deploy.lock`, installs the checked-in
+The wrapper holds `/var/lib/sentrybox-deploy/deployment.lock`, installs the checked-in
 maintenance fragment, validates the complete Caddy configuration before each
 reload, and restores the normal fragment on success, command failure, or a
 handled signal. The operator command must contain the complete transaction; do
 not enter maintenance in one command and perform the change after its lock has
 been released.
 
-Only after the credential bootstrap completes, run the canonical installer as
-root with the actual private tailnet origin:
-
-```bash
-sudo ./deploy/home-dev/install.sh \
-  --private-origin "https://<home-dev-tailnet-name>:8443"
-```
+After the credential bootstrap completes, follow the
+[protected control installation](protected-control.md) using the actual
+private tailnet origin.
 
 Then verify the installed live fragments before every reload:
 
@@ -103,7 +98,7 @@ sudo systemctl reload caddy
 ```
 
 The dedicated validation directories keep Caddy's internal-PKI validation
-state out of the canonical Git checkout.
+state in its private runtime directory.
 
 ## Bootstrap the first verified deployment
 
@@ -158,12 +153,12 @@ sudo test ! -e /var/lib/sentrybox-deploy/bootstrap-github-token
 sudo test ! -L /var/lib/sentrybox-deploy/bootstrap-github-token
 ```
 
-The tool resolves current `main` without modifying the checkout, asks GitHub's
+The tool resolves current `main` against the canonical HTTPS repository, asks GitHub's
 fixed `release-image.yml` workflow endpoint for an already-successful
 `Release SentryBox Image` push run for exactly that SHA, writes the same
 root-private request used by the webhook, and starts
 `sentrybox-deploy.service`. The deploy service independently fetches and
-verifies `origin/main` plus the immutable image before any runtime change. The
+verifies canonical `main` and the immutable image before any runtime change. The
 source is removed only after the successful deployment consumes its request;
 it remains available after a failure so the operator can diagnose and retry.
 Revoke the provider token immediately after that success and local removal. It
@@ -206,7 +201,7 @@ unlisted routes continue to reach Caddy and return `404`.
 With SentryBox healthy on `127.0.0.1:8141`, run:
 
 ```bash
-sudo /home/pbuchman/deploy/sentrybox/deploy/home-dev/configure-tailscale.sh
+sudo /opt/sentrybox-control/current/deploy/home-dev/configure-tailscale.sh
 ```
 
 This applies only:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly script_directory
 # shellcheck source=deploy/home-dev/common.sh
 source "${script_directory}/common.sh"
@@ -24,7 +24,7 @@ if [[ ! "${runtime_uid}" =~ ^[1-9][0-9]*$ \
 fi
 
 for required_path in \
-  "${error_hub_checkout}" \
+  "${error_hub_control_assets}" \
   "${error_hub_service_root}" \
   "${error_hub_data_directory}" \
   "${error_hub_environment_file}" \
@@ -42,12 +42,6 @@ error_hub_require_service_credentials
 
 error_hub_require_free_space "${error_hub_service_root}"
 
-write_probe="${error_hub_data_directory}/.preflight-write.$$"
-trap 'rm -f "${write_probe}"' EXIT
-umask 077
-: >"${write_probe}"
-rm -f "${write_probe}"
-
 docker info >/dev/null
 docker compose version >/dev/null
 
@@ -57,7 +51,7 @@ for port in 8140 8141; do
     container_id="$(
       ERROR_HUB_IMAGE="${candidate_image}" \
         ERROR_HUB_PRIVATE_ORIGIN="${ERROR_HUB_PRIVATE_ORIGIN:-https://preflight.invalid}" \
-        docker compose --file "${error_hub_compose_file}" ps -q sentrybox
+        error_hub_docker_compose ps -q sentrybox
     )"
     if [[ -z "${container_id}" ]]; then
       printf 'Port %s is occupied by a process outside SentryBox Compose.\n' "${port}" >&2
@@ -72,8 +66,6 @@ for port in 8140 8141; do
   fi
 done
 
-container_write_probe="${error_hub_data_directory}/.container-preflight"
-rm -f "${container_write_probe}"
 docker run --rm --interactive \
   --user "${runtime_uid}:${runtime_gid}" \
   --network none \
@@ -87,7 +79,6 @@ docker run --rm --interactive \
   "${candidate_image}" \
   --input-type=module - runtime-write \
   <"${database_operations}" >/dev/null
-rm -f "${container_write_probe}"
 
 docker run --rm \
   --read-only \

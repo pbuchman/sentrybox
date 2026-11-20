@@ -19,35 +19,37 @@ setup() {
     "${fixture_root}/fake-state" \
     "${fixture_root}/etc/caddy/Caddyfile.d" \
     "${fixture_root}/etc/systemd/system" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/.git/objects" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev" \
-    "${fixture_root}/home/pbuchman/services/sentrybox/data" \
-    "${fixture_root}/home/pbuchman/services/sentrybox/backups" \
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev" \
+    "${fixture_root}/var/lib/sentrybox/data" \
+    "${fixture_root}/var/lib/sentrybox/backups" \
     "${fixture_root}/opt/nodejs/current/bin" \
     "${fixture_root}/run/lock" \
     "${fixture_root}/var/lib/sentrybox-deploy"
-  chmod 0700 "${fixture_root}/var/lib/sentrybox-deploy"
+  chmod 0700 "${fixture_root}/var/lib/sentrybox-deploy" "${fixture_root}/var/lib/sentrybox" \
+    "${fixture_root}/var/lib/sentrybox/data" "${fixture_root}/var/lib/sentrybox/backups"
+  chown 1000:1000 "${fixture_root}/var/lib/sentrybox/data"
+  umask 077
   : >"${ERROR_HUB_COMMAND_LOG}"
-  printf '%s\n' "${ERROR_HUB_FAKE_HEAD_SHA}" >"${ERROR_HUB_FAKE_STATE}/git-head"
 
   cp "${repository_root}/deploy/home-dev/compose.yaml" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/compose.yaml"
   cp "${repository_root}/deploy/home-dev/config.example.json" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/config.example.json"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/config.example.json"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox.caddy"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox-maintenance.caddy" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox-deploy.caddy" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-deploy.caddy"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-deploy.caddy"
   cp "${repository_root}/deploy/home-dev/database-operations.mjs" \
-    "${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/database-operations.mjs"
+    "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/database-operations.mjs"
   printf '{ import Caddyfile.d/*.caddy }\n' >"${fixture_root}/etc/caddy/Caddyfile"
   printf '%s\n' \
     'CODE_AGENT_HMAC_DEV=redacted' \
     'CODE_AGENT_HMAC_PROD=redacted' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/env"
-  chmod 0600 "${fixture_root}/home/pbuchman/services/sentrybox/env"
+    >"${fixture_root}/var/lib/sentrybox/env"
+  chmod 0600 "${fixture_root}/var/lib/sentrybox/env"
+  chown 1000:1000 "${fixture_root}/var/lib/sentrybox/env"
   printf '%s\n' "${ERROR_HUB_PRIVATE_ORIGIN}" \
     >"${fixture_root}/var/lib/sentrybox-deploy/private-origin"
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/private-origin"
@@ -108,43 +110,12 @@ EOF
   cat >"${fixture_root}/fake-bin/git" <<'EOF'
 #!/bin/sh
 printf 'git %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
-printf 'git-umask %s %s\n' "$(umask)" "$*" >>"${ERROR_HUB_COMMAND_LOG}"
-if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ] && printf '%s' "$*" | grep -q ' fetch '; then
+if [ "${ERROR_HUB_FAKE_BLOCK_FETCH:-0}" = 1 ]; then
   : >"${ERROR_HUB_FAKE_STATE}/fetch-blocked"
   sleep 0.4
 fi
-if [ -n "${ERROR_HUB_FAKE_NON_CANONICAL_SHA:-}" ] \
-  && printf '%s' "$*" | grep -Fq \
-    "merge-base --is-ancestor ${ERROR_HUB_FAKE_NON_CANONICAL_SHA} origin/main"; then
-  exit 1
-fi
-case "$*" in
-  *"remote get-url origin"*) printf '%s\n' 'https://github.com/pbuchman/sentrybox.git' ;;
-  *"status --porcelain"*) ;;
-  *"rev-parse origin/main"*) printf '%s\n' "${ERROR_HUB_EXPECTED_SHA}" ;;
-  *"rev-parse HEAD"*) cat "${ERROR_HUB_FAKE_STATE}/git-head" ;;
-  *"fetch --quiet origin main"*)
-    if [ "${ERROR_HUB_FAKE_FETCH_OBJECT:-0}" = 1 ]; then
-      object_directory="${ERROR_HUB_TEST_ROOT}/home/pbuchman/deploy/sentrybox/.git/objects/bb"
-      mkdir -p "${object_directory}"
-      printf 'fetched-object\n' >"${object_directory}/fetched"
-    fi
-    ;;
-  *"checkout --quiet --detach"*)
-    checkout_sha=''
-    for git_argument do checkout_sha="${git_argument}"; done
-    if [ "${ERROR_HUB_FAKE_CHECKOUT_FAIL_ONCE_SHA:-}" = "${checkout_sha}" ] \
-      && [ ! -e "${ERROR_HUB_FAKE_STATE}/checkout-failed-once-${checkout_sha}" ]; then
-      : >"${ERROR_HUB_FAKE_STATE}/checkout-failed-once-${checkout_sha}"
-      exit 1
-    fi
-    if [ "${ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA:-}" = "${checkout_sha}" ]; then
-      exit 1
-    fi
-    printf '%s\n' "${checkout_sha}" >"${ERROR_HUB_FAKE_STATE}/git-head"
-    ;;
-  *) ;;
-esac
+[ "$*" = 'ls-remote --exit-code https://github.com/pbuchman/sentrybox.git refs/heads/main' ] || exit 1
+printf '%s\trefs/heads/main\n' "${ERROR_HUB_FAKE_MAIN_SHA:-${ERROR_HUB_EXPECTED_SHA}}"
 EOF
 
   cat >"${fixture_root}/fake-bin/docker" <<'EOF'
@@ -241,12 +212,20 @@ if [ "$1" = run ]; then
     backup_root="$(printf '%s\n' "$*" | sed -n 's/.*src=\([^,]*\),dst=\/backup.*/\1/p')"
     [ -n "${backup_root}" ] || exit 1
     printf 'consistent-backup\n' >"${backup_root}/.predeploy.sqlite.tmp"
+    chown 1000:1000 "${backup_root}/.predeploy.sqlite.tmp"
+    chmod 0600 "${backup_root}/.predeploy.sqlite.tmp"
     if [ "${ERROR_HUB_FAKE_BACKUP_OVERSIZE:-0}" = 1 ]; then
       truncate -s 5368709121 "${backup_root}/.predeploy.sqlite.tmp"
     fi
   fi
   if [ "${ERROR_HUB_FAKE_COMPAT_FAIL:-0}" = 1 ] && printf '%s' "$*" | grep -q 'compatibility-previous'; then
     exit 1
+  fi
+  if printf '%s' "$*" | grep -q 'rollback-restore'; then
+    data_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/data.*#\1#p')"
+    snapshot_root="$(printf '%s\n' "$*" | sed -n 's#.*src=\([^,]*\),dst=/snapshot.*#\1#p')"
+    cp "${snapshot_root}/snapshot.sqlite" "${data_root}/error-hub.sqlite"
+    chown 1000:1000 "${data_root}/error-hub.sqlite"
   fi
   if [ "${ERROR_HUB_FAKE_INTEGRITY_FAIL:-0}" = 1 ] && printf '%s' "$*" | grep -q 'rollback-integrity'; then
     exit 1
@@ -259,6 +238,9 @@ if printf ' %s ' "$*" | grep -q ' compose .* up -d --wait --remove-orphans '; th
   [ -f "${count_file}" ] && count="$(cat "${count_file}")"
   count=$((count + 1))
   printf '%s\n' "${count}" >"${count_file}"
+  if [ "${ERROR_HUB_FAKE_PREVIOUS_UP_FAILS:-0}" -ge "${count}" ] && [ "${count}" -gt 1 ]; then
+    exit 1
+  fi
   [ "${ERROR_HUB_FAKE_UP_FAIL:-0}" = 1 ] && [ "${count}" -eq 1 ] && exit 1
   exit 0
 fi
@@ -458,6 +440,10 @@ if [ "$1" = show ]; then
   esac
   exit 0
 fi
+if [ "$1" = is-enabled ] && [ "$2" = --quiet ]; then
+  [ -f "${ERROR_HUB_FAKE_STATE}/enabled-$3" ]
+  exit
+fi
 if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
   [ -f "${ERROR_HUB_FAKE_STATE}/active-$3" ]
   exit
@@ -522,18 +508,18 @@ EOF
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
 
   [ "${status}" -eq 0 ]
-  [ -d "${fixture_root}/home/pbuchman/deploy/sentrybox" ]
-  [ -f "${fixture_root}/home/pbuchman/services/sentrybox/env" ]
-  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/data" ]
-  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/backups" ]
-  [ -d "${fixture_root}/home/pbuchman/services/sentrybox/deploy" ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/env")" = 600 ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/data")" = 700 ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/backups")" = 700 ]
-  [ "$(stat -c '%a' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = 700 ]
-  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/deploy")" = '0:0' ]
+  [ -d "${fixture_root}/opt/sentrybox-control/current/deploy/home-dev" ]
+  [ -f "${fixture_root}/var/lib/sentrybox/env" ]
+  [ -d "${fixture_root}/var/lib/sentrybox/data" ]
+  [ -d "${fixture_root}/var/lib/sentrybox/backups" ]
+  [ -d "${fixture_root}/etc/sentrybox" ]
+  [ "$(stat -c '%a' "${fixture_root}/var/lib/sentrybox/env")" = 600 ]
+  [ "$(stat -c '%a' "${fixture_root}/var/lib/sentrybox/data")" = 700 ]
+  [ "$(stat -c '%a' "${fixture_root}/var/lib/sentrybox/backups")" = 700 ]
+  [ "$(stat -c '%a' "${fixture_root}/etc/sentrybox")" = 700 ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/etc/sentrybox")" = '0:0' ]
   [ "$(stat -c '%a:%u:%g' "${fixture_root}/var/lib/sentrybox-deploy")" = '700:0:0' ]
-  run find "${fixture_root}/home/pbuchman/services/sentrybox/deploy" -mindepth 1 -print
+  run find "${fixture_root}/etc/sentrybox" -mindepth 1 -print
   [ "${status}" -eq 0 ]
   [ -z "${output}" ]
   [ -f "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy" ]
@@ -570,13 +556,13 @@ EOF
   run grep -F 'systemctl restart sentrybox-deploy-webhook.service' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
-  run sh -c "find '${fixture_root}/home/pbuchman/services' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
+  run sh -c "find '${fixture_root}/var/lib/sentrybox' -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | sort"
   [ "${status}" -eq 0 ]
-  [ "${output}" = 'sentrybox' ]
+  [ "${output}" = $'backups\ndata\nenv' ]
 }
 
 @test "install restarts an already-active legacy webhook only after publishing the canonical unit" {
-  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  webhook_secret="${fixture_root}/etc/sentrybox/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
   chmod 0700 "${webhook_secret%/*}"
   printf '%064d\n' 0 >"${webhook_secret}"
@@ -592,7 +578,7 @@ EOF
 
   [ "${status}" -eq 0 ]
   grep -Fx \
-    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless /opt/sentrybox-control/current/deploy/home-dev/deploy-webhook.mjs' \
     "${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
   detect_line="$(grep -n -m1 -F \
     'systemctl is-active --quiet sentrybox-deploy-webhook.service' \
@@ -621,7 +607,7 @@ EOF
 }
 
 @test "install allows bounded listener startup before proving webhook stability" {
-  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  webhook_secret="${fixture_root}/etc/sentrybox/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
   chmod 0700 "${webhook_secret%/*}"
   printf '%064d\n' 0 >"${webhook_secret}"
@@ -642,7 +628,7 @@ EOF
 }
 
 @test "install fails closed when the webhook stability wait fails" {
-  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  webhook_secret="${fixture_root}/etc/sentrybox/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
   chmod 0700 "${webhook_secret%/*}"
   printf '%064d\n' 0 >"${webhook_secret}"
@@ -663,7 +649,7 @@ EOF
 }
 
 @test "install rejects a webhook that is only briefly active after restart" {
-  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  webhook_secret="${fixture_root}/etc/sentrybox/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
   chmod 0700 "${webhook_secret%/*}"
   printf '%064d\n' 0 >"${webhook_secret}"
@@ -684,7 +670,7 @@ EOF
 }
 
 @test "active webhook installation rejects an unsafe credential before publishing units" {
-  webhook_secret="${fixture_root}/home/pbuchman/services/sentrybox/deploy/github-webhook-secret"
+  webhook_secret="${fixture_root}/etc/sentrybox/github-webhook-secret"
   mkdir -p "${webhook_secret%/*}"
   chmod 0700 "${webhook_secret%/*}"
   : >"${ERROR_HUB_FAKE_STATE}/active-sentrybox-deploy-webhook.service"
@@ -738,14 +724,14 @@ EOF
 }
 
 @test "fresh installation requires exact service credentials before starting SentryBox" {
-  credential_file="${fixture_root}/home/pbuchman/services/sentrybox/env"
+  credential_file="${fixture_root}/var/lib/sentrybox/env"
   rm -f "${credential_file}"
 
   run "${repository_root}/deploy/home-dev/install.sh" \
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
 
   [ "${status}" -ne 0 ]
-  [[ "${output}" == *"must be created before installation"* ]]
+  [[ "${output}" == *"credential file must be a regular file"* ]]
   [ ! -e "${fixture_root}/etc/systemd/system/sentrybox.service" ]
 
   printf '%s\n' \
@@ -816,7 +802,7 @@ EOF
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
 
   [ "${status}" -ne 0 ]
-  [[ "${output}" == *"deployment state directory must be a regular directory"* ]]
+  [[ "${output}" == *"deployment state or private directory must be a regular directory"* ]]
   [ -L "${state_directory}" ]
   [ "$(stat -c '%a' "${state_directory}.target")" = 755 ]
 }
@@ -878,7 +864,12 @@ EOF
 
   run "${repository_root}/deploy/home-dev/install.sh" \
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+  [ "${status}" -ne 0 ]
+  [ "$(stat -c '%a' "${runtime_env}")" = 644 ]
 
+  chmod 0600 "${runtime_env}"
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
   [ "${status}" -eq 0 ]
   [ "$(stat -c '%a' "${runtime_env}")" = 600 ]
   run grep -Fx \
@@ -943,7 +934,7 @@ EOF
 }
 
 @test "install and preflight reject invalid steady-state service credentials" {
-  credential_file="${fixture_root}/home/pbuchman/services/sentrybox/env"
+  credential_file="${fixture_root}/var/lib/sentrybox/env"
   image="ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
   for credentials in \
@@ -1070,11 +1061,11 @@ EOF
   run bash -c ". '${repository_root}/deploy/home-dev/common.sh'; error_hub_health_checks '${ERROR_HUB_PRIVATE_ORIGIN}' '${image}'"
 
   [ "${status}" -ne 0 ]
-  context_file="$(find "${fixture_root}/home/pbuchman/services/sentrybox/data" \
+  context_file="$(find "${fixture_root}/var/lib/sentrybox/data" \
     -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print)"
   [ -f "${context_file}" ]
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
 
   : >"${ERROR_HUB_COMMAND_LOG}"
   run "${repository_root}/deploy/home-dev/preflight.sh" "${image}"
@@ -1108,14 +1099,14 @@ EOF
     [ "${status}" -ne 0 ]
     run grep -F 'synthetic-cleanup' "${ERROR_HUB_COMMAND_LOG}"
     [ "${status}" -eq 0 ]
-    run find "${fixture_root}/home/pbuchman/services/sentrybox/data" \
+    run find "${fixture_root}/var/lib/sentrybox/data" \
       -maxdepth 1 -type f -name 'synthetic-public-check.[0-9]*.json' -print
     [ -z "${output}" ]
   done
 }
 
 @test "deploy lock rejects contention before consuming the webhook request" {
-  lock="${fixture_root}/run/lock/sentrybox-deploy.lock"
+  lock="${fixture_root}/var/lib/sentrybox-deploy/deployment.lock"
   exec 8>"${lock}"
   flock -n 8
 
@@ -1126,113 +1117,21 @@ EOF
   [ -f "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
-@test "deploy marks only the canonical checkout as safe for root Git operations" {
+@test "deployment queries canonical main without reading or modifying a checkout" {
   run "${repository_root}/deploy/home-dev/deploy.sh"
-
   [ "${status}" -eq 0 ]
-  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
-  run grep -F "git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} fetch --quiet origin main" \
-    "${ERROR_HUB_COMMAND_LOG}"
+  [ "$(grep '^git ' "${ERROR_HUB_COMMAND_LOG}")" =     'git ls-remote --exit-code https://github.com/pbuchman/sentrybox.git refs/heads/main' ]
+  run grep -F -- "--env-file /dev/null --project-directory ${fixture_root}/opt/sentrybox-control/current/deploy/home-dev"     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  run sh -c "grep '^git ' '${ERROR_HUB_COMMAND_LOG}' | grep -vF 'git -c safe.directory=${canonical_checkout} -C ${canonical_checkout} '"
-  [ "${status}" -ne 0 ]
 }
 
-@test "deploy refuses a candidate before checkout when current state and canonical HEAD disagree" {
-  deployed_sha='cccccccccccccccccccccccccccccccccccccccc'
-  checkout_sha='dddddddddddddddddddddddddddddddddddddddd'
-  write_runtime_state \
-    'ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
-    "${deployed_sha}"
-  printf '%s\n' "${checkout_sha}" >"${fixture_root}/fake-state/git-head"
-
+@test "deployment rejects an application SHA other than current canonical main" {
+  export ERROR_HUB_FAKE_MAIN_SHA='dddddddddddddddddddddddddddddddddddddddd'
   run "${repository_root}/deploy/home-dev/deploy.sh"
-
   [ "${status}" -ne 0 ]
-  [[ "${output}" == *"does not match deployment state"* ]]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${checkout_sha}" ]
-  run grep -F "checkout --quiet --detach ${ERROR_HUB_EXPECTED_SHA}" \
-    "${ERROR_HUB_COMMAND_LOG}"
+  [[ "${output}" == *"is not the current canonical main commit"* ]]
+  run grep -F ' pull ' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
-  run grep '^docker ERROR_HUB_IMAGE= pull ' "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -ne 0 ]
-}
-
-@test "detached checkout preserves tracked modes under the private deployment umask" {
-  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
-  real_path="${PATH#"${fixture_root}/fake-bin:"}"
-  PATH="${real_path}" git -C "${canonical_checkout}" init --quiet
-  PATH="${real_path}" git -C "${canonical_checkout}" \
-    -c user.name='SentryBox Test' \
-    -c user.email='sentrybox-test@example.invalid' \
-    commit --quiet --allow-empty -m base
-  base_sha="$(PATH="${real_path}" git -C "${canonical_checkout}" rev-parse HEAD)"
-
-  printf '{}\n' >"${canonical_checkout}/tracked-config.json"
-  printf '#!/bin/sh\nexit 0\n' >"${canonical_checkout}/tracked-script.sh"
-  chmod 0644 "${canonical_checkout}/tracked-config.json"
-  chmod 0755 "${canonical_checkout}/tracked-script.sh"
-  PATH="${real_path}" git -C "${canonical_checkout}" add \
-    tracked-config.json tracked-script.sh
-  PATH="${real_path}" git -C "${canonical_checkout}" \
-    -c user.name='SentryBox Test' \
-    -c user.email='sentrybox-test@example.invalid' \
-    commit --quiet -m assets
-  assets_sha="$(PATH="${real_path}" git -C "${canonical_checkout}" rev-parse HEAD)"
-  PATH="${real_path}" git -C "${canonical_checkout}" checkout --quiet --detach "${base_sha}"
-
-  run env \
-    ERROR_HUB_TEST_MODE=1 \
-    ERROR_HUB_TEST_ROOT="${fixture_root}" \
-    PATH="${real_path}" \
-    bash -c "umask 077; source '${repository_root}/deploy/home-dev/common.sh'; error_hub_checkout_detached '${assets_sha}'"
-
-  [ "${status}" -eq 0 ]
-  [ "$(stat -c '%a' "${canonical_checkout}/tracked-config.json")" = 644 ]
-  [ "$(stat -c '%a' "${canonical_checkout}/tracked-script.sh")" = 755 ]
-}
-
-@test "deploy and rollback use the mode-preserving checkout helper" {
-  write_runtime_state
-  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
-  printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
-  export ERROR_HUB_FAKE_BACKUP_FAIL=1
-
-  run bash -c "umask 077; '${repository_root}/deploy/home-dev/deploy.sh'"
-
-  [ "${status}" -ne 0 ]
-  run grep -F \
-    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} checkout --quiet --detach ${ERROR_HUB_EXPECTED_SHA}" \
-    "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
-  run grep -F \
-    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
-    "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
-}
-
-@test "root deployment repairs existing objects and creates fetched objects readable by the checkout owner" {
-  canonical_checkout="${fixture_root}/home/pbuchman/deploy/sentrybox"
-  existing_directory="${canonical_checkout}/.git/objects/aa"
-  mkdir -p "${existing_directory}"
-  printf 'existing-object\n' >"${existing_directory}/existing"
-  chmod 0700 "${canonical_checkout}/.git/objects" "${existing_directory}"
-  chmod 0400 "${existing_directory}/existing"
-  export ERROR_HUB_FAKE_FETCH_OBJECT=1
-
-  run "${repository_root}/deploy/home-dev/deploy.sh"
-
-  [ "${status}" -eq 0 ]
-  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects")" = 755 ]
-  [ "$(stat -c '%a' "${existing_directory}")" = 755 ]
-  [ "$(stat -c '%a' "${existing_directory}/existing")" = 644 ]
-  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects/bb")" = 755 ]
-  [ "$(stat -c '%a' "${canonical_checkout}/.git/objects/bb/fetched")" = 644 ]
-  run grep -F \
-    "git-umask 0022 -c safe.directory=${canonical_checkout} -C ${canonical_checkout} fetch --quiet origin main" \
-    "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
 }
 
 @test "deploy rejects wrong webhook identity and removes the claimed request" {
@@ -1296,7 +1195,7 @@ EOF
 @test "failed readiness automatically restores the previous digest before checking the database" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -1309,76 +1208,55 @@ EOF
   [ -n "${first_integrity}" ]
   [ "${first_previous}" -lt "${first_integrity}" ]
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]
   grep -Fx 'ERROR_HUB_DEPLOYED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  rollback_checkout_line="$(
-    grep -n 'checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-      "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1
-  )"
-  rollback_restart_line="$(
-    grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' \
-      "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
-  )"
-  [ -n "${rollback_checkout_line}" ]
-  [ -n "${rollback_restart_line}" ]
-  [ "${rollback_checkout_line}" -lt "${rollback_restart_line}" ]
-  [ "$(grep -Fc \
-    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
-    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
   run grep -F 'respond "temporarily unavailable" 503' \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
   [ "${status}" -ne 0 ]
 }
 
-@test "automatic rollback retries the complete reconciliation after a transient checkout failure" {
+@test "automatic rollback retries the complete reconciliation after a transient previous-image start failure" {
   previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   write_runtime_state \
     'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${previous_sha}"
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
-  export ERROR_HUB_FAKE_CHECKOUT_FAIL_ONCE_SHA="${previous_sha}"
+  export ERROR_HUB_FAKE_PREVIOUS_UP_FAILS=2
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${previous_sha}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
-  [ "$(grep -Fc \
-    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${previous_sha}" \
-    "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 4 ]
   run grep -F \
     'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa compose' \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
 }
 
-@test "automatic rollback stops the failed candidate and preserves prior state after persistent checkout failure" {
+@test "automatic rollback stops the failed candidate and preserves prior state after persistent previous-image start failure" {
   previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_sha="${ERROR_HUB_EXPECTED_SHA}"
   candidate_image='ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   write_runtime_state \
     'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${previous_sha}"
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
-  export ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA="${previous_sha}"
+  export ERROR_HUB_FAKE_PREVIOUS_UP_FAILS=5
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *'Automatic rollback reconciliation failed; the failed candidate was stopped'* ]]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 1 ]
+  [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 5 ]
   run grep -F \
-    "ERROR_HUB_IMAGE=${candidate_image} compose --file ${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/compose.yaml stop --timeout 30 sentrybox" \
+    "ERROR_HUB_IMAGE=${candidate_image} compose --env-file /dev/null --project-directory ${fixture_root}/opt/sentrybox-control/current/deploy/home-dev --file ${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/compose.yaml stop --timeout 30 sentrybox" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -F 'respond "temporarily unavailable" 503' \
@@ -1393,7 +1271,7 @@ EOF
   chmod 0600 "${fixture_root}/var/lib/sentrybox-deploy/runtime.env"
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -1418,22 +1296,22 @@ EOF
   cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
     "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'consistent-backup\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
 
   run "${repository_root}/deploy/home-dev/rollback.sh"
   [ "${status}" -eq 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
 
   export ERROR_HUB_FAKE_INTEGRITY_FAIL=1
   run "${repository_root}/deploy/home-dev/rollback.sh"
   [ "${status}" -eq 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'consistent-backup' ]
-  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = '1000:1000' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite")" = 'consistent-backup' ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite")" = '1000:1000' ]
 }
 
-@test "operator rollback reconciles the canonical checkout, runtime, and current state to the previous release" {
+@test "operator rollback uses the locally recorded previous release and the protected Compose" {
   previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
   previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -1442,28 +1320,31 @@ EOF
   cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
     "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
   write_runtime_state "${candidate_image}" "${candidate_sha}"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
 
   run "${repository_root}/deploy/home-dev/rollback.sh"
 
   [ "${status}" -eq 0 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${previous_sha}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${previous_sha}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  run grep -F "fetch --quiet origin main" "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
-  run grep -F "merge-base --is-ancestor ${previous_sha} origin/main" \
-    "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
-  run grep -F "checkout --quiet --detach ${previous_sha}" \
-    "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
+  run grep '^git ' "${ERROR_HUB_COMMAND_LOG}"
+  [ "${status}" -ne 0 ]
   run grep -F "ERROR_HUB_IMAGE=${previous_image} compose" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
 }
 
-@test "rollback refuses a previous SHA that is not reachable from canonical origin main" {
+@test "rollback refuses unprotected previous digest state" {
+  write_runtime_state
+  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env"     "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+  chmod 0666 "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
+
+  run "${repository_root}/deploy/home-dev/rollback.sh"
+
+  [ "${status}" -ne 0 ]
+  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
+}
+
+@test "rollback restores the previously deployed runtime when the target runtime cannot start" {
   previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
   previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -1472,74 +1353,11 @@ EOF
   cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
     "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
   write_runtime_state "${candidate_image}" "${candidate_sha}"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
-  export ERROR_HUB_FAKE_NON_CANONICAL_SHA="${previous_sha}"
-
-  run "${repository_root}/deploy/home-dev/rollback.sh"
-
-  [ "${status}" -ne 0 ]
-  [[ "${output}" == *"not reachable from canonical origin/main"* ]]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
-  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
-    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
-}
-
-@test "operator rollback requires current state to match the canonical checkout" {
-  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
-  write_runtime_state \
-    'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    "${previous_sha}"
-  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
-    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
-
-  run "${repository_root}/deploy/home-dev/rollback.sh"
-
-  [ "${status}" -ne 0 ]
-  [[ "${output}" == *"does not match deployment state"* ]]
-  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
-}
-
-@test "rollback leaves the running release and state untouched when previous checkout reconciliation fails" {
-  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
-  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-  write_runtime_state "${previous_image}" "${previous_sha}"
-  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
-    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
-  write_runtime_state "${candidate_image}" "${candidate_sha}"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
-  export ERROR_HUB_FAKE_CHECKOUT_FAIL_SHA="${previous_sha}"
-
-  run "${repository_root}/deploy/home-dev/rollback.sh"
-
-  [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
-  grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
-    "${fixture_root}/var/lib/sentrybox-deploy/current.env"
-  [ ! -e "${fixture_root}/fake-state/compose-up-count" ]
-}
-
-@test "rollback restores the previously deployed runtime and HEAD when the target runtime cannot start" {
-  previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
-  previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  candidate_image='ghcr.io/pbuchman/sentrybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-  write_runtime_state "${previous_image}" "${previous_sha}"
-  cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
-    "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
-  write_runtime_state "${candidate_image}" "${candidate_sha}"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
   export ERROR_HUB_FAKE_UP_FAIL=1
 
   run "${repository_root}/deploy/home-dev/rollback.sh"
 
   [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
@@ -1548,7 +1366,7 @@ EOF
   [ "${status}" -eq 0 ]
 }
 
-@test "rollback restores the original checkout runtime and state after previous health failure" {
+@test "rollback restores the original runtime and state after previous health failure" {
   previous_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   candidate_sha='cccccccccccccccccccccccccccccccccccccccc'
   previous_image='ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -1557,13 +1375,11 @@ EOF
   cp "${fixture_root}/var/lib/sentrybox-deploy/current.env" \
     "${fixture_root}/var/lib/sentrybox-deploy/previous.env"
   write_runtime_state "${candidate_image}" "${candidate_sha}"
-  printf '%s\n' "${candidate_sha}" >"${fixture_root}/fake-state/git-head"
   export ERROR_HUB_FAKE_READINESS_FAIL=1
 
   run "${repository_root}/deploy/home-dev/rollback.sh"
 
   [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${candidate_sha}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${candidate_sha}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
@@ -1571,19 +1387,13 @@ EOF
     grep -n "ERROR_HUB_IMAGE=${previous_image} compose" \
       "${ERROR_HUB_COMMAND_LOG}" | head -1 | cut -d: -f1
   )"
-  original_checkout_line="$(
-    grep -n "checkout --quiet --detach ${candidate_sha}" \
-      "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
-  )"
   original_restart_line="$(
     grep -n "ERROR_HUB_IMAGE=${candidate_image} compose" \
       "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1
   )"
   [ -n "${previous_restart_line}" ]
-  [ -n "${original_checkout_line}" ]
   [ -n "${original_restart_line}" ]
-  [ "${previous_restart_line}" -lt "${original_checkout_line}" ]
-  [ "${original_checkout_line}" -lt "${original_restart_line}" ]
+  [ "${previous_restart_line}" -lt "${original_restart_line}" ]
 }
 
 @test "direct rollback rejects unsafe persistent runtime reference metadata" {
@@ -1628,17 +1438,17 @@ EOF
 @test "predeploy backup uses SQLite online backup and removes unknown snapshots" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'stale\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/old.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/old.sqlite"
 
   run "${repository_root}/deploy/home-dev/backup.sh" predeploy \
     "ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
   [ "${status}" -eq 0 ]
-  [ -s "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite" ]
-  [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/old.sqlite" ]
-  [ "$(find "${fixture_root}/home/pbuchman/services/sentrybox/backups" -maxdepth 1 -name '*.sqlite' | wc -l | tr -d ' ')" -eq 1 ]
+  [ -s "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite" ]
+  [ ! -e "${fixture_root}/var/lib/sentrybox/backups/old.sqlite" ]
+  [ "$(find "${fixture_root}/var/lib/sentrybox/backups" -maxdepth 1 -name '*.sqlite' | wc -l | tr -d ' ')" -eq 1 ]
   run grep -F 'online-backup' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -E '(^| )cp .*/data/error-hub.sqlite' "${ERROR_HUB_COMMAND_LOG}"
@@ -1648,21 +1458,21 @@ EOF
 @test "scheduled backup re-scrubs the retained snapshot before reporting the missing target" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
 
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"Retained snapshot scrub passed"* ]]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
-  [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/scheduled.sqlite" ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
+  [ ! -e "${fixture_root}/var/lib/sentrybox/backups/scheduled.sqlite" ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   run grep -F -- '--user 1000:1000' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  [ "$(stat -c '%u:%g' "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = '1000:1000' ]
+  [ "$(stat -c '%u:%g' "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = '0:0' ]
   backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
   [ "$(stat -c '%a:%u:%g:%h' "${backup_state}")" = '600:0:0:1' ]
   grep -Fx 'EXTERNAL_STATUS=disabled_degraded' "${backup_state}"
@@ -1670,10 +1480,10 @@ EOF
   grep -Fx 'LOCAL_SCRUB_STATUS=success' "${backup_state}"
   grep -Fx 'LOCAL_SCRUB_REASON=none' "${backup_state}"
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/backup.success" ]
-  run grep -F "src=${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize,dst=/retained" \
+  run grep -F "src=${fixture_root}/var/lib/sentrybox/backups/.retained-finalize,dst=/retained" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  run grep -F "src=${fixture_root}/home/pbuchman/services/sentrybox/backups,dst=/retained" \
+  run grep -F "src=${fixture_root}/var/lib/sentrybox/backups,dst=/retained" \
     "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
 }
@@ -1695,8 +1505,8 @@ EOF
 @test "scheduled backup does not scrub the rollback snapshot while deployment holds the lock" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
-  exec 8>"${fixture_root}/run/lock/sentrybox-deploy.lock"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
+  exec 8>"${fixture_root}/var/lib/sentrybox-deploy/deployment.lock"
   flock -n 8
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
@@ -1705,7 +1515,7 @@ EOF
   exec 8>&-
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"disabled/degraded"* ]]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
   backup_state="${fixture_root}/var/lib/sentrybox-deploy/backup.state"
@@ -1716,13 +1526,13 @@ EOF
 @test "scheduled backup recovers a validated retained-finalize staging tree after interruption" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_RETAINED_CRASH=1
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
 
   [ "${status}" -ne 0 ]
-  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+  staging="${fixture_root}/var/lib/sentrybox/backups/.retained-finalize"
   [ -d "${staging}" ]
   [ -f "${staging}/.retained.sqlite.COPY000" ]
 
@@ -1740,8 +1550,8 @@ EOF
 @test "scheduled backup recovers exactly an empty root-owned retained-finalize directory left before ownership transfer" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
-  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
+  staging="${fixture_root}/var/lib/sentrybox/backups/.retained-finalize"
   install -d -o 0 -g 0 -m 0700 "${staging}"
   printf 'preserve-me\n' >"${staging}/unexpected"
   chmod 0600 "${staging}/unexpected"
@@ -1766,8 +1576,8 @@ EOF
 @test "scheduled backup refuses an unsafe retained-finalize staging tree without deleting it" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
-  staging="${fixture_root}/home/pbuchman/services/sentrybox/backups/.retained-finalize"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
+  staging="${fixture_root}/var/lib/sentrybox/backups/.retained-finalize"
   install -d -o 1000 -g 1000 -m 0700 "${staging}"
   printf 'preserve-me\n' >"${staging}/unexpected"
   chown 1000:1000 "${staging}/unexpected"
@@ -1786,7 +1596,7 @@ EOF
 @test "scheduled backup reports retained-finalize staging cleanup failure" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_RETAINED_CLEANUP_FAIL=1
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
@@ -1801,7 +1611,7 @@ EOF
 @test "scheduled backup records a retained snapshot scrub failure" {
   write_runtime_state
   printf 'corrupt-retained-snapshot\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_RETAINED_FAIL=1
 
   run "${repository_root}/deploy/home-dev/backup.sh" scheduled
@@ -1817,16 +1627,16 @@ EOF
 @test "restore test validates a private copy with the current runtime and never mounts live data" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
 
   [ "${status}" -eq 0 ]
   [ "$(cat "${fixture_root}/fake-state/restore-copy")" = 'predeploy-good' ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   [ -f "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success" ]
   [ "$(stat -c '%a:%u:%g:%h' "${fixture_root}/var/lib/sentrybox-deploy/restore-test.success")" = '600:0:0:1' ]
   run grep -F 'ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
@@ -1850,8 +1660,8 @@ EOF
 @test "restore test does not capture state or backup while deployment owns the lock" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
-  exec 8>"${fixture_root}/run/lock/sentrybox-deploy.lock"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
+  exec 8>"${fixture_root}/var/lib/sentrybox-deploy/deployment.lock"
   flock -n 8
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
@@ -1867,16 +1677,16 @@ EOF
 @test "failed restore test cleans its private copy without changing live data or the backup" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_RESTORE_FAIL=1
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
 
   [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite")" = 'live-database' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'predeploy-good' ]
   run find "${fixture_root}/var/lib/sentrybox-deploy" -maxdepth 1 \
     -type d -name 'restore-test.*' -print
   [ "${status}" -eq 0 ]
@@ -1886,7 +1696,7 @@ EOF
 @test "restore test removes an unexpected bounded artifact and its named container" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_RESTORE_EXTRA=1
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
@@ -1904,7 +1714,7 @@ EOF
 @test "restore test reports container cleanup failure instead of claiming success" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   marker="${fixture_root}/var/lib/sentrybox-deploy/restore-test.success"
   printf 'previous-validation\n' >"${marker}"
   chmod 0600 "${marker}"
@@ -1926,7 +1736,7 @@ EOF
 @test "restore test leaves the existing success marker unchanged when temporary-tree cleanup fails" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   marker="${fixture_root}/var/lib/sentrybox-deploy/restore-test.success"
   printf 'previous-validation\n' >"${marker}"
   chmod 0600 "${marker}"
@@ -1944,7 +1754,7 @@ EOF
 @test "restore test preserves the 15 GiB host reserve before copying the snapshot" {
   write_runtime_state
   printf 'predeploy-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_AVAILABLE_KIB=$((15 * 1024 * 1024))
 
   run "${repository_root}/deploy/home-dev/restore-test.sh"
@@ -1958,13 +1768,13 @@ EOF
 @test "retained-finalize failure keeps the full backup and rolls the deployment back" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_RETAINED_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
@@ -1975,21 +1785,21 @@ EOF
 
 @test "first deployment finalize failure removes the uncommitted current state" {
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_RETAINED_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
 
   [ "${status}" -ne 0 ]
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/current.env" ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
 }
 
 @test "oversized backup is rejected without replacing the last known-good snapshot" {
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   printf 'last-known-good\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite"
   export ERROR_HUB_FAKE_BACKUP_OVERSIZE=1
 
   run "${repository_root}/deploy/home-dev/backup.sh" predeploy \
@@ -1997,14 +1807,15 @@ EOF
 
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"5 GiB"* ]]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'last-known-good' ]
-  [ ! -e "${fixture_root}/home/pbuchman/services/sentrybox/backups/.predeploy.sqlite.tmp" ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'last-known-good' ]
+  run find "${fixture_root}/var/lib/sentrybox/backups" -name '*.tmp' -print
+  [ -z "${output}" ]
 }
 
 @test "backup failure aborts deployment before the new image starts and normal Caddy is restored" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_BACKUP_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -2016,14 +1827,12 @@ EOF
   [ "${status}" -eq 0 ]
   run grep -F 'systemctl reload caddy' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
-  run grep -F "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}"
-  [ "${status}" -eq 0 ]
 }
 
 @test "migration probe requires the immediately previous runtime to read the upgraded copy" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_COMPAT_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -2055,7 +1864,7 @@ EOF
   run grep -F 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   [ "${status}" -eq 0 ]
-  run grep -F 'compose --file' "${ERROR_HUB_COMMAND_LOG}"
+  run grep -F 'compose --env-file /dev/null --project-directory' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"up -d --wait --remove-orphans"* ]]
 }
@@ -2128,10 +1937,10 @@ EOF
   [ ! -e "${fixture_root}/var/lib/sentrybox-deploy/deploy-request.json" ]
 }
 
-@test "failed current state commit reconciles checkout before restoring the previous runtime" {
+@test "failed current state commit restores the previously committed digest" {
   write_runtime_state
   printf 'live-database\n' \
-    >"${fixture_root}/home/pbuchman/services/sentrybox/data/error-hub.sqlite"
+    >"${fixture_root}/var/lib/sentrybox/data/error-hub.sqlite"
   export ERROR_HUB_FAKE_STATE_WRITE_FAIL=1
 
   run "${repository_root}/deploy/home-dev/deploy.sh"
@@ -2141,24 +1950,17 @@ EOF
   run grep -F ' stop --timeout 30 sentrybox' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -ne 0 ]
   rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
-  checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
-  [ -n "${checkout_line}" ]
-  [ "${checkout_line}" -lt "${rollback_line}" ]
-  [ "$(grep -Fc \
-    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
-    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${ERROR_HUB_FAKE_HEAD_SHA}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${ERROR_HUB_FAKE_HEAD_SHA}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
   run find "${fixture_root}/var/lib/sentrybox-deploy" -name 'current.env.tmp.*' -print
   [ -z "${output}" ]
-  [ "$(cat "${fixture_root}/home/pbuchman/services/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
+  [ "$(cat "${fixture_root}/var/lib/sentrybox/backups/predeploy.sqlite")" = 'consistent-backup' ]
   run grep -F 'retained-finalize' "${ERROR_HUB_COMMAND_LOG}"
   [ "${status}" -eq 0 ]
 }
 
-@test "termination after runtime switch reconciles checkout before restoring the previous runtime" {
+@test "termination after runtime switch restores the previously committed digest" {
   write_runtime_state
   export ERROR_HUB_FAKE_READINESS_BLOCK=1
 
@@ -2177,14 +1979,7 @@ EOF
   [ "${status}" -eq 143 ]
   [ "$(cat "${fixture_root}/fake-state/compose-up-count")" -eq 2 ]
   rollback_line="$(grep -n 'ERROR_HUB_IMAGE=ghcr.io/pbuchman/sentrybox@sha256:aaaaaaaa.*compose .* up -d --wait --remove-orphans' "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
-  checkout_line="$(grep -n "checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" "${ERROR_HUB_COMMAND_LOG}" | tail -1 | cut -d: -f1)"
   [ -n "${rollback_line}" ]
-  [ -n "${checkout_line}" ]
-  [ "${checkout_line}" -lt "${rollback_line}" ]
-  [ "$(grep -Fc \
-    "git -c safe.directory=${fixture_root}/home/pbuchman/deploy/sentrybox -C ${fixture_root}/home/pbuchman/deploy/sentrybox checkout --quiet --detach ${ERROR_HUB_FAKE_HEAD_SHA}" \
-    "${ERROR_HUB_COMMAND_LOG}")" -eq 1 ]
-  [ "$(cat "${fixture_root}/fake-state/git-head")" = "${ERROR_HUB_FAKE_HEAD_SHA}" ]
   grep -Fx "ERROR_HUB_DEPLOYED_SHA=${ERROR_HUB_FAKE_HEAD_SHA}" \
     "${fixture_root}/var/lib/sentrybox-deploy/current.env"
 }
@@ -2203,9 +1998,9 @@ EOF
   restore_unit="${fixture_root}/etc/systemd/system/sentrybox-restore-test.service"
   run grep -F 'StateDirectory=sentrybox-deploy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/deploy.sh' "${deploy_unit}"
+  run grep -F 'ExecStart=/opt/sentrybox-control/current/deploy/home-dev/deploy.sh' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ExecStopPost=/usr/bin/install -m 0644 /home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy' "${deploy_unit}"
+  run grep -F 'ExecStopPost=/usr/bin/install -m 0644 /opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox.caddy /etc/caddy/Caddyfile.d/sentrybox.caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ExecStopPost=/usr/bin/caddy validate --config /etc/caddy/Caddyfile' "${deploy_unit}"
   [ "${status}" -eq 0 ]
@@ -2218,14 +2013,14 @@ EOF
   grep -Fx 'TemporaryFileSystem=/var/log/caddy:rw,nosuid,nodev,noexec,mode=0700,size=1M' "${deploy_unit}"
   run grep -F 'ExecStopPost=/usr/bin/systemctl reload caddy' "${deploy_unit}"
   [ "${status}" -eq 0 ]
-  run grep -F 'WorkingDirectory=/home/pbuchman/deploy/sentrybox' "${runtime_unit}"
+  run grep -F 'WorkingDirectory=/opt/sentrybox-control/current/deploy/home-dev' "${runtime_unit}"
   [ "${status}" -eq 0 ]
-  run grep -Fx 'Environment=ERROR_HUB_RUNTIME_ENV_FILE=/var/lib/sentrybox-deploy/runtime.env' \
+  run grep -Fx 'ExecStop=/opt/sentrybox-control/current/deploy/home-dev/runtime.sh stop' \
     "${runtime_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'Persistent=true' "${backup_timer}"
   [ "${status}" -eq 0 ]
-  run grep -Fx 'ExecStart=/home/pbuchman/deploy/sentrybox/deploy/home-dev/monitor.sh' \
+  run grep -Fx 'ExecStart=/opt/sentrybox-control/current/deploy/home-dev/monitor.sh' \
     "${monitor_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx 'StandardOutput=journal' "${monitor_unit}"
@@ -2244,9 +2039,6 @@ EOF
   [ "${status}" -eq 0 ]
   run grep -Fx 'ProtectHome=tmpfs' "${monitor_unit}"
   [ "${status}" -eq 0 ]
-  run grep -Fx \
-    'BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox' "${monitor_unit}"
-  [ "${status}" -eq 0 ]
   run grep -Fx 'PrivateTmp=true' "${monitor_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx 'TimeoutStartSec=30s' "${monitor_unit}"
@@ -2261,7 +2053,7 @@ EOF
   [ "${status}" -ne 0 ]
   run grep -F 'Persistent=true' "${restore_timer}"
   [ "${status}" -eq 0 ]
-  run grep -F 'ConditionFileIsExecutable=/home/pbuchman/deploy/sentrybox/deploy/home-dev/restore-test.sh' "${restore_unit}"
+  run grep -F 'ConditionFileIsExecutable=/opt/sentrybox-control/current/deploy/home-dev/restore-test.sh' "${restore_unit}"
   [ "${status}" -eq 0 ]
   run grep -F 'ConditionPathIsExecutable=' "${restore_unit}"
   [ "${status}" -ne 0 ]
@@ -2272,14 +2064,14 @@ EOF
   [ "${status}" -eq 0 ]
 }
 
-@test "deployment webhook runs Node jitless with only its checkout visible under home" {
+@test "deployment webhook runs Node jitless with the protected control release and a separate account" {
   run "${repository_root}/deploy/home-dev/install.sh" \
     --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
   [ "${status}" -eq 0 ]
 
   webhook_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy-webhook.service"
   run grep -Fx \
-    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/deploy-webhook.mjs' \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless /opt/sentrybox-control/current/deploy/home-dev/deploy-webhook.mjs' \
     "${webhook_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx 'MemoryMax=128M' "${webhook_unit}"
@@ -2289,7 +2081,7 @@ EOF
   run grep -Fx 'ProtectHome=tmpfs' "${webhook_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx \
-    'BindReadOnlyPaths=/home/pbuchman/deploy/sentrybox' \
+    'User=sentrybox-webhook' \
     "${webhook_unit}"
   [ "${status}" -eq 0 ]
   run grep -Fx \
@@ -2298,7 +2090,7 @@ EOF
   [ "${status}" -eq 0 ]
   run grep '^InaccessiblePaths=' "${webhook_unit}"
   [ "${status}" -eq 0 ]
-  [ "${output}" = $'InaccessiblePaths=\nInaccessiblePaths=/var/run/docker.sock' ]
+  [ "${output}" = 'InaccessiblePaths=/var/run/docker.sock /run/dbus/system_bus_socket' ]
 }
 
 @test "first-release bootstrap is installed for one-time fixed-source activation" {
@@ -2308,7 +2100,7 @@ EOF
 
   bootstrap_unit="${fixture_root}/etc/systemd/system/sentrybox-deploy-bootstrap.service"
   grep -Fx \
-    'ExecStart=/opt/nodejs/current/bin/node --jitless deploy/home-dev/bootstrap-release.mjs' \
+    'ExecStart=/opt/nodejs/current/bin/node --jitless /opt/sentrybox-control/current/deploy/home-dev/bootstrap-release.mjs' \
     "${bootstrap_unit}"
   grep -Fx \
     'ConditionPathExists=/var/lib/sentrybox-deploy/bootstrap-github-token' \
@@ -2321,7 +2113,7 @@ EOF
 }
 
 @test "deploy installs the versioned maintenance fragment before runtime mutation" {
-  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  maintenance_fragment="${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cat >"${maintenance_fragment}" <<'EOF'
 errors.intexuraos.cloud:80 {
 	handle {
@@ -2343,7 +2135,7 @@ EOF
 @test "maintenance window holds the deploy lock and restores normal routing after command failure" {
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
-  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  maintenance_fragment="${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cat >"${maintenance_fragment}" <<'EOF'
 errors.intexuraos.cloud:80 {
 	handle {
@@ -2357,7 +2149,7 @@ EOF
 #!/bin/sh
 grep -F 'header Retry-After "120"' \
   "${ERROR_HUB_TEST_ROOT}/etc/caddy/Caddyfile.d/sentrybox.caddy" >/dev/null
-exec 8>"${ERROR_HUB_TEST_ROOT}/run/lock/sentrybox-deploy.lock"
+exec 8>"${ERROR_HUB_TEST_ROOT}/var/lib/sentrybox-deploy/deployment.lock"
 if flock -n 8; then
   printf 'maintenance command did not inherit deploy lock protection\n' >&2
   exit 64
@@ -2385,7 +2177,7 @@ EOF
 @test "maintenance validation failure never reloads the invalid route and still restores normal routing" {
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
-  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  maintenance_fragment="${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cat >"${maintenance_fragment}" <<'EOF'
 errors.intexuraos.cloud:80 {
 	handle {
@@ -2410,10 +2202,10 @@ EOF
 @test "maintenance window rejects lock contention before changing the live route" {
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${fixture_root}/etc/caddy/Caddyfile.d/sentrybox.caddy"
-  maintenance_fragment="${fixture_root}/home/pbuchman/deploy/sentrybox/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
+  maintenance_fragment="${fixture_root}/opt/sentrybox-control/current/deploy/home-dev/caddy-sentrybox-maintenance.caddy"
   cp "${repository_root}/deploy/home-dev/caddy-sentrybox.caddy" \
     "${maintenance_fragment}"
-  lock="${fixture_root}/run/lock/sentrybox-deploy.lock"
+  lock="${fixture_root}/var/lib/sentrybox-deploy/deployment.lock"
   exec 8>"${lock}"
   flock -n 8
 
@@ -2564,4 +2356,49 @@ EOF
   [ "${status}" -eq 70 ]
   [[ "${output}" == *"Normal Caddy routing could not be restored"* ]]
   [ "$(grep -c '^systemctl reload caddy$' "${ERROR_HUB_COMMAND_LOG}")" -eq 2 ]
+}
+
+@test "legacy cutover preserves the database and SQLite sidecars through rename" {
+  legacy="${fixture_root}/home/pbuchman/services/sentrybox"
+  protected="${fixture_root}/var/lib/sentrybox"
+  mkdir -p "${legacy}/deploy"
+  chmod 0700 "${legacy}" "${legacy}/deploy"
+  mv "${protected}/env" "${protected}/data" "${protected}/backups" "${legacy}/"
+  chown 1000:1000 "${legacy}/backups"
+  printf 'synthetic database\n' >"${legacy}/data/error-hub.sqlite"
+  printf 'synthetic sidecar\n' >"${legacy}/data/error-hub.sqlite-wal"
+  printf 'synthetic snapshot\n' >"${legacy}/backups/predeploy.sqlite"
+  chown 1000:1000 "${legacy}/backups/predeploy.sqlite"
+  printf '%064d\n' 0 >"${legacy}/deploy/github-webhook-secret"
+  printf 'fixture tunnel token\n' >"${legacy}/deploy/cloudflare-tunnel-token"
+  write_runtime_state
+  database_inode="$(stat -c '%d:%i' "${legacy}/data/error-hub.sqlite")"
+  sidecar_inode="$(stat -c '%d:%i' "${legacy}/data/error-hub.sqlite-wal")"
+  state_checksum="$(sha256sum "${fixture_root}/var/lib/sentrybox-deploy/current.env")"
+
+  export ERROR_HUB_FAKE_SYSTEMD_VERIFY_FAIL=1
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --migrate --start-webhook
+
+  [ "${status}" -ne 0 ]
+  [ -f "${legacy}/deploy/cloudflare-tunnel-token" ]
+  cmp -s "${legacy}/deploy/cloudflare-tunnel-token" \
+    "${fixture_root}/etc/sentrybox/cloudflare-tunnel-token"
+  unset ERROR_HUB_FAKE_SYSTEMD_VERIFY_FAIL
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --migrate --start-webhook
+
+  [ "${status}" -eq 0 ]
+  [ "$(stat -c '%d:%i' "${protected}/data/error-hub.sqlite")" = "${database_inode}" ]
+  [ "$(stat -c '%d:%i' "${protected}/data/error-hub.sqlite-wal")" = "${sidecar_inode}" ]
+  [ "$(cat "${protected}/backups/predeploy.sqlite")" = 'synthetic snapshot' ]
+  [ "$(stat -c '%a:%u:%g:%h' "${protected}/backups/predeploy.sqlite")" = '600:0:0:1' ]
+  [ "$(stat -c '%a:%u:%g:%h' "${fixture_root}/etc/sentrybox/github-webhook-secret")" = '600:0:0:1' ]
+  [ "$(stat -c '%a:%u:%g:%h' "${fixture_root}/etc/sentrybox/cloudflare-tunnel-token")" = '600:0:0:1' ]
+  [ "$(sha256sum "${fixture_root}/var/lib/sentrybox-deploy/current.env")" = "${state_checksum}" ]
+  [ ! -e "${legacy}/data" ]
+  [ ! -e "${legacy}/env" ]
+  [ ! -e "${legacy}/deploy/cloudflare-tunnel-token" ]
+  [ ! -e "${legacy}/backups" ]
 }

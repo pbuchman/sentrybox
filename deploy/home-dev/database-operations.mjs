@@ -1,6 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -361,10 +369,15 @@ async function runRetentionValidation(filename, eventAgeMs) {
 }
 
 async function runCli() {
+  process.umask(0o077);
   const command = process.argv[2];
   if (command === "runtime-write") {
-    const filename = "/data/.container-preflight";
-    writeFileSync(filename, "ok", { encoding: "utf8", mode: 0o600 });
+    const filename = `/data/.container-preflight.${randomBytes(16).toString("hex")}`;
+    writeFileSync(filename, "ok", {
+      flag: "wx",
+      encoding: "utf8",
+      mode: 0o600,
+    });
     rmSync(filename);
     return;
   }
@@ -403,6 +416,23 @@ async function runCli() {
       "/data/error-hub.sqlite",
       CURRENT_MIGRATION_VERSION,
     );
+    return;
+  }
+  if (command === "rollback-restore") {
+    const database = "/data/error-hub.sqlite";
+    const temporary = `/data/.rollback.${randomBytes(16).toString("hex")}`;
+    copyFileSync(
+      "/snapshot/snapshot.sqlite",
+      temporary,
+      constants.COPYFILE_EXCL,
+    );
+    try {
+      renameSync(temporary, database);
+      rmSync(`${database}-wal`, { force: true });
+      rmSync(`${database}-shm`, { force: true });
+    } finally {
+      rmSync(temporary, { force: true });
+    }
     return;
   }
   if (command === "restore-test") {
