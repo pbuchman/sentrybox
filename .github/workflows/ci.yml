@@ -53,6 +53,10 @@ jobs:
             bats/bats:1.12.0@sha256:0257e4f5326dd37046e94d4b8ce07c293447be80a9db6d6dfff1d50d07617e2e \
             -c 'apk add --no-cache acl git jq python3 >/dev/null && bats deploy/home-dev/test/deploy.bats deploy/home-dev/test/backup-retention.bats'
           shellcheck deploy/home-dev/*.sh
+      - name: Verify relay TLS and lifecycle on Ubuntu with systemd 255
+        run: |
+          shellcheck deploy/home-dev/test/verify-worker-relay.sh deploy/home-dev/test/worker-relay-fixture.sh
+          deploy/home-dev/test/verify-worker-relay.sh
       - name: Check formatting
         run: pnpm format:check
       - name: Lint

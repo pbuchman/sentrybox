@@ -135,6 +135,7 @@ error_hub_verify_webhook_stability() {
 private_origin=""
 migrate=0
 start_webhook=0
+enable_worker_relay=0
 while (( $# > 0 )); do
   case "$1" in
     --private-origin)
@@ -151,6 +152,10 @@ while (( $# > 0 )); do
       ;;
     --start-webhook)
       start_webhook=1
+      shift
+      ;;
+    --enable-worker-relay)
+      enable_worker_relay=1
       shift
       ;;
     *)
@@ -208,6 +213,39 @@ exec 8>"${error_hub_state_directory}/install.lock"
 flock -n 8
 exec 9>"${error_hub_lock_file}"
 flock -n 9
+
+readonly worker_relay_socket=sentrybox-worker-relay.socket
+readonly worker_relay_environment="${error_hub_deploy_credentials_directory}/worker-relay.env"
+worker_relay_was_enabled=0
+if systemctl is-enabled --quiet "${worker_relay_socket}"; then
+  worker_relay_was_enabled=1
+  enable_worker_relay=1
+fi
+if (( enable_worker_relay == 1 )); then
+  if [[ ! -f "${script_directory}/wait-worker-relay-gateway.sh" \
+    || -L "${script_directory}/wait-worker-relay-gateway.sh" \
+    || ! -x "${script_directory}/wait-worker-relay-gateway.sh" ]]; then
+    printf 'Required Home Dev worker relay readiness executable is unavailable.\n' >&2
+    exit 1
+  fi
+  error_hub_require_command tailscale
+  error_hub_require_command jq
+  if ! worker_relay_target="$(
+    tailscale status --json 2>/dev/null | jq --exit-status --raw-output --slurp '
+      select(length == 1) | .[0]
+      | select(.BackendState == "Running" and .Self.Online == true)
+      | .Self.DNSName | ascii_downcase | sub("[.]$"; "")
+      | select(length <= 253 and test("\\A(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?[.])+ts[.]net\\z"))
+      | . + ":8443"
+    ' 2>/dev/null
+  )" || [[ "${private_origin}" != "https://${worker_relay_target}" ]]; then
+    printf 'SentryBox private origin must match the online local Tailscale peer on port 8443.\n' >&2
+    exit 1
+  fi
+  if [[ -e "${worker_relay_environment}" || -L "${worker_relay_environment}" ]]; then
+    error_hub_require_root_private_file "${worker_relay_environment}" "SentryBox worker relay environment"
+  fi
+fi
 
 if (( migrate == 1 )); then
   for unit in sentrybox.service sentrybox-deploy.service sentrybox-deploy-bootstrap.service \
@@ -399,6 +437,11 @@ units=(
 if [[ -e "${tunnel_token}" && -f "${systemd_directory}/cloudflared.service" ]]; then
   units+=(cloudflared.service)
 fi
+if (( enable_worker_relay == 1 )); then
+  units+=("${worker_relay_socket}" sentrybox-worker-relay.service)
+  printf 'SENTRYBOX_WORKER_RELAY_TARGET=%s\n' "${worker_relay_target}" \
+    >"${install_staging}/worker-relay.env"
+fi
 staged_units=()
 for unit in "${units[@]}"; do
   install -m 0644 "${script_directory}/${unit}" "${install_staging}/units/${unit}"
@@ -428,9 +471,9 @@ error_hub_publish_root_private_file \
 
 
 publish_asset() {
-  local source="$1" destination="$2" temporary
+  local source="$1" destination="$2" mode="${3:-0644}" temporary
   temporary="$(mktemp "${destination}.XXXXXX")"
-  if ! install -m 0644 "${source}" "${temporary}" || ! mv -fT "${temporary}" "${destination}"; then
+  if ! install -m "${mode}" "${source}" "${temporary}" || ! mv -fT "${temporary}" "${destination}"; then
     rm -f -- "${temporary}"
     return 1
   fi
@@ -444,6 +487,10 @@ if [[ -z "${error_hub_prefix}" ]]; then
 fi
 publish_asset "${install_staging}/caddy/Caddyfile.d/sentrybox.caddy" "${error_hub_caddy_fragment}"
 publish_asset "${install_staging}/caddy/Caddyfile.d/sentrybox-deploy.caddy" "${error_hub_caddy_deploy_fragment}"
+if (( enable_worker_relay == 1 )); then
+  publish_asset "${install_staging}/worker-relay.env" "${worker_relay_environment}" 0600
+  error_hub_require_root_private_file "${worker_relay_environment}" "SentryBox worker relay environment"
+fi
 for unit in "${units[@]}"; do
   publish_asset "${script_directory}/${unit}" "${systemd_directory}/${unit}"
 done
@@ -510,6 +557,17 @@ done
 
 error_hub_validate_caddy >/dev/null
 systemctl reload caddy
+if (( enable_worker_relay == 1 )); then
+  if (( worker_relay_was_enabled == 1 )); then
+    systemctl restart "${worker_relay_socket}"
+  else
+    systemctl enable --now "${worker_relay_socket}" >/dev/null
+  fi
+  systemctl is-active --quiet "${worker_relay_socket}" || {
+    printf 'SentryBox worker relay socket is not active.\n' >&2
+    exit 1
+  }
+fi
 if [[ -e "${tunnel_migration}" ]]; then
   error_hub_require_root_private_file "${tunnel_migration}" "SentryBox tunnel migration marker"
   if [[ -e "${legacy_tunnel_token}" || -L "${legacy_tunnel_token}" ]]; then

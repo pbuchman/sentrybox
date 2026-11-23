@@ -1,0 +1,16 @@
+[Unit]
+Description=Forward SentryBox worker TLS to local Tailscale Serve
+BindsTo=sentrybox-worker-relay.socket
+After=sentrybox-worker-relay.socket
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/sentrybox/worker-relay.env
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=128 --exit-idle-time=5min ${SENTRYBOX_WORKER_RELAY_TARGET}
+DynamicUser=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+TimeoutStopSec=5s

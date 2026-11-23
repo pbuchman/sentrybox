@@ -484,6 +484,17 @@ printf 'systemd-analyze %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
 exit 0
 EOF
 
+  cat >"${fixture_root}/fake-bin/tailscale" <<'EOF'
+#!/bin/sh
+printf 'tailscale %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
+[ "$*" = 'status --json' ] || exit 1
+if [ -n "${ERROR_HUB_FAKE_TAILSCALE_STATUS:-}" ]; then
+  printf '%s\n' "${ERROR_HUB_FAKE_TAILSCALE_STATUS}"
+else
+  printf '%s\n' '{"BackendState":"Running","Self":{"Online":true,"DNSName":"home-dev.example.ts.net."}}'
+fi
+EOF
+
 cat >"${fixture_root}/fake-bin/sleep" <<'EOF'
 #!/bin/sh
 printf 'sleep %s\n' "$*" >>"${ERROR_HUB_COMMAND_LOG}"
@@ -501,6 +512,89 @@ EOF
   done
 
   chmod +x "${fixture_root}/fake-bin/"*
+}
+
+@test "ordinary control installation leaves the worker relay disabled without requiring Tailscale" {
+  run "${repository_root}/deploy/home-dev/install.sh" --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  [ ! -e "${fixture_root}/etc/sentrybox/worker-relay.env" ]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-worker-relay.socket" ]
+  ! grep -Fq 'tailscale status' "${ERROR_HUB_COMMAND_LOG}"
+}
+
+@test "opt-in publishes the matching MagicDNS target privately and enables only the relay socket" {
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --enable-worker-relay
+
+  [ "${status}" -eq 0 ]
+  relay_environment="${fixture_root}/etc/sentrybox/worker-relay.env"
+  [ "$(stat -c '%a:%u:%g:%h' "${relay_environment}")" = "600:0:0:1" ]
+  [ "$(cat "${relay_environment}")" = 'SENTRYBOX_WORKER_RELAY_TARGET=home-dev.example.ts.net:8443' ]
+  grep -F 'systemd-analyze verify' "${ERROR_HUB_COMMAND_LOG}" \
+    | grep -F 'sentrybox-worker-relay.socket' | grep -F 'sentrybox-worker-relay.service'
+  [ -f "${fixture_root}/etc/systemd/system/sentrybox-worker-relay.socket" ]
+  [ -f "${fixture_root}/etc/systemd/system/sentrybox-worker-relay.service" ]
+  [ -f "${ERROR_HUB_FAKE_STATE}/active-sentrybox-worker-relay.socket" ]
+  [ ! -e "${ERROR_HUB_FAKE_STATE}/enabled-sentrybox-worker-relay.service" ]
+  [ ! -e "${ERROR_HUB_FAKE_STATE}/active-sentrybox-worker-relay.service" ]
+}
+
+@test "a control update refreshes an enabled relay without a second opt-in" {
+  : >"${ERROR_HUB_FAKE_STATE}/enabled-sentrybox-worker-relay.socket"
+
+  run "${repository_root}/deploy/home-dev/install.sh" --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}"
+
+  [ "${status}" -eq 0 ]
+  grep -Fx 'systemctl restart sentrybox-worker-relay.socket' "${ERROR_HUB_COMMAND_LOG}"
+  [ -f "${fixture_root}/etc/sentrybox/worker-relay.env" ]
+}
+
+@test "opt-in rejects unrelated origins, unsupported ports, and an offline local peer before publishing units" {
+  local origin
+  for origin in https://other.example.ts.net:8443 https://home-dev.example.ts.net:443; do
+    run "${repository_root}/deploy/home-dev/install.sh" --private-origin "${origin}" --enable-worker-relay
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"must match the online local Tailscale peer on port 8443"* ]]
+  done
+
+  export ERROR_HUB_FAKE_TAILSCALE_STATUS='{"BackendState":"Running","Self":{"Online":false,"DNSName":"home-dev.example.ts.net."}}'
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --enable-worker-relay
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"must match the online local Tailscale peer on port 8443"* ]]
+  [ ! -e "${fixture_root}/etc/sentrybox/worker-relay.env" ]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox.service" ]
+}
+
+@test "opt-in refuses a symlink at the protected relay target file" {
+  install -d -m 0700 "${fixture_root}/etc/sentrybox"
+  printf '%s\n' preserve >"${fixture_root}/unrelated"
+  ln -s "${fixture_root}/unrelated" "${fixture_root}/etc/sentrybox/worker-relay.env"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --enable-worker-relay
+
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"SentryBox worker relay environment must be a regular file"* ]]
+  [ -L "${fixture_root}/etc/sentrybox/worker-relay.env" ]
+  [ "$(cat "${fixture_root}/unrelated")" = preserve ]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox.service" ]
+}
+
+@test "failed staged unit verification preserves the installed worker relay target" {
+  export ERROR_HUB_FAKE_SYSTEMD_VERIFY_FAIL=1
+  relay_environment="${fixture_root}/etc/sentrybox/worker-relay.env"
+  install -d -m 0700 "${fixture_root}/etc/sentrybox"
+  printf '%s\n' 'SENTRYBOX_WORKER_RELAY_TARGET=prior.example.ts.net:8443' >"${relay_environment}"
+
+  run "${repository_root}/deploy/home-dev/install.sh" \
+    --private-origin "${ERROR_HUB_PRIVATE_ORIGIN}" --enable-worker-relay
+
+  [ "${status}" -ne 0 ]
+  grep -F 'systemd-analyze verify' "${ERROR_HUB_COMMAND_LOG}" | grep -F 'sentrybox-worker-relay.socket'
+  [ "$(cat "${relay_environment}")" = 'SENTRYBOX_WORKER_RELAY_TARGET=prior.example.ts.net:8443' ]
+  [ ! -e "${fixture_root}/etc/systemd/system/sentrybox-worker-relay.socket" ]
 }
 
 @test "install creates only the canonical Home Dev application paths with restrictive permissions" {

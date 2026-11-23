@@ -1,0 +1,22 @@
+[Unit]
+Description=SentryBox HTTPS relay for the IntexuraOS worker bridge
+# The firewall needs Docker, which starts after basic.target.
+DefaultDependencies=no
+BindsTo=intexuraos-iptables.service
+After=intexuraos-iptables.service
+Conflicts=shutdown.target
+Before=multi-user.target shutdown.target
+ConditionPathExists=/etc/sentrybox/worker-relay.env
+JobTimeoutSec=45s
+
+[Socket]
+ListenStream=[fd00:172:28::1]:8443
+# Also adds BindsTo= and After= for the network device.
+BindToDevice=code-worker-br
+BindIPv6Only=ipv6-only
+Accept=no
+ExecStartPre=/opt/sentrybox-control/current/deploy/home-dev/wait-worker-relay-gateway.sh
+TimeoutSec=15s
+
+[Install]
+WantedBy=multi-user.target intexuraos-iptables.service sys-subsystem-net-devices-code\x2dworker\x2dbr.device
