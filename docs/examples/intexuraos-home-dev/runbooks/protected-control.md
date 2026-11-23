@@ -126,6 +126,49 @@ protected Compose project by running `sudo systemctl reload sentrybox.service`.
 The installer restarts the webhook if it was active. Pass `--start-webhook`
 to enable a configured webhook when it was previously stopped.
 
+## Enable the worker relay
+
+This option requires the exact Code Worker bridge, the active
+`intexuraos-iptables.service` host firewall, systemd 255, and working
+[private Tailscale Serve](network-exposure.md#configure-private-tailscale-access).
+Pass the configured private HTTPS origin on port `8443`.
+
+```bash
+sudo "/opt/sentrybox-control/releases/${control_sha}/deploy/home-dev/install.sh" \
+  --private-origin "${private_origin}" --enable-worker-relay
+sudo systemctl is-enabled sentrybox-worker-relay.socket
+sudo systemctl is-active sentrybox-worker-relay.socket
+sudo stat -c '%a:%U:%G:%h' /etc/sentrybox/worker-relay.env
+```
+
+The file metadata must read `600:root:root:1`. The installer compares the
+configured origin with the online node's `Self.DNSName` and stages only the
+verified hostname and port as `SENTRYBOX_WORKER_RELAY_TARGET`. The proxy starts
+on demand from the socket. Loss of the firewall or bridge stops both units and
+closes existing relay connections. An enabled socket rearms after the bridge
+and firewall are available and the exact IPv6 gateway is ready. Subsequent
+installs refresh an enabled relay even when the flag is omitted. Installations
+without the worker network can use the ordinary install command.
+
+## Roll back to control without the worker relay
+
+Pause use of the relay in the worker runtime before removing it. When the
+earlier control release predates these units, stop both units and disable
+socket activation before running its installer:
+
+```bash
+sudo systemctl stop sentrybox-worker-relay.socket sentrybox-worker-relay.service
+sudo systemctl disable sentrybox-worker-relay.socket
+sudo rm -f /etc/systemd/system/sentrybox-worker-relay.socket \
+  /etc/systemd/system/sentrybox-worker-relay.service /etc/sentrybox/worker-relay.env
+sudo systemctl daemon-reload
+```
+
+Confirm port `8443` no longer has a listener on the worker bridge with
+`sudo ss -H -6 -ltn 'sport = :8443'`. Then run the ordinary install command
+from the earlier reviewed release and verify private Tailscale readiness and
+public ingest.
+
 ## Migrate a legacy installation
 
 Schedule a brief SentryBox outage. Stage the reviewed release before stopping

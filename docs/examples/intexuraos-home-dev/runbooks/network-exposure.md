@@ -224,6 +224,32 @@ sudo tailscale serve status --json
 
 Do not expose port `8141` through Caddy, Cloudflare, UFW, or a host-wide bind.
 
+## Reach private Tailscale Serve from Code Workers
+
+Workers without a Tailscale interface can use the optional Home Dev relay.
+It accepts IPv6 TCP only at `[fd00:172:28::1]:8443` on `code-worker-br`, the
+bridge for `code-worker-net`. The IntexuraOS host firewall must restrict this
+ingress to the worker subnet `fd00:172:28::/64`. Install and validate that
+firewall and the worker network before
+[enabling the relay](protected-control.md#enable-the-worker-relay).
+
+The relay forwards TCP to the local node's MagicDNS name on port `8443`.
+The configured private HTTPS origin still supplies the request hostname,
+TLS server name, and certificate name. The worker changes only its connection
+address. For example, from a disposable worker on `code-worker-net`:
+
+```bash
+curl --fail --silent --show-error --max-time 8 \
+  --connect-to 'example-node.example-tailnet.ts.net:8443:[fd00:172:28::1]:8443' \
+  https://example-node.example-tailnet.ts.net:8443/health/ready
+```
+
+Use the real private origin in both hostname positions. Confirm the strict
+issue and latest-event MCP reads with the deployed worker image. Repeat
+connection denial checks through IPv4 and from outside the worker bridge.
+Keep SentryBox on its existing Compose network and leave Tailscale Serve on
+the Tailscale interface.
+
 ## Boundary acceptance
 
 From a normal Internet client, verify:
@@ -252,8 +278,5 @@ From an allowed tailnet client, open the private origin and verify the UI,
 private API, export, readiness, and metrics. From a client outside the tailnet,
 the private MagicDNS/Tailscale address must not be reachable.
 
-Finally start one disposable real Code Worker and request the private MCP
-health/capability endpoint over port `8443`. Do not attach SentryBox to
-`code-worker-net`. Add a narrow host-gateway route only if that real probe proves
-the normal tailnet route unavailable, then repeat the denial checks before
-keeping it.
+For installations using the worker relay, also complete the disposable-worker
+checks in [Reach private Tailscale Serve from Code Workers](#reach-private-tailscale-serve-from-code-workers).

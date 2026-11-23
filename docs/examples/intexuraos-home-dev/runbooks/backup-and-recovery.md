@@ -24,6 +24,10 @@ implemented and restore-tested.
 
 ## Pre-deployment snapshot
 
+For rollback to a control release that predates the worker relay, follow the
+[relay removal procedure](protected-control.md#roll-back-to-control-without-the-worker-relay)
+before running the earlier installer.
+
 Immediately before a deployment, `backup.sh predeploy` uses SQLite's online
 backup API from an immutable SentryBox image. It does not stop the live database
 or copy the database/WAL files directly. It atomically replaces
